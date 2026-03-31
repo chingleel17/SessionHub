@@ -1,0 +1,23 @@
+:root {
+  --font-family-sans: "Segoe UI", Inter, Arial, sans-serif;
+
+  --color-surface-app: #f5f7fb;
+  --color-surface-panel: #ffffff;
+  --color-surface-accent: rgba(86, 139, 255, 0.16);
+
+  --color-text-primary: #162033;
+  --color-text-secondary: #5a6780;
+
+  --color-border-subtle: #dbe4f0;
+
+  --color-action-primary: #2f6df6;
+  --color-action-primary-text: #ffffff;
+
+  --color-badge-bg: #e8f0ff;
+  --color-badge-text: #2a5bd7;
+
+  --radius-md: 12px;
+  --radius-xl: 24px;
+
+  --shadow-panel: 0 18px 40px rgba(18, 30, 56, 0.08);
+}
