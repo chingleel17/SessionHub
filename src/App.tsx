@@ -8,10 +8,12 @@ import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
 import type { AppSettings, ConfirmDialogState, EditDialogState, ProjectGroup, SessionInfo } from "./types";
+import { formatDateTime } from "./utils/formatDate";
 
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
+import { PlanEditor } from "./components/PlanEditor";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -22,7 +24,7 @@ function getProjectKey(session: SessionInfo, uncategorizedLabel: string) {
   return session.cwd?.trim() || uncategorizedLabel;
 }
 
-function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string): ProjectGroup[] {
+function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string, locale: string): ProjectGroup[] {
   const groupMap = new Map<string, SessionInfo[]>();
 
   for (const session of sessions) {
@@ -47,7 +49,10 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string)
         (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
       ),
       updatedAtLabel:
-        groupedSessions.map((s) => s.updatedAt).find((v): v is string => Boolean(v)) ?? "-",
+        formatDateTime(
+          groupedSessions.map((s) => s.updatedAt).find((v): v is string => Boolean(v)),
+          locale,
+        ),
     }))
     .sort((a, b) => b.sessions.length - a.sessions.length);
 }
@@ -55,7 +60,7 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string)
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const queryClient = useQueryClient();
 
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
@@ -71,7 +76,7 @@ function App() {
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
 
-  const [activePlanSession, setActivePlanSession] = useState<SessionInfo | null>(null);
+  const [openPlanKeys, setOpenPlanKeys] = useState<string[]>([]);
   const [planDraft, setPlanDraft] = useState("");
 
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
@@ -99,6 +104,12 @@ function App() {
         showArchived: settingsQuery.data?.showArchived,
       }),
   });
+
+  const activePlanSession = useMemo(() => {
+    if (!activeView.startsWith("plan:")) return null;
+    const sessionId = activeView.replace("plan:", "");
+    return sessionsQuery.data?.find((s) => s.id === sessionId) ?? null;
+  }, [activeView, sessionsQuery.data]);
 
   const planQuery = useQuery({
     queryKey: ["plan", activePlanSession?.sessionDir ?? ""],
@@ -258,8 +269,8 @@ function App() {
   const uncategorizedLabel = t("session.uncategorized");
 
   const groupedProjects = useMemo(
-    () => buildProjectGroups(sessionsQuery.data ?? [], uncategorizedLabel),
-    [sessionsQuery.data, uncategorizedLabel],
+    () => buildProjectGroups(sessionsQuery.data ?? [], uncategorizedLabel, locale),
+    [sessionsQuery.data, uncategorizedLabel, locale],
   );
 
   const activeProject = useMemo(
@@ -291,6 +302,11 @@ function App() {
   const closeProjectTab = (projectKey: string) => {
     setOpenProjectKeys((v) => v.filter((k) => k !== projectKey));
     setActiveView((v) => (v === projectKey ? "dashboard" : v));
+  };
+
+  const closePlanTab = (planKey: string) => {
+    setOpenPlanKeys((v) => v.filter((k) => k !== planKey));
+    setActiveView((v) => (v === planKey ? "dashboard" : v));
   };
 
   const handleSaveSettings = async () => {
@@ -347,6 +363,7 @@ function App() {
       await invoke("open_terminal", {
         terminalPath: settingsQuery.data.terminalPath,
         cwd: session.cwd,
+        sessionId: session.id,
       });
       showToast(t("toast.terminalOpened"));
     } catch (error) {
@@ -375,7 +392,7 @@ function App() {
   };
 
   const handleCopyCommand = async (sessionId: string) => {
-    await navigator.clipboard.writeText(`gh copilot session resume ${sessionId}`);
+    await navigator.clipboard.writeText(`copilot --resume=${sessionId}`);
     showToast(t("toast.commandCopied"));
   };
 
@@ -408,7 +425,11 @@ function App() {
     });
   };
 
-  const handleOpenPlan = (session: SessionInfo) => setActivePlanSession(session);
+  const handleOpenPlan = (session: SessionInfo) => {
+    const planKey = `plan:${session.id}`;
+    setOpenPlanKeys((v) => (v.includes(planKey) ? v : [...v, planKey]));
+    setActiveView(planKey);
+  };
 
   const handleSavePlan = () => {
     if (!activePlanSession) return;
@@ -442,23 +463,25 @@ function App() {
 
       <section className="workspace">
         <header className="workspace-header">
-          <div>
-            <h2 className="workspace-title">
-              {activeView === "dashboard"
-                ? t("tabs.dashboard")
-                : activeView === "settings"
-                  ? t("settings.title")
-                  : activeProject?.title}
-            </h2>
-            <p className="workspace-subtitle">
-              {activeView === "settings"
-                ? t("settings.subtitle")
-                : activeView === "dashboard"
-                  ? t("dashboard.description")
-                  : activeProject?.pathLabel}
-            </p>
-          </div>
-        </header>
+            <div>
+              <h2 className="workspace-title">
+                {activeView === "dashboard"
+                  ? t("tabs.dashboard")
+                  : activeView === "settings"
+                    ? t("settings.title")
+                    : activeView.startsWith("plan:") && activePlanSession
+                      ? t("plan.title")
+                      : activeProject?.title ?? ""}
+              </h2>
+              <p className="workspace-subtitle">
+                {activeView === "settings"
+                  ? t("settings.subtitle")
+                  : activeView.startsWith("plan:") && activePlanSession
+                    ? (activePlanSession.summary?.trim() || activePlanSession.id)
+                    : activeProject?.pathLabel ?? ""}
+              </p>
+            </div>
+          </header>
 
         {activeView !== "settings" ? (
           <section className="tabbar">
@@ -496,57 +519,92 @@ function App() {
                 </div>
               );
             })}
+
+            {openPlanKeys.map((planKey) => {
+              const sessionId = planKey.replace("plan:", "");
+              const session = sessionsQuery.data?.find((s) => s.id === sessionId);
+              if (!session) return null;
+              const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
+              return (
+                <div
+                  key={planKey}
+                  className={`tab-item tab-item-project ${activeView === planKey ? "active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="tab-label"
+                    onClick={() => setActiveView(planKey)}
+                  >
+                    {t("plan.tab")} · {tabTitle}
+                  </button>
+                  <button
+                    type="button"
+                    className="tab-close"
+                    onClick={() => closePlanTab(planKey)}
+                    aria-label={`${t("tabs.close")} ${tabTitle}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
           </section>
         ) : null}
 
-        {activeView === "dashboard" ? (
-          <DashboardView
-            sessionsIsLoading={sessionsQuery.isLoading}
-            sessionsIsError={sessionsQuery.isError}
-            sessionsError={sessionsQuery.error}
-            groupedProjects={groupedProjects}
-            recentSessions={recentSessions}
-            realtimeStatus={realtimeStatus}
-            onOpenProject={openProjectTab}
-            onOpenRecentSession={(session) =>
-              openProjectTab(getProjectKey(session, uncategorizedLabel))
-            }
-          />
-        ) : null}
+        <div className="workspace-content">
+          {activeView === "dashboard" ? (
+            <DashboardView
+              sessionsIsLoading={sessionsQuery.isLoading}
+              sessionsIsError={sessionsQuery.isError}
+              sessionsError={sessionsQuery.error}
+              groupedProjects={groupedProjects}
+              recentSessions={recentSessions}
+              onOpenProject={openProjectTab}
+              onOpenRecentSession={(session) =>
+                openProjectTab(getProjectKey(session, uncategorizedLabel))
+              }
+            />
+          ) : null}
 
-        {activeView === "settings" ? (
-          <SettingsView
-            settingsForm={settingsForm}
-            onFormChange={setSettingsForm}
-            onSave={() => void handleSaveSettings()}
-            onBrowseDirectory={(field) => void handleBrowseDirectory(field)}
-            onBrowseFile={(field) => void handleBrowseFile(field)}
-            onDetectTerminal={() => detectTerminalMutation.mutate()}
-            onDetectVscode={() => detectVscodeMutation.mutate()}
-          />
-        ) : null}
+          {activeView === "settings" ? (
+            <SettingsView
+              settingsForm={settingsForm}
+              onFormChange={setSettingsForm}
+              onSave={() => void handleSaveSettings()}
+              onBrowseDirectory={(field) => void handleBrowseDirectory(field)}
+              onBrowseFile={(field) => void handleBrowseFile(field)}
+              onDetectTerminal={() => detectTerminalMutation.mutate()}
+              onDetectVscode={() => detectVscodeMutation.mutate()}
+            />
+          ) : null}
 
-        {activeProject ? (
-          <ProjectView
-            project={activeProject}
-            showArchived={settingsForm.showArchived}
-            activePlanSession={activePlanSession}
-            planDraft={planDraft}
-            planPreviewHtml={planPreviewHtml}
-            onToggleArchived={(v) => void handleToggleArchived(v)}
-            onOpenTerminal={(s) => void handleOpenTerminal(s)}
-            onCopyCommand={(id) => void handleCopyCommand(id)}
-            onEditNotes={handleEditNotes}
-            onEditTags={handleEditTags}
-            onOpenPlan={handleOpenPlan}
-            onOpenPlanExternal={(s) => void handleOpenPlanExternal(s)}
-            onArchive={handleArchiveSession}
-            onDelete={handleDeleteSession}
-            onPlanDraftChange={setPlanDraft}
-            onSavePlan={handleSavePlan}
-            onClosePlan={() => setActivePlanSession(null)}
-          />
-        ) : null}
+          {activeProject ? (
+            <ProjectView
+              project={activeProject}
+              showArchived={settingsForm.showArchived}
+              onToggleArchived={(v) => void handleToggleArchived(v)}
+              onOpenTerminal={(s) => void handleOpenTerminal(s)}
+              onCopyCommand={(id) => void handleCopyCommand(id)}
+              onEditNotes={handleEditNotes}
+              onEditTags={handleEditTags}
+              onOpenPlan={handleOpenPlan}
+              onArchive={handleArchiveSession}
+              onDelete={handleDeleteSession}
+            />
+          ) : null}
+
+          {activeView.startsWith("plan:") && activePlanSession ? (
+            <PlanEditor
+              session={activePlanSession}
+              planDraft={planDraft}
+              planPreviewHtml={planPreviewHtml}
+              onDraftChange={setPlanDraft}
+              onSave={handleSavePlan}
+              onOpenExternal={(s) => void handleOpenPlanExternal(s)}
+              onClose={() => closePlanTab(activeView)}
+            />
+          ) : null}
+        </div>
       </section>
 
       {confirmDialog ? (

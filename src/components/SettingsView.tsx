@@ -100,7 +100,7 @@ export function SettingsView({
           </label>
 
           <div className="settings-actions">
-            <button type="button" onClick={onSave}>
+            <button type="button" className="primary-button" onClick={onSave}>
               {t("settings.actions.save")}
             </button>
             <button type="button" className="ghost-button" onClick={onDetectTerminal}>

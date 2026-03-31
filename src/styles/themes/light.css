@@ -20,4 +20,32 @@
   --radius-xl: 24px;
 
   --shadow-panel: 0 18px 40px rgba(18, 30, 56, 0.08);
+
+  --color-surface-sidebar: linear-gradient(180deg, #f9fbff 0%, #eef3fb 100%);
+  --color-surface-sidebar-muted: #eef3fb;
+  --color-surface-input: #ffffff;
+
+  --color-realtime-dot: #8aa1c7;
+  --color-status-success: #31b46e;
+  --color-status-error: #e15353;
+
+  --color-error-border: #f0b5b5;
+  --color-error-surface: #fff7f7;
+
+  --color-chip-bg: #edf4ff;
+  --color-chip-text: #245ad3;
+
+  --color-muted-chip-bg: #eef0f4;
+  --color-muted-chip-text: #5f6879;
+
+  --color-error-chip-bg: #fff0f0;
+  --color-error-chip-text: #cb4a4a;
+
+  --color-toast-bg: #1d2b43;
+
+  --color-action-primary-subtle-border: rgba(47, 109, 246, 0.18);
+  --color-action-primary-subtle-bg: rgba(47, 109, 246, 0.08);
+
+  --color-shadow-dialog: rgba(12, 20, 38, 0.18);
+  --color-dialog-overlay: rgba(13, 18, 28, 0.32);
 }

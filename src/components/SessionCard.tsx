@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { SessionInfo } from "../types";
+import { formatDateTime } from "../utils/formatDate";
 
 type Props = {
   session: SessionInfo;
@@ -8,7 +9,6 @@ type Props = {
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
-  onOpenPlanExternal: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
 };
@@ -24,11 +24,10 @@ export function SessionCard({
   onEditNotes,
   onEditTags,
   onOpenPlan,
-  onOpenPlanExternal,
   onArchive,
   onDelete,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   return (
     <article className="session-card">
@@ -53,16 +52,12 @@ export function SessionCard({
 
       <div className="session-meta-grid">
         <div>
-          <span className="session-meta-label">{t("session.cwd")}</span>
-          <p>{session.cwd ?? t("session.uncategorized")}</p>
-        </div>
-        <div>
           <span className="session-meta-label">{t("session.updatedAt")}</span>
-          <p>{session.updatedAt ?? "-"}</p>
+          <p>{formatDateTime(session.updatedAt, locale)}</p>
         </div>
         <div>
           <span className="session-meta-label">{t("session.createdAt")}</span>
-          <p>{session.createdAt ?? "-"}</p>
+          <p>{formatDateTime(session.createdAt, locale)}</p>
         </div>
         <div>
           <span className="session-meta-label">{t("session.summaryCount")}</span>
@@ -87,7 +82,7 @@ export function SessionCard({
       ) : null}
 
       <div className="session-actions">
-        <button type="button" onClick={() => onOpenTerminal(session)}>
+        <button type="button" className="ghost-button" onClick={() => onOpenTerminal(session)}>
           {t("session.actions.openTerminal")}
         </button>
         <button type="button" className="ghost-button" onClick={() => onCopyCommand(session.id)}>
@@ -101,9 +96,6 @@ export function SessionCard({
         </button>
         <button type="button" className="ghost-button" onClick={() => onOpenPlan(session)}>
           {t("session.actions.editPlan")}
-        </button>
-        <button type="button" className="ghost-button" onClick={() => onOpenPlanExternal(session)}>
-          {t("session.actions.openPlanExternal")}
         </button>
         {!session.isArchived ? (
           <button type="button" className="ghost-button" onClick={() => onArchive(session)}>

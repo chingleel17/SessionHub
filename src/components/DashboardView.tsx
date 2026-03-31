@@ -1,5 +1,5 @@
 import { useI18n } from "../i18n/I18nProvider";
-import type { ProjectGroup, RealtimeStatus, SessionInfo } from "../types";
+import type { ProjectGroup, SessionInfo } from "../types";
 
 type Props = {
   sessionsIsLoading: boolean;
@@ -7,7 +7,6 @@ type Props = {
   sessionsError: unknown;
   groupedProjects: ProjectGroup[];
   recentSessions: SessionInfo[];
-  realtimeStatus: RealtimeStatus;
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
 };
@@ -22,18 +21,10 @@ export function DashboardView({
   sessionsError,
   groupedProjects,
   recentSessions,
-  realtimeStatus,
   onOpenProject,
   onOpenRecentSession,
 }: Props) {
   const { t } = useI18n();
-
-  const realtimeLabel =
-    realtimeStatus === "error"
-      ? t("dashboard.status.realtimeError")
-      : realtimeStatus === "active"
-        ? t("dashboard.status.realtimeActive")
-        : t("dashboard.status.realtimeConnecting");
 
   const loadingStatsValue = sessionsIsLoading
     ? "..."
@@ -45,23 +36,6 @@ export function DashboardView({
 
   return (
     <section className="dashboard-layout">
-      <article className="hero-card">
-        <span className="hero-badge">{t("dashboard.badge")}</span>
-        <h2>{t("dashboard.title")}</h2>
-        <p className="hero-copy">{t("dashboard.description")}</p>
-      </article>
-
-      {sessionsIsError ? (
-        <article className="info-card status-card status-card-error">
-          <h3>{t("dashboard.status.errorTitle")}</h3>
-          <p className="placeholder-copy">
-            {sessionsError instanceof Error
-              ? sessionsError.message
-              : t("dashboard.status.errorDescription")}
-          </p>
-        </article>
-      ) : null}
-
       <section className="stats-grid">
         <article className="stat-card">
           <span className="stat-label">{t("dashboard.stats.totalSessions")}</span>
@@ -79,11 +53,18 @@ export function DashboardView({
           <span className="stat-label">{t("dashboard.stats.parseErrors")}</span>
           <strong>{sessionsIsLoading ? "..." : parseErrorCount}</strong>
         </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.loadingState")}</span>
-          <strong>{realtimeLabel}</strong>
-        </article>
       </section>
+
+      {sessionsIsError ? (
+        <article className="info-card status-card status-card-error">
+          <h3>{t("dashboard.status.errorTitle")}</h3>
+          <p className="placeholder-copy">
+            {sessionsError instanceof Error
+              ? sessionsError.message
+              : t("dashboard.status.errorDescription")}
+          </p>
+        </article>
+      ) : null}
 
       <section className="content-grid">
         <article className="info-card">

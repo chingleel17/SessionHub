@@ -1,6 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
+import { useTheme } from "../theme/ThemeProvider";
 import type { RealtimeStatus } from "../types";
 
 type Props = {
@@ -14,6 +16,8 @@ type Props = {
   onConfigurePath: () => void;
 };
 
+type PopoverPos = { left: number; bottom: number };
+
 export function Sidebar({
   activeView,
   isSidebarCollapsed,
@@ -24,10 +28,11 @@ export function Sidebar({
   onRefresh,
   onConfigurePath,
 }: Props) {
-  const { t } = useI18n();
-  const [openPopover, setOpenPopover] = useState<"language" | "iconStyle" | null>(null);
+  const { t, locale, setLocale } = useI18n();
+  const { theme, setTheme } = useTheme();
+  const [openPopover, setOpenPopover] = useState<"language" | null>(null);
+  const [popoverPos, setPopoverPos] = useState<PopoverPos>({ left: 0, bottom: 0 });
   const langBtnRef = useRef<HTMLButtonElement>(null);
-  const iconBtnRef = useRef<HTMLButtonElement>(null);
 
   const realtimeLabel =
     realtimeStatus === "error"
@@ -36,29 +41,51 @@ export function Sidebar({
         ? t("dashboard.status.realtimeActive")
         : t("dashboard.status.realtimeConnecting");
 
-  const togglePopover = (name: "language" | "iconStyle") => {
+  const togglePopover = (name: "language") => {
+    const btnRef = langBtnRef;
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPopoverPos({ left: rect.left, bottom: window.innerHeight - rect.top + 8 });
+    }
     setOpenPopover((current) => (current === name ? null : name));
   };
+
+  useEffect(() => {
+    if (!openPopover) return;
+    const close = () => setOpenPopover(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [openPopover]);
 
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
         <div className="sidebar-brand-icon">CS</div>
         <div className="sidebar-brand-copy">
-          <span className="topbar-badge">{t("app.badge")}</span>
           <h1 className="topbar-title">{t("app.title")}</h1>
         </div>
+        <button
+          type="button"
+          className="sidebar-collapse-button"
+          onClick={onCollapseToggle}
+          aria-label={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+          title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+        >
+          {isSidebarCollapsed ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+              <polyline points="12 9 15 12 12 15" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+              <polyline points="15 9 12 12 15 15" />
+            </svg>
+          )}
+        </button>
       </div>
-
-      <button
-        type="button"
-        className="sidebar-collapse-button"
-        onClick={onCollapseToggle}
-        aria-label={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-        title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-      >
-        {isSidebarCollapsed ? "»" : "«"}
-      </button>
 
       <nav className="sidebar-menu">
         <button
@@ -69,97 +96,136 @@ export function Sidebar({
           <span className="sidebar-link-icon">◫</span>
           <span>{t("sidebar.menu.dashboard")}</span>
         </button>
-
-        <button
-          type="button"
-          className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
-          onClick={() => onNavigate("settings")}
-        >
-          <span className="sidebar-link-icon">⚙</span>
-          <span>{t("sidebar.menu.settings")}</span>
-        </button>
       </nav>
 
+      {openPopover === "language"
+        ? createPortal(
+            <div
+              className="sidebar-popover sidebar-popover-fixed"
+              style={{ left: popoverPos.left, bottom: popoverPos.bottom }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="sidebar-popover-header">{t("sidebar.language.label")}</div>
+              <button
+                type="button"
+                className={`sidebar-popover-item ${locale === "zh-TW" ? "active" : ""}`}
+                onClick={() => { setLocale("zh-TW"); setOpenPopover(null); }}
+              >
+                {t("sidebar.language.zhTW")}
+              </button>
+              <button
+                type="button"
+                className={`sidebar-popover-item ${locale === "en-US" ? "active" : ""}`}
+                onClick={() => { setLocale("en-US"); setOpenPopover(null); }}
+              >
+                {t("sidebar.language.enUS")}
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+
       <footer className="sidebar-footer">
-        <div className="sidebar-quick-actions">
+        {/* Theme toggle switch row */}
+        <div className="theme-toggle-row">
+          <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}>☀</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={theme === "dark"}
+            className={`theme-toggle-switch ${theme === "dark" ? "dark" : ""}`}
+            title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
+            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+          >
+            <span className="theme-toggle-thumb" />
+          </button>
+          <span className={`theme-toggle-icon ${theme === "dark" ? "active" : ""}`}>☾</span>
+          {!isSidebarCollapsed ? (
+            <span className="theme-toggle-label">
+              {theme === "light" ? t("sidebar.theme.light") : t("sidebar.theme.dark")}
+            </span>
+          ) : null}
+        </div>
+
+        {/* Language row */}
+        {!isSidebarCollapsed ? (
           <div className="sidebar-quick-action-item">
             <button
               ref={langBtnRef}
               type="button"
-              className={`sidebar-icon-button ${openPopover === "language" ? "active" : ""}`}
-              title={t("sidebar.language.label")}
-              onClick={() => togglePopover("language")}
+              className={`sidebar-link ${openPopover === "language" ? "active" : ""}`}
+              onClick={(e) => { e.stopPropagation(); togglePopover("language"); }}
             >
-              文
+              <span className="sidebar-link-icon">文</span>
+              <span>{t("sidebar.language.label")}</span>
             </button>
-            {openPopover === "language" ? (
-              <div className="sidebar-popover">
-                <div className="sidebar-popover-header">{t("sidebar.language.label")}</div>
-                <button
-                  type="button"
-                  className="sidebar-popover-item active"
-                  onClick={() => setOpenPopover(null)}
-                >
-                  {t("sidebar.language.current")}
-                </button>
-              </div>
-            ) : null}
           </div>
-
-          <div className="sidebar-quick-action-item">
+        ) : (
+          <div className="sidebar-quick-actions">
+            <div className="sidebar-quick-action-item">
+              <button
+                ref={langBtnRef}
+                type="button"
+                className={`sidebar-icon-button ${openPopover === "language" ? "active" : ""}`}
+                title={t("sidebar.language.label")}
+                onClick={(e) => { e.stopPropagation(); togglePopover("language"); }}
+              >
+                文
+              </button>
+            </div>
             <button
-              ref={iconBtnRef}
               type="button"
-              className={`sidebar-icon-button ${openPopover === "iconStyle" ? "active" : ""}`}
-              title={t("sidebar.iconStyle.label")}
-              onClick={() => togglePopover("iconStyle")}
+              className={`sidebar-icon-button ${activeView === "settings" ? "active" : ""}`}
+              title={t("sidebar.menu.settings")}
+              onClick={onConfigurePath}
             >
-              ◌
+              ⚙
             </button>
-            {openPopover === "iconStyle" ? (
-              <div className="sidebar-popover">
-                <div className="sidebar-popover-header">{t("sidebar.iconStyle.label")}</div>
-                <button
-                  type="button"
-                  className="sidebar-popover-item active"
-                  onClick={() => setOpenPopover(null)}
-                >
-                  {t("sidebar.iconStyle.current")}
-                </button>
-              </div>
-            ) : null}
+            <button
+              type="button"
+              className="sidebar-icon-button"
+              title={t("app.actions.refresh")}
+              onClick={onRefresh}
+            >
+              ↺
+            </button>
           </div>
+        )}
 
+        {/* Settings row (expanded only) */}
+        {!isSidebarCollapsed ? (
           <button
             type="button"
-            className="sidebar-icon-button"
-            title={t("app.actions.configureCopilotPath")}
+            className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
             onClick={onConfigurePath}
           >
-            ⚙
+            <span className="sidebar-link-icon">⚙</span>
+            <span>{t("sidebar.menu.settings")}</span>
           </button>
-
-          <button
-            type="button"
-            className="sidebar-icon-button"
-            title={t("app.actions.refresh")}
-            onClick={onRefresh}
-          >
-            ↺
-          </button>
-        </div>
+        ) : null}
 
         <div className="sidebar-version">
-          <span>{t("sidebar.version")}</span>
           <strong>v{packageJson.version}</strong>
         </div>
 
-        <div className={`sidebar-realtime realtime-${realtimeStatus}`}>
-          <span className="realtime-dot" />
-          <span className="sidebar-realtime-label">
-            {realtimeLabel}
-            {lastRealtimeSyncAt ? ` · ${lastRealtimeSyncAt}` : ""}
-          </span>
+        <div className="sidebar-realtime-row">
+          <div className={`sidebar-realtime realtime-${realtimeStatus}`}>
+            <span className="realtime-dot" />
+            <span className="sidebar-realtime-label">
+              {realtimeLabel}
+              {lastRealtimeSyncAt ? ` · ${lastRealtimeSyncAt}` : ""}
+            </span>
+          </div>
+          {!isSidebarCollapsed ? (
+            <button
+              type="button"
+              className="sidebar-icon-button"
+              title={t("app.actions.refresh")}
+              onClick={onRefresh}
+            >
+              ↺
+            </button>
+          ) : null}
         </div>
       </footer>
     </aside>

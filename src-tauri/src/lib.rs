@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -501,10 +507,15 @@ fn delete_session_internal(root_dir: &Path, session_id: &str) -> Result<(), Stri
     Err(format!("session {} does not exist", session_id))
 }
 
-fn open_terminal_internal(terminal_path: &str, cwd: &str) -> Result<(), String> {
-    Command::new(terminal_path)
-        .args(["-NoExit", "-Command", &format!("cd '{}'", cwd.replace('\'', "''"))])
-        .spawn()
+fn open_terminal_internal(terminal_path: &str, cwd: &str, session_id: &str) -> Result<(), String> {
+    let mut cmd = Command::new(terminal_path);
+    cmd.args(["-NoExit", "-Command", &format!("copilot --resume={}", session_id)])
+        .current_dir(cwd);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+    cmd.spawn()
         .map_err(|error| format!("failed to open terminal: {error}"))?;
 
     Ok(())
@@ -658,8 +669,8 @@ fn delete_session(root_dir: Option<String>, session_id: String) -> Result<(), St
 }
 
 #[tauri::command]
-fn open_terminal(terminal_path: String, cwd: String) -> Result<(), String> {
-    open_terminal_internal(&terminal_path, &cwd)
+fn open_terminal(terminal_path: String, cwd: String, session_id: String) -> Result<(), String> {
+    open_terminal_internal(&terminal_path, &cwd, &session_id)
 }
 
 #[tauri::command]

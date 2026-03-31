@@ -1,0 +1,46 @@
+:root[data-theme="dark"] {
+  --color-surface-app: #0f1117;
+  --color-surface-panel: #1a1d27;
+  --color-surface-accent: rgba(77, 132, 255, 0.12);
+
+  --color-text-primary: #e8edf5;
+  --color-text-secondary: #7f8fa8;
+
+  --color-border-subtle: #2a2f3d;
+
+  --color-action-primary: #4d84ff;
+  --color-action-primary-text: #ffffff;
+
+  --color-badge-bg: #1a2a4a;
+  --color-badge-text: #4d84ff;
+
+  --shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.3);
+
+  --color-surface-sidebar: linear-gradient(180deg, #141720 0%, #111420 100%);
+  --color-surface-sidebar-muted: #141720;
+  --color-surface-input: #1e2230;
+
+  --color-realtime-dot: #3d5070;
+  --color-status-success: #2da05f;
+  --color-status-error: #d94848;
+
+  --color-error-border: #5a2020;
+  --color-error-surface: #1e1010;
+
+  --color-chip-bg: #1a2a4a;
+  --color-chip-text: #4d84ff;
+
+  --color-muted-chip-bg: #252830;
+  --color-muted-chip-text: #7f8fa8;
+
+  --color-error-chip-bg: #2a1515;
+  --color-error-chip-text: #e06060;
+
+  --color-toast-bg: #0a0f1a;
+
+  --color-action-primary-subtle-border: rgba(77, 132, 255, 0.24);
+  --color-action-primary-subtle-bg: rgba(77, 132, 255, 0.12);
+
+  --color-shadow-dialog: rgba(0, 0, 0, 0.4);
+  --color-dialog-overlay: rgba(0, 0, 0, 0.6);
+}

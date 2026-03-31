@@ -1,27 +1,19 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { ProjectGroup, SessionInfo, SortKey } from "../types";
-import { PlanEditor } from "./PlanEditor";
 import { SessionCard } from "./SessionCard";
 
 type Props = {
   project: ProjectGroup;
   showArchived: boolean;
-  activePlanSession: SessionInfo | null;
-  planDraft: string;
-  planPreviewHtml: string;
   onToggleArchived: (value: boolean) => void;
   onOpenTerminal: (session: SessionInfo) => void;
   onCopyCommand: (sessionId: string) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
-  onOpenPlanExternal: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
-  onPlanDraftChange: (value: string) => void;
-  onSavePlan: () => void;
-  onClosePlan: () => void;
 };
 
 function filterAndSortSessions(
@@ -70,21 +62,14 @@ function filterAndSortSessions(
 export function ProjectView({
   project,
   showArchived,
-  activePlanSession,
-  planDraft,
-  planPreviewHtml,
   onToggleArchived,
   onOpenTerminal,
   onCopyCommand,
   onEditNotes,
   onEditTags,
   onOpenPlan,
-  onOpenPlanExternal,
   onArchive,
   onDelete,
-  onPlanDraftChange,
-  onSavePlan,
-  onClosePlan,
 }: Props) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState("");
@@ -106,12 +91,6 @@ export function ProjectView({
 
   return (
     <section className="project-page">
-      <article className="hero-card">
-        <span className="hero-badge">{t("project.badge")}</span>
-        <h2>{project.title}</h2>
-        <p className="hero-copy">{project.pathLabel}</p>
-      </article>
-
       <section className="toolbar-card">
         <label className="field-group compact-field">
           <span>{t("session.search")}</span>
@@ -182,24 +161,11 @@ export function ProjectView({
             onEditNotes={onEditNotes}
             onEditTags={onEditTags}
             onOpenPlan={onOpenPlan}
-            onOpenPlanExternal={onOpenPlanExternal}
             onArchive={onArchive}
             onDelete={onDelete}
           />
         ))}
       </div>
-
-      {activePlanSession ? (
-        <PlanEditor
-          session={activePlanSession}
-          planDraft={planDraft}
-          planPreviewHtml={planPreviewHtml}
-          onDraftChange={onPlanDraftChange}
-          onSave={onSavePlan}
-          onOpenExternal={onOpenPlanExternal}
-          onClose={onClosePlan}
-        />
-      ) : null}
     </section>
   );
 }
