@@ -1,6 +1,16 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { SessionInfo } from "../types";
 import { formatDateTime } from "../utils/formatDate";
+import {
+  ArchiveIcon,
+  CopyIcon,
+  DeleteIcon,
+  EditNotesIcon,
+  EditTagsIcon,
+  PlanIcon,
+  TerminalIcon,
+  UnarchiveIcon,
+} from "./Icons";
 
 type Props = {
   session: SessionInfo;
@@ -10,6 +20,7 @@ type Props = {
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
+  onUnarchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
 };
 
@@ -25,6 +36,7 @@ export function SessionCard({
   onEditTags,
   onOpenPlan,
   onArchive,
+  onUnarchive,
   onDelete,
 }: Props) {
   const { t, locale } = useI18n();
@@ -47,6 +59,11 @@ export function SessionCard({
           {session.parseError ? (
             <span className="session-chip error-chip">{t("session.parseError")}</span>
           ) : null}
+          {session.tags.map((tag) => (
+            <span key={tag} className="session-chip tag-chip">
+              #{tag}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -71,39 +88,87 @@ export function SessionCard({
         </p>
       ) : null}
 
-      {session.tags.length > 0 ? (
-        <div className="session-chip-row">
-          {session.tags.map((tag) => (
-            <span key={tag} className="session-chip">
-              #{tag}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
       <div className="session-actions">
-        <button type="button" className="ghost-button" onClick={() => onOpenTerminal(session)}>
-          {t("session.actions.openTerminal")}
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.openTerminal")}
+          aria-label={t("session.actions.openTerminal")}
+          onClick={() => onOpenTerminal(session)}
+        >
+          <TerminalIcon size={16} />
         </button>
-        <button type="button" className="ghost-button" onClick={() => onCopyCommand(session.id)}>
-          {t("session.actions.copyCommand")}
+
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.copyCommand")}
+          aria-label={t("session.actions.copyCommand")}
+          onClick={() => onCopyCommand(session.id)}
+        >
+          <CopyIcon size={16} />
         </button>
-        <button type="button" className="ghost-button" onClick={() => onEditNotes(session)}>
-          {t("session.actions.editNotes")}
+
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.editNotes")}
+          aria-label={t("session.actions.editNotes")}
+          onClick={() => onEditNotes(session)}
+        >
+          <EditNotesIcon size={16} />
         </button>
-        <button type="button" className="ghost-button" onClick={() => onEditTags(session)}>
-          {t("session.actions.editTags")}
+
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.editTags")}
+          aria-label={t("session.actions.editTags")}
+          onClick={() => onEditTags(session)}
+        >
+          <EditTagsIcon size={16} />
         </button>
-        <button type="button" className="ghost-button" onClick={() => onOpenPlan(session)}>
-          {t("session.actions.editPlan")}
+
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.editPlan")}
+          aria-label={t("session.actions.editPlan")}
+          onClick={() => onOpenPlan(session)}
+        >
+          <PlanIcon size={16} />
         </button>
-        {!session.isArchived ? (
-          <button type="button" className="ghost-button" onClick={() => onArchive(session)}>
-            {t("session.actions.archive")}
+
+        {session.isArchived ? (
+          <button
+            type="button"
+            className="icon-button"
+            title={t("session.actions.unarchive")}
+            aria-label={t("session.actions.unarchive")}
+            onClick={() => onUnarchive(session)}
+          >
+            <UnarchiveIcon size={16} />
           </button>
-        ) : null}
-        <button type="button" className="danger-button" onClick={() => onDelete(session)}>
-          {t("session.actions.delete")}
+        ) : (
+          <button
+            type="button"
+            className="icon-button"
+            title={t("session.actions.archive")}
+            aria-label={t("session.actions.archive")}
+            onClick={() => onArchive(session)}
+          >
+            <ArchiveIcon size={16} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="icon-button icon-button--danger"
+          title={t("session.actions.delete")}
+          aria-label={t("session.actions.delete")}
+          onClick={() => onDelete(session)}
+        >
+          <DeleteIcon size={16} />
         </button>
       </div>
     </article>

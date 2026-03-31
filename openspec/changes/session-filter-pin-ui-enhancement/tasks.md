@@ -1,14 +1,14 @@
 ## 1. 型別與設定擴充
 
-- [ ] 1.1 在 `src/types/index.ts` 的 `AppSettings` 型別加入 `pinnedProjects?: string[]` 欄位
-- [ ] 1.2 在 `src-tauri/src/lib.rs` 的 `AppSettings` struct 加入 `#[serde(default)] pinned_projects: Vec<String>` 欄位
+- [x] 1.1 在 `src/types/index.ts` 的 `AppSettings` 型別加入 `pinnedProjects?: string[]` 欄位
+- [x] 1.2 在 `src-tauri/src/lib.rs` 的 `AppSettings` struct 加入 `#[serde(default)] pinned_projects: Vec<String>` 欄位
 
 ## 2. 後端：新增 delete_empty_sessions command
 
-- [ ] 2.1 在 `src-tauri/src/lib.rs` 新增 `delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String>` 輔助函式，掃描 session-state 目錄並刪除 summaryCount = 0 的 session 資料夾
-- [ ] 2.2 新增 `#[tauri::command] fn delete_empty_sessions(...)` wrapper，委派給 `_internal` 並回傳 `Result<usize, String>`
-- [ ] 2.3 在 `invoke_handler![]` 中登記 `delete_empty_sessions`
-- [ ] 2.4 撰寫 Rust 單元測試驗證 `delete_empty_sessions_internal` 邏輯（含無空 session、有空 session、刪除失敗情境）
+- [x] 2.1 在 `src-tauri/src/lib.rs` 新增 `delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String>` 輔助函式，掃描 session-state 目錄並刪除 summaryCount = 0 的 session 資料夾
+- [x] 2.2 新增 `#[tauri::command] fn delete_empty_sessions(...)` wrapper，委派給 `_internal` 並回傳 `Result<usize, String>`
+- [x] 2.3 在 `invoke_handler![]` 中登記 `delete_empty_sessions`
+- [x] 2.4 撰寫 Rust 單元測試驗證 `delete_empty_sessions_internal` 邏輯（含無空 session、有空 session、刪除失敗情境）
 
 ## 3. 前端：Icon 元件
 

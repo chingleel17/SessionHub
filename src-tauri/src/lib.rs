@@ -49,6 +49,8 @@ struct AppSettings {
     terminal_path: Option<String>,
     external_editor_path: Option<String>,
     show_archived: bool,
+    #[serde(default)]
+    pinned_projects: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,8 +67,8 @@ struct WatcherState {
 }
 
 fn default_copilot_root() -> Result<PathBuf, String> {
-    let user_profile =
-        env::var("USERPROFILE").map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
 
     Ok(PathBuf::from(user_profile).join(".copilot"))
 }
@@ -99,6 +101,7 @@ impl AppSettings {
             terminal_path,
             external_editor_path,
             show_archived: false,
+            pinned_projects: Vec::new(),
         })
     }
 }
@@ -264,8 +267,8 @@ fn upsert_session_meta_internal(
     notes: Option<String>,
     tags: Vec<String>,
 ) -> Result<(), String> {
-    let tags_json =
-        serde_json::to_string(&tags).map_err(|error| format!("failed to serialize tags: {error}"))?;
+    let tags_json = serde_json::to_string(&tags)
+        .map_err(|error| format!("failed to serialize tags: {error}"))?;
 
     connection
         .execute(
@@ -285,7 +288,10 @@ fn upsert_session_meta_internal(
 
 fn delete_session_meta_internal(connection: &Connection, session_id: &str) -> Result<(), String> {
     connection
-        .execute("DELETE FROM session_meta WHERE session_id = ?1", params![session_id])
+        .execute(
+            "DELETE FROM session_meta WHERE session_id = ?1",
+            params![session_id],
+        )
         .map_err(|error| format!("failed to delete metadata: {error}"))?;
 
     Ok(())
@@ -348,8 +354,8 @@ fn scan_session_dir(
         return Ok(Vec::new());
     }
 
-    let entries =
-        fs::read_dir(session_state_dir).map_err(|error| format!("failed to read {}: {error}", session_state_dir.display()))?;
+    let entries = fs::read_dir(session_state_dir)
+        .map_err(|error| format!("failed to read {}: {error}", session_state_dir.display()))?;
     let mut sessions = Vec::new();
 
     for entry in entries {
@@ -372,7 +378,12 @@ fn scan_session_dir(
             .unwrap_or_default();
         let meta = read_session_meta(connection, &session_id)?;
 
-        sessions.push(parse_workspace_file(&session_dir, &workspace_path, is_archived, meta));
+        sessions.push(parse_workspace_file(
+            &session_dir,
+            &workspace_path,
+            is_archived,
+            meta,
+        ));
     }
 
     Ok(sessions)
@@ -487,6 +498,28 @@ fn archive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), Str
     Ok(())
 }
 
+fn unarchive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
+    let source_dir = root_dir.join("session-state-archive").join(session_id);
+    let target_dir = root_dir.join("session-state").join(session_id);
+
+    if !source_dir.exists() {
+        return Err(format!("archived session {} does not exist", session_id));
+    }
+
+    if target_dir.exists() {
+        return Err(format!(
+            "session {} already exists in session-state",
+            session_id
+        ));
+    }
+
+    ensure_parent_dir(&target_dir)?;
+    fs::rename(&source_dir, &target_dir)
+        .map_err(|error| format!("failed to unarchive session {}: {error}", session_id))?;
+
+    Ok(())
+}
+
 fn delete_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     for candidate in [
         root_dir.join("session-state").join(session_id),
@@ -507,10 +540,77 @@ fn delete_session_internal(root_dir: &Path, session_id: &str) -> Result<(), Stri
     Err(format!("session {} does not exist", session_id))
 }
 
+fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String> {
+    let root = PathBuf::from(copilot_root);
+    let session_state_dir = root.join("session-state");
+
+    if !session_state_dir.exists() {
+        return Ok(0);
+    }
+
+    let entries = fs::read_dir(&session_state_dir)
+        .map_err(|error| format!("failed to read session-state directory: {error}"))?;
+
+    let mut deleted_count: usize = 0;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        let session_dir = entry.path();
+
+        if !session_dir.is_dir() {
+            continue;
+        }
+
+        let workspace_path = session_dir.join("workspace.yaml");
+        if !workspace_path.exists() {
+            continue;
+        }
+
+        let content = match fs::read_to_string(&workspace_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let workspace: WorkspaceYaml = match serde_yaml::from_str(&content) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+
+        let count = workspace.summary_count.unwrap_or(0);
+        if count > 0 {
+            continue;
+        }
+
+        let session_id = session_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        match fs::remove_dir_all(&session_dir) {
+            Ok(_) => {
+                if let Ok(connection) = open_db_connection() {
+                    let _ = init_db(&connection);
+                    let _ = delete_session_meta_internal(&connection, &session_id);
+                }
+                deleted_count += 1;
+            }
+            Err(error) => {
+                eprintln!("failed to delete empty session {}: {error}", session_id);
+            }
+        }
+    }
+
+    Ok(deleted_count)
+}
+
 fn open_terminal_internal(terminal_path: &str, cwd: &str, session_id: &str) -> Result<(), String> {
     let mut cmd = Command::new(terminal_path);
-    cmd.args(["-NoExit", "-Command", &format!("copilot --resume={}", session_id)])
-        .current_dir(cwd);
+    cmd.args([
+        "-NoExit",
+        "-Command",
+        &format!("copilot --resume={}", session_id),
+    ])
+    .current_dir(cwd);
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);
@@ -580,7 +680,10 @@ fn open_plan_external_internal(session_dir: &str, editor_cmd: Option<&str>) -> R
 }
 
 #[tauri::command]
-fn get_sessions(root_dir: Option<String>, show_archived: Option<bool>) -> Result<Vec<SessionInfo>, String> {
+fn get_sessions(
+    root_dir: Option<String>,
+    show_archived: Option<bool>,
+) -> Result<Vec<SessionInfo>, String> {
     let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
     scan_sessions(&resolved_root, show_archived.unwrap_or(false))
 }
@@ -663,9 +766,21 @@ fn archive_session(root_dir: Option<String>, session_id: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn unarchive_session(root_dir: Option<String>, session_id: String) -> Result<(), String> {
+    let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
+    unarchive_session_internal(&resolved_root, &session_id)
+}
+
+#[tauri::command]
 fn delete_session(root_dir: Option<String>, session_id: String) -> Result<(), String> {
     let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
     delete_session_internal(&resolved_root, &session_id)
+}
+
+#[tauri::command]
+fn delete_empty_sessions(root_dir: Option<String>) -> Result<usize, String> {
+    let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
+    delete_empty_sessions_internal(&resolved_root.to_string_lossy())
 }
 
 #[tauri::command]
@@ -702,7 +817,11 @@ pub fn run() {
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
             let watcher_state = app.state::<WatcherState>();
-            restart_session_watcher_internal(app.handle(), &watcher_state, Some(&settings.copilot_root))?;
+            restart_session_watcher_internal(
+                app.handle(),
+                &watcher_state,
+                Some(&settings.copilot_root),
+            )?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -716,7 +835,9 @@ pub fn run() {
             stop_plan_watch,
             validate_terminal_path,
             archive_session,
+            unarchive_session,
             delete_session,
+            delete_empty_sessions,
             open_terminal,
             check_directory_exists,
             read_plan,
@@ -798,5 +919,102 @@ mod tests {
         ));
 
         fs::remove_dir_all(&test_dir).expect("failed to cleanup terminal test dir");
+    }
+
+    #[test]
+    fn delete_empty_sessions_returns_zero_when_no_sessions() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("empty-del-none");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(root_dir.join("session-state")).expect("failed to create session-state");
+        fs::create_dir_all(&appdata_dir).expect("failed to create appdata dir");
+
+        unsafe {
+            env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
+        }
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        unsafe {
+            env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        }
+
+        assert_eq!(result.expect("should succeed"), 0);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn delete_empty_sessions_deletes_sessions_with_zero_summary_count() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("empty-del-some");
+        let appdata_dir = unique_test_dir("appdata");
+
+        // session with summary_count = 0 (should be deleted)
+        let empty_session = root_dir.join("session-state").join("session-empty");
+        fs::create_dir_all(&empty_session).expect("create empty session dir");
+        fs::write(
+            empty_session.join("workspace.yaml"),
+            "id: session-empty\nsummary_count: 0\n",
+        )
+        .expect("write workspace.yaml");
+
+        // session with summary_count = 3 (should be kept)
+        let active_session = root_dir.join("session-state").join("session-active");
+        fs::create_dir_all(&active_session).expect("create active session dir");
+        fs::write(
+            active_session.join("workspace.yaml"),
+            "id: session-active\nsummary_count: 3\n",
+        )
+        .expect("write workspace.yaml");
+
+        // session with no summary_count field (should be deleted — defaults to 0)
+        let no_count_session = root_dir.join("session-state").join("session-no-count");
+        fs::create_dir_all(&no_count_session).expect("create no-count session dir");
+        fs::write(
+            no_count_session.join("workspace.yaml"),
+            "id: session-no-count\n",
+        )
+        .expect("write workspace.yaml");
+
+        unsafe {
+            env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
+        }
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        unsafe {
+            env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        }
+
+        assert_eq!(result.expect("should succeed"), 2);
+        assert!(!empty_session.exists(), "empty session should be deleted");
+        assert!(active_session.exists(), "active session should remain");
+        assert!(
+            !no_count_session.exists(),
+            "no-count session should be deleted"
+        );
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn delete_empty_sessions_returns_zero_when_no_session_state_dir() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("empty-del-nodir");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&root_dir).expect("create root dir");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        unsafe {
+            env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
+        }
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        unsafe {
+            env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        }
+
+        assert_eq!(result.expect("should succeed"), 0);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
     }
 }

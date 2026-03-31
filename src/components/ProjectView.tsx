@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { ProjectGroup, SessionInfo, SortKey } from "../types";
+import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { SessionCard } from "./SessionCard";
 
 type Props = {
@@ -13,7 +14,11 @@ type Props = {
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
+  onUnarchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
+  onDeleteEmptySessions: () => void;
+  isPinned: boolean;
+  onTogglePin: () => void;
 };
 
 function filterAndSortSessions(
@@ -21,10 +26,13 @@ function filterAndSortSessions(
   searchTerm: string,
   sortKey: SortKey,
   selectedTags: string[],
+  hideEmpty: boolean,
 ) {
   const normalizedSearchTerm = searchTerm.trim().toLowerCase();
 
   const filtered = sessions.filter((session) => {
+    if (hideEmpty && (session.summaryCount ?? 0) === 0) return false;
+
     const matchesTags =
       selectedTags.length === 0 || selectedTags.every((tag) => session.tags.includes(tag));
 
@@ -69,12 +77,17 @@ export function ProjectView({
   onEditTags,
   onOpenPlan,
   onArchive,
+  onUnarchive,
   onDelete,
+  onDeleteEmptySessions,
+  isPinned,
+  onTogglePin,
 }: Props) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [hideEmpty, setHideEmpty] = useState(false);
 
   const availableTags = useMemo(
     () =>
@@ -84,44 +97,95 @@ export function ProjectView({
     [project.sessions],
   );
 
+  const emptySessions = useMemo(
+    () => project.sessions.filter((s) => (s.summaryCount ?? 0) === 0),
+    [project.sessions],
+  );
+
   const filteredSessions = useMemo(
-    () => filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags),
-    [project.sessions, searchTerm, sortKey, selectedTags],
+    () => filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, hideEmpty),
+    [project.sessions, searchTerm, sortKey, selectedTags, hideEmpty],
+  );
+
+  const hiddenCount = useMemo(
+    () => project.sessions.filter((s) => (s.summaryCount ?? 0) === 0).length,
+    [project.sessions],
   );
 
   return (
     <section className="project-page">
       <section className="toolbar-card">
-        <label className="field-group compact-field">
-          <span>{t("session.search")}</span>
-          <input
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.currentTarget.value)}
-            placeholder={t("session.searchPlaceholder")}
-          />
-        </label>
+        <div className="filter-bar">
+          <label className="field-group compact-field" style={{ flex: 1 }}>
+            <span>{t("session.search")}</span>
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.currentTarget.value)}
+              placeholder={t("session.searchPlaceholder")}
+            />
+          </label>
 
-        <label className="field-group compact-field">
-          <span>{t("session.sort")}</span>
-          <select
-            value={sortKey}
-            onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
-          >
-            <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
-            <option value="createdAt">{t("session.sortCreatedAt")}</option>
-            <option value="summaryCount">{t("session.sortSummaryCount")}</option>
-            <option value="summary">{t("session.sortSummary")}</option>
-          </select>
-        </label>
+          <label className="field-group compact-field">
+            <span>{t("session.sort")}</span>
+            <select
+              value={sortKey}
+              onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
+            >
+              <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
+              <option value="createdAt">{t("session.sortCreatedAt")}</option>
+              <option value="summaryCount">{t("session.sortSummaryCount")}</option>
+              <option value="summary">{t("session.sortSummary")}</option>
+            </select>
+          </label>
 
-        <label className="checkbox-group compact-checkbox">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(event) => onToggleArchived(event.currentTarget.checked)}
-          />
-          <span>{t("project.showArchivedToggle")}</span>
-        </label>
+          <label className="checkbox-group compact-checkbox">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(event) => onToggleArchived(event.currentTarget.checked)}
+            />
+            <span>{t("project.showArchivedToggle")}</span>
+          </label>
+
+          <label className="checkbox-group compact-checkbox">
+            <input
+              type="checkbox"
+              checked={hideEmpty}
+              onChange={(event) => setHideEmpty(event.currentTarget.checked)}
+            />
+            <span>
+              {t("session.filter.hideEmpty")}
+              {hideEmpty && hiddenCount > 0 ? (
+                <span className="hidden-count-hint">
+                  {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
+                </span>
+              ) : null}
+            </span>
+          </label>
+
+          <div className="filter-bar-actions">
+            <button
+              type="button"
+              className="icon-button"
+              title={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
+              aria-label={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
+              onClick={onTogglePin}
+            >
+              {isPinned ? <UnpinIcon size={16} /> : <PinIcon size={16} />}
+            </button>
+
+            <button
+              type="button"
+              className="icon-button icon-button--danger"
+              title={t("session.actions.deleteEmpty")}
+              aria-label={t("session.actions.deleteEmpty")}
+              disabled={emptySessions.length === 0}
+              onClick={onDeleteEmptySessions}
+            >
+              <DeleteIcon size={16} />
+            </button>
+          </div>
+        </div>
       </section>
 
       {availableTags.length > 0 ? (
@@ -162,6 +226,7 @@ export function ProjectView({
             onEditTags={onEditTags}
             onOpenPlan={onOpenPlan}
             onArchive={onArchive}
+            onUnarchive={onUnarchive}
             onDelete={onDelete}
           />
         ))}

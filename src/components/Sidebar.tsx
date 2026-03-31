@@ -3,14 +3,17 @@ import { createPortal } from "react-dom";
 import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
-import type { RealtimeStatus } from "../types";
+import type { ProjectGroup, RealtimeStatus } from "../types";
 
 type Props = {
   activeView: string;
   isSidebarCollapsed: boolean;
   realtimeStatus: RealtimeStatus;
   lastRealtimeSyncAt: string | null;
+  pinnedProjects: string[];
+  projectGroups: ProjectGroup[];
   onNavigate: (view: string) => void;
+  onOpenProject: (projectKey: string) => void;
   onCollapseToggle: () => void;
   onRefresh: () => void;
   onConfigurePath: () => void;
@@ -23,7 +26,10 @@ export function Sidebar({
   isSidebarCollapsed,
   realtimeStatus,
   lastRealtimeSyncAt,
+  pinnedProjects,
+  projectGroups,
   onNavigate,
+  onOpenProject,
   onCollapseToggle,
   onRefresh,
   onConfigurePath,
@@ -56,6 +62,11 @@ export function Sidebar({
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
   }, [openPopover]);
+
+  // 只顯示有對應 projectGroup 的釘選項目
+  const visiblePinnedGroups = pinnedProjects
+    .map((key) => projectGroups.find((g) => g.key === key))
+    .filter((g): g is ProjectGroup => Boolean(g));
 
   return (
     <aside className="sidebar">
@@ -96,6 +107,33 @@ export function Sidebar({
           <span className="sidebar-link-icon">◫</span>
           <span>{t("sidebar.menu.dashboard")}</span>
         </button>
+
+        {/* 釘選專案：接在 Dashboard 下方，展開/收折都顯示 */}
+        {visiblePinnedGroups.map((group) => {
+          const initial = group.title.charAt(0).toUpperCase();
+          return isSidebarCollapsed ? (
+            <button
+              key={group.key}
+              type="button"
+              className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
+              title={group.title}
+              onClick={() => onOpenProject(group.key)}
+            >
+              {initial}
+            </button>
+          ) : (
+            <button
+              key={group.key}
+              type="button"
+              className={`sidebar-link ${activeView === group.key ? "active" : ""}`}
+              title={group.pathLabel}
+              onClick={() => onOpenProject(group.key)}
+            >
+              <span className="sidebar-link-icon sidebar-pinned-initial">{initial}</span>
+              <span className="sidebar-pinned-item-label">{group.title}</span>
+            </button>
+          );
+        })}
       </nav>
 
       {openPopover === "language"

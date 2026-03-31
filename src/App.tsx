@@ -13,6 +13,7 @@ import { formatDateTime } from "./utils/formatDate";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
+import { PinIcon } from "./components/Icons";
 import { PlanEditor } from "./components/PlanEditor";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
@@ -66,6 +67,7 @@ function App() {
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<string>("dashboard");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
@@ -125,7 +127,9 @@ function App() {
         terminalPath: settingsQuery.data.terminalPath ?? "",
         externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
         showArchived: settingsQuery.data.showArchived,
+        pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
       });
+      setPinnedProjects(settingsQuery.data.pinnedProjects ?? []);
     }
   }, [settingsQuery.data]);
 
@@ -214,6 +218,15 @@ function App() {
     },
   });
 
+  const unarchiveMutation = useMutation({
+    mutationFn: (sessionId: string) =>
+      invoke("unarchive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
+    onSuccess: async () => {
+      showToast(t("toast.sessionUnarchived"));
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) =>
       invoke("delete_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
@@ -266,6 +279,31 @@ function App() {
     },
   });
 
+  const deleteEmptySessionsMutation = useMutation({
+    mutationFn: () =>
+      invoke<number>("delete_empty_sessions", { rootDir: settingsQuery.data?.copilotRoot }),
+    onSuccess: async (count) => {
+      showToast(t("toast.emptySessionsDeleted").replace("{count}", String(count)));
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
+  const togglePinProject = async (projectKey: string) => {
+    const next = pinnedProjects.includes(projectKey)
+      ? pinnedProjects.filter((k) => k !== projectKey)
+      : [...pinnedProjects, projectKey];
+    setPinnedProjects(next);
+    const settings: AppSettings = {
+      copilotRoot: settingsForm.copilotRoot.trim(),
+      terminalPath: settingsForm.terminalPath?.trim() || null,
+      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
+      showArchived: settingsForm.showArchived,
+      pinnedProjects: next,
+    };
+    await invoke("save_settings", { settings });
+    await queryClient.invalidateQueries({ queryKey: ["settings"] });
+  };
+
   const uncategorizedLabel = t("session.uncategorized");
 
   const groupedProjects = useMemo(
@@ -315,6 +353,7 @@ function App() {
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: settingsForm.showArchived,
+      pinnedProjects,
     };
 
     if (!next.copilotRoot) {
@@ -349,6 +388,7 @@ function App() {
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: nextValue,
+      pinnedProjects,
     };
     setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
     settingsMutation.mutate(next);
@@ -381,6 +421,16 @@ function App() {
     });
   };
 
+  const handleUnarchiveSession = (session: SessionInfo) => {
+    setConfirmDialog({
+      title: t("dialog.archiveTitle"),
+      message: `${t("session.confirm.archive")} ${session.summary?.trim() || session.id}?`,
+      actionLabel: t("session.actions.unarchive"),
+      tone: "primary",
+      onConfirm: () => unarchiveMutation.mutate(session.id),
+    });
+  };
+
   const handleDeleteSession = (session: SessionInfo) => {
     setConfirmDialog({
       title: t("dialog.deleteTitle"),
@@ -388,6 +438,17 @@ function App() {
       actionLabel: t("session.actions.delete"),
       tone: "danger",
       onConfirm: () => deleteMutation.mutate(session.id),
+    });
+  };
+
+  const handleDeleteEmptySessions = (emptyCount: number) => {
+    if (emptyCount === 0) return;
+    setConfirmDialog({
+      title: t("dialog.deleteEmptyTitle"),
+      message: t("session.confirm.deleteEmpty").replace("{count}", String(emptyCount)),
+      actionLabel: t("session.actions.deleteEmpty"),
+      tone: "danger",
+      onConfirm: () => deleteEmptySessionsMutation.mutate(),
     });
   };
 
@@ -455,7 +516,10 @@ function App() {
         isSidebarCollapsed={isSidebarCollapsed}
         realtimeStatus={realtimeStatus}
         lastRealtimeSyncAt={lastRealtimeSyncAt}
+        pinnedProjects={pinnedProjects}
+        projectGroups={groupedProjects}
         onNavigate={(view) => setActiveView(view)}
+        onOpenProject={openProjectTab}
         onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
         onRefresh={() => sessionsQuery.refetch()}
         onConfigurePath={() => setActiveView("settings")}
@@ -493,9 +557,13 @@ function App() {
               {t("tabs.dashboard")}
             </button>
 
-            {openProjectKeys.map((projectKey) => {
+            {[
+              ...openProjectKeys.filter((k) => pinnedProjects.includes(k)),
+              ...openProjectKeys.filter((k) => !pinnedProjects.includes(k)),
+            ].map((projectKey) => {
               const project = groupedProjects.find((p) => p.key === projectKey);
               if (!project) return null;
+              const isPinned = pinnedProjects.includes(projectKey);
               return (
                 <div
                   key={project.key}
@@ -506,6 +574,11 @@ function App() {
                     className="tab-label"
                     onClick={() => setActiveView(project.key)}
                   >
+                    {isPinned ? (
+                      <span className="tab-pin-indicator">
+                        <PinIcon size={11} />
+                      </span>
+                    ) : null}
                     {project.title}
                   </button>
                   <button
@@ -589,7 +662,15 @@ function App() {
               onEditTags={handleEditTags}
               onOpenPlan={handleOpenPlan}
               onArchive={handleArchiveSession}
+              onUnarchive={handleUnarchiveSession}
               onDelete={handleDeleteSession}
+              onDeleteEmptySessions={() =>
+                handleDeleteEmptySessions(
+                  activeProject.sessions.filter((s) => (s.summaryCount ?? 0) === 0).length,
+                )
+              }
+              isPinned={pinnedProjects.includes(activeProject.key)}
+              onTogglePin={() => void togglePinProject(activeProject.key)}
             />
           ) : null}
 

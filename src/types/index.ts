@@ -18,6 +18,7 @@ export type AppSettings = {
     terminalPath?: string | null;
     externalEditorPath?: string | null;
     showArchived: boolean;
+    pinnedProjects?: string[];
 };
 
 export type SettingsSection = "general" | "language" | "icon-style";
