@@ -47,11 +47,13 @@ textarea {
 }
 
 #root {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   padding: 0;
   display: grid;
   gap: 0;
@@ -67,14 +69,13 @@ textarea {
 
 .sidebar {
   display: grid;
-  grid-template-rows: auto auto auto auto 1fr auto;
+  grid-template-rows: auto auto auto 1fr auto;
   gap: 18px;
-  min-height: 100vh;
+  height: 100%;
+  overflow-y: auto;
   padding: 24px 14px;
   background: linear-gradient(180deg, #f9fbff 0%, #eef3fb 100%);
   border-right: 1px solid var(--color-border-subtle);
-  position: sticky;
-  top: 0;
 }
 
 .sidebar-brand {
@@ -193,7 +194,7 @@ textarea {
 .sidebar-footer {
   align-self: end;
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .sidebar-footer-button {
@@ -215,8 +216,12 @@ textarea {
 
 .workspace {
   display: grid;
+  align-content: start;
   gap: 20px;
   padding: 20px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .workspace-header {
@@ -838,6 +843,7 @@ textarea {
 .sidebar-collapsed .sidebar-panel,
 .sidebar-collapsed .sidebar-footer-button,
 .sidebar-collapsed .sidebar-version,
+.sidebar-collapsed .sidebar-realtime-label,
 .sidebar-collapsed .sidebar-link span:not(.sidebar-link-icon) {
   display: none;
 }
@@ -857,6 +863,8 @@ textarea {
 
 @media (max-width: 900px) {
   .app-shell {
+    height: auto;
+    overflow: hidden;
     grid-template-columns: 1fr;
   }
 
@@ -864,10 +872,14 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .sidebar,
-  .sidebar-collapsed .sidebar {
-    min-height: auto;
-    position: static;
+  .sidebar {
+    height: auto;
+    overflow-y: visible;
+  }
+
+  .workspace {
+    height: auto;
+    overflow-y: visible;
   }
 
   .workspace-header,
@@ -908,4 +920,120 @@ textarea {
   .project-meta {
     text-align: left;
   }
+}
+
+/* ========================
+   Sidebar quick-action bar
+   ======================== */
+
+.sidebar-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sidebar-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  background: var(--color-surface-panel);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-icon-button:hover,
+.sidebar-icon-button.active {
+  border-color: rgba(47, 109, 246, 0.3);
+  background: rgba(47, 109, 246, 0.08);
+  color: var(--color-text-primary);
+}
+
+.sidebar-quick-action-item {
+  position: relative;
+}
+
+.sidebar-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 180px;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 16px;
+  background: var(--color-surface-panel);
+  box-shadow: 0 16px 32px rgba(12, 20, 38, 0.14);
+  z-index: 100;
+}
+
+.sidebar-popover-header {
+  padding: 6px 10px 8px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-popover-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-popover-item.active {
+  border-color: rgba(47, 109, 246, 0.16);
+  background: rgba(47, 109, 246, 0.06);
+  color: var(--color-text-primary);
+}
+
+.sidebar-popover-item:hover {
+  background: var(--color-surface-accent);
+}
+
+/* ========================
+   Sidebar realtime status
+   ======================== */
+
+.sidebar-realtime {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #eef3fb;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.sidebar-realtime-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-collapsed .sidebar-quick-actions {
+  flex-direction: column;
+  align-items: center;
+}
+
+.sidebar-collapsed .sidebar-realtime {
+  justify-content: center;
+  padding: 8px;
 }

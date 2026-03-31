@@ -23,20 +23,20 @@
 
 ## 主要功能
 
-| 功能 | 說明 |
-|------|------|
-| **Session 列表** | 掃描並列出所有 Copilot session，顯示專案路徑、摘要、建立時間、更新時間 |
-| **依專案分頁** | 每個專案（cwd）開啟獨立分頁，方便跨專案切換 |
-| **搜尋與篩選** | 關鍵字搜尋、標籤多選篩選、排序（時間／名稱）|
-| **Dashboard** | 統計總覽：session 數量、近期活動、專案分佈 |
-| **一鍵開啟終端** | 直接以指定終端（pwsh/PowerShell）在 session 的工作目錄開啟 |
-| **複製 Session 指令** | 一鍵複製重新進入該 session 的 Copilot 指令 |
-| **封存／刪除** | 封存不再需要的 session，或永久刪除 |
-| **Plan 編輯器** | 在 app 內查看、編輯 `plan.md`，支援 Markdown 預覽 |
-| **外部編輯器開啟 Plan** | 以 VSCode 或自訂編輯器開啟 `plan.md` |
-| **即時更新** | 監聽 session-state 目錄，新增或修改時自動刷新列表 |
-| **備註與標籤** | 為每個 session 加入個人備註與標籤，存於本地資料庫 |
-| **多語系** | 支援繁體中文介面 |
+| 功能                    | 說明                                                                   |
+| ----------------------- | ---------------------------------------------------------------------- |
+| **Session 列表**        | 掃描並列出所有 Copilot session，顯示專案路徑、摘要、建立時間、更新時間 |
+| **依專案分頁**          | 每個專案（cwd）開啟獨立分頁，方便跨專案切換                            |
+| **搜尋與篩選**          | 關鍵字搜尋、標籤多選篩選、排序（時間／名稱）                           |
+| **Dashboard**           | 統計總覽：session 數量、近期活動、專案分佈                             |
+| **一鍵開啟終端**        | 直接以指定終端（pwsh/PowerShell）在 session 的工作目錄開啟             |
+| **複製 Session 指令**   | 一鍵複製重新進入該 session 的 Copilot 指令                             |
+| **封存／刪除**          | 封存不再需要的 session，或永久刪除                                     |
+| **Plan 編輯器**         | 在 app 內查看、編輯 `plan.md`，支援 Markdown 預覽                      |
+| **外部編輯器開啟 Plan** | 以 VSCode 或自訂編輯器開啟 `plan.md`                                   |
+| **即時更新**            | 監聽 session-state 目錄，新增或修改時自動刷新列表                      |
+| **備註與標籤**          | 為每個 session 加入個人備註與標籤，存於本地資料庫                      |
+| **多語系**              | 支援繁體中文介面                                                       |
 
 ---
 
@@ -60,6 +60,7 @@
 ### 方式二：從原始碼建置
 
 **前置需求：**
+
 - [Rust](https://rustup.rs/)（stable toolchain）
 - [Node.js](https://nodejs.org/) 22+
 - [Bun](https://bun.sh/)
@@ -76,6 +77,7 @@ bun run tauri build
 ```
 
 建置完成後，安裝檔位於：
+
 ```
 src-tauri/target/release/bundle/
   msi/    → SessionHub_0.1.0_x64_en-US.msi
@@ -97,21 +99,27 @@ src-tauri/target/release/bundle/
 ## 使用說明
 
 ### 查看所有 Session
+
 - 主頁（Dashboard）顯示統計資訊與最近活動
 - 點擊左側 Sidebar 的「**Sessions**」進入完整列表
 - 使用頂部搜尋列過濾，或點選標籤篩選
 
 ### 開啟 Session
+
 選擇任一 session，點擊：
+
 - 🖥 **開啟終端**：在該專案目錄開啟終端機
 - 📋 **複製指令**：複製 `gh copilot session <id>` 指令，貼到任何終端執行
 
 ### 管理 Plan
+
 Session 卡片上若有 📄 圖示，代表該 session 包含 `plan.md`：
+
 - 點擊 session 展開 **Plan 編輯器**，可直接在 app 內查看與編輯
 - 點擊「**外部開啟**」以 VSCode 或指定編輯器開啟
 
 ### 封存與刪除
+
 - **封存**：將 session 移至封存區，不再顯示於主列表（可在專案頁面切換「顯示封存」查看）
 - **刪除**：永久移除 session 資料夾（不可復原）
 
@@ -119,11 +127,11 @@ Session 卡片上若有 📄 圖示，代表該 session 包含 `plan.md`：
 
 ## 資料存放位置
 
-| 資料 | 路徑 |
-|------|------|
-| 應用程式設定 | `%APPDATA%\SessionHub\settings.json` |
-| 備註與標籤（SQLite）| `%APPDATA%\SessionHub\metadata.db` |
-| Copilot Sessions | `~/.copilot/session-state/`（可自訂）|
+| 資料                 | 路徑                                  |
+| -------------------- | ------------------------------------- |
+| 應用程式設定         | `%APPDATA%\SessionHub\settings.json`  |
+| 備註與標籤（SQLite） | `%APPDATA%\SessionHub\metadata.db`    |
+| Copilot Sessions     | `~/.copilot/session-state/`（可自訂） |
 
 ---
 

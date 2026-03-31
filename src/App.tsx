@@ -5,77 +5,21 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import packageJson from "../package.json";
 
 import { useI18n } from "./i18n/I18nProvider";
+import type { AppSettings, ConfirmDialogState, EditDialogState, ProjectGroup, SessionInfo } from "./types";
 
-type SessionInfo = {
-  id: string;
-  cwd?: string | null;
-  summary?: string | null;
-  summaryCount?: number | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  sessionDir: string;
-  parseError: boolean;
-  isArchived: boolean;
-  notes?: string | null;
-  tags: string[];
-  hasPlan: boolean;
-};
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { DashboardView } from "./components/DashboardView";
+import { EditDialog } from "./components/EditDialog";
+import { ProjectView } from "./components/ProjectView";
+import { SettingsView } from "./components/SettingsView";
+import { Sidebar } from "./components/Sidebar";
 
-type AppSettings = {
-  copilotRoot: string;
-  terminalPath?: string | null;
-  externalEditorPath?: string | null;
-  showArchived: boolean;
-};
-
-type SettingsSection = "general" | "language" | "icon-style";
-
-type ProjectGroup = {
-  key: string;
-  title: string;
-  pathLabel: string;
-  sessions: SessionInfo[];
-  updatedAtLabel: string;
-};
-
-type SortKey = "updatedAt" | "createdAt" | "summaryCount" | "summary";
-type RealtimeStatus = "connecting" | "active" | "error";
-
-type ConfirmDialogState = {
-  title: string;
-  message: string;
-  actionLabel: string;
-  tone: "danger" | "primary";
-  onConfirm: () => void;
-};
-
-type EditDialogState = {
-  title: string;
-  message: string;
-  actionLabel: string;
-  initialValue: string;
-  multiline?: boolean;
-  onConfirm: (value: string) => void;
-};
-
-function getSessionTitle(session: SessionInfo) {
-  return session.summary?.trim() || session.id;
-}
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string) {
   return session.cwd?.trim() || uncategorizedLabel;
-}
-
-function getProjectTitle(pathLabel: string, uncategorizedLabel: string) {
-  if (pathLabel === uncategorizedLabel) {
-    return pathLabel;
-  }
-
-  const segments = pathLabel.split("\\").filter(Boolean);
-  return segments[segments.length - 1] ?? pathLabel;
 }
 
 function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string): ProjectGroup[] {
@@ -88,85 +32,48 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string)
     groupMap.set(key, bucket);
   }
 
+  const getTitle = (pathLabel: string) => {
+    if (pathLabel === uncategorizedLabel) return pathLabel;
+    const parts = pathLabel.split("\\").filter(Boolean);
+    return parts[parts.length - 1] ?? pathLabel;
+  };
+
   return Array.from(groupMap.entries())
     .map(([pathLabel, groupedSessions]) => ({
       key: pathLabel,
-      title: getProjectTitle(pathLabel, uncategorizedLabel),
+      title: getTitle(pathLabel),
       pathLabel,
-      sessions: groupedSessions.sort((left, right) =>
-        (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+      sessions: groupedSessions.sort((a, b) =>
+        (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
       ),
       updatedAtLabel:
-        groupedSessions
-          .map((session) => session.updatedAt)
-          .find((value): value is string => Boolean(value)) ?? "-",
+        groupedSessions.map((s) => s.updatedAt).find((v): v is string => Boolean(v)) ?? "-",
     }))
-    .sort((left, right) => right.sessions.length - left.sessions.length);
+    .sort((a, b) => b.sessions.length - a.sessions.length);
 }
 
-function filterAndSortSessions(
-  sessions: SessionInfo[],
-  searchTerm: string,
-  sortKey: SortKey,
-  selectedTags: string[],
-) {
-  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
-
-  const filteredSessions = sessions.filter((session) => {
-    const matchesTags =
-      selectedTags.length === 0 || selectedTags.every((tag) => session.tags.includes(tag));
-
-    if (!matchesTags) {
-      return false;
-    }
-
-    if (!normalizedSearchTerm) {
-      return true;
-    }
-
-    const haystacks = [
-      session.id,
-      session.cwd ?? "",
-      session.summary ?? "",
-      session.notes ?? "",
-      session.tags.join(" "),
-    ];
-
-    return haystacks.some((value) => value.toLowerCase().includes(normalizedSearchTerm));
-  });
-
-  return filteredSessions.sort((left, right) => {
-    switch (sortKey) {
-      case "createdAt":
-        return (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
-      case "summaryCount":
-        return (right.summaryCount ?? 0) - (left.summaryCount ?? 0);
-      case "summary":
-        return getSessionTitle(left).localeCompare(getSessionTitle(right));
-      case "updatedAt":
-      default:
-        return (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "");
-    }
-  });
-}
+// ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<string>("dashboard");
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [activePlanSession, setActivePlanSession] = useState<SessionInfo | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
-  const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>("connecting");
+
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "active" | "error">(
+    "connecting",
+  );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
+
+  const [activePlanSession, setActivePlanSession] = useState<SessionInfo | null>(null);
   const [planDraft, setPlanDraft] = useState("");
+
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     terminalPath: "",
@@ -178,17 +85,6 @@ function App() {
     queryKey: ["settings"],
     queryFn: () => invoke<AppSettings>("get_settings"),
   });
-
-  useEffect(() => {
-    if (settingsQuery.data) {
-      setSettingsForm({
-        copilotRoot: settingsQuery.data.copilotRoot,
-        terminalPath: settingsQuery.data.terminalPath ?? "",
-        externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
-        showArchived: settingsQuery.data.showArchived,
-      });
-    }
-  }, [settingsQuery.data]);
 
   const sessionsQuery = useQuery({
     queryKey: [
@@ -203,14 +99,24 @@ function App() {
         showArchived: settingsQuery.data?.showArchived,
       }),
   });
+
   const planQuery = useQuery({
     queryKey: ["plan", activePlanSession?.sessionDir ?? ""],
     enabled: Boolean(activePlanSession),
     queryFn: () =>
-      invoke<string | null>("read_plan", {
-        sessionDir: activePlanSession?.sessionDir,
-      }),
+      invoke<string | null>("read_plan", { sessionDir: activePlanSession?.sessionDir }),
   });
+
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setSettingsForm({
+        copilotRoot: settingsQuery.data.copilotRoot,
+        terminalPath: settingsQuery.data.terminalPath ?? "",
+        externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
+        showArchived: settingsQuery.data.showArchived,
+      });
+    }
+  }, [settingsQuery.data]);
 
   useEffect(() => {
     if (activePlanSession) {
@@ -219,16 +125,10 @@ function App() {
   }, [activePlanSession, planQuery.data]);
 
   useEffect(() => {
-    if (!settingsQuery.data) {
-      return undefined;
-    }
-
-    void invoke("restart_session_watcher", {
-      copilotRoot: settingsQuery.data.copilotRoot,
-    })
+    if (!settingsQuery.data) return undefined;
+    void invoke("restart_session_watcher", { copilotRoot: settingsQuery.data.copilotRoot })
       .then(() => setRealtimeStatus("active"))
       .catch(() => setRealtimeStatus("error"));
-
     return undefined;
   }, [settingsQuery.data]);
 
@@ -237,20 +137,14 @@ function App() {
       void invoke("stop_plan_watch");
       return undefined;
     }
-
-    void invoke("watch_plan_file", {
-      sessionDir: activePlanSession.sessionDir,
-    });
-
-    return () => {
-      void invoke("stop_plan_watch");
-    };
+    void invoke("watch_plan_file", { sessionDir: activePlanSession.sessionDir });
+    return () => { void invoke("stop_plan_watch"); };
   }, [activePlanSession]);
 
   useEffect(() => {
     let mounted = true;
 
-    const setupListeners = async () => {
+    const setup = async () => {
       const unlistenSessions = await listen("sessions-updated", async () => {
         await queryClient.invalidateQueries({ queryKey: ["sessions"] });
         if (mounted) {
@@ -261,10 +155,7 @@ function App() {
       });
 
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
-        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) {
-          return;
-        }
-
+        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
         await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
         if (mounted) {
           setRealtimeStatus("active");
@@ -272,28 +163,16 @@ function App() {
         }
       });
 
-      return () => {
-        unlistenSessions();
-        unlistenPlan();
-      };
+      return () => { unlistenSessions(); unlistenPlan(); };
     };
 
     let cleanup: (() => void) | undefined;
-    void setupListeners().then((dispose) => {
-      cleanup = dispose;
-    });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
+    void setup().then((dispose) => { cleanup = dispose; });
+    return () => { mounted = false; cleanup?.(); };
   }, [activePlanSession, queryClient, t]);
 
   useEffect(() => {
-    if (!toastMessage) {
-      return undefined;
-    }
-
+    if (!toastMessage) return undefined;
     const timer = window.setTimeout(() => setToastMessage(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
@@ -301,15 +180,13 @@ function App() {
   const showToast = (message: string) => setToastMessage(message);
 
   const settingsMutation = useMutation({
-    mutationFn: (nextSettings: AppSettings) => invoke("save_settings", { settings: nextSettings }),
+    mutationFn: (next: AppSettings) => invoke("save_settings", { settings: next }),
     onSuccess: async () => {
       showToast(t("toast.settingsSaved"));
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       try {
-        await invoke("restart_session_watcher", {
-          copilotRoot: settingsForm.copilotRoot.trim(),
-        });
+        await invoke("restart_session_watcher", { copilotRoot: settingsForm.copilotRoot.trim() });
         setRealtimeStatus("active");
       } catch {
         setRealtimeStatus("error");
@@ -319,10 +196,7 @@ function App() {
 
   const archiveMutation = useMutation({
     mutationFn: (sessionId: string) =>
-      invoke("archive_session", {
-        rootDir: settingsQuery.data?.copilotRoot,
-        sessionId,
-      }),
+      invoke("archive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionArchived"));
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -331,10 +205,7 @@ function App() {
 
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) =>
-      invoke("delete_session", {
-        rootDir: settingsQuery.data?.copilotRoot,
-        sessionId,
-      }),
+      invoke("delete_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionDeleted"));
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -342,20 +213,8 @@ function App() {
   });
 
   const saveMetaMutation = useMutation({
-    mutationFn: ({
-      sessionId,
-      notes,
-      tags,
-    }: {
-      sessionId: string;
-      notes?: string | null;
-      tags: string[];
-    }) =>
-      invoke("upsert_session_meta", {
-        sessionId,
-        notes,
-        tags,
-      }),
+    mutationFn: ({ sessionId, notes, tags }: { sessionId: string; notes?: string | null; tags: string[] }) =>
+      invoke("upsert_session_meta", { sessionId, notes, tags }),
     onSuccess: async () => {
       showToast(t("toast.metaSaved"));
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -366,24 +225,26 @@ function App() {
     mutationFn: () => invoke<string | null>("detect_terminal"),
     onSuccess: (terminalPath) => {
       if (terminalPath) {
-        setSettingsForm((currentValue) => ({ ...currentValue, terminalPath }));
+        setSettingsForm((v) => ({ ...v, terminalPath }));
         showToast(t("toast.terminalDetected"));
       } else {
         showToast(t("toast.terminalMissing"));
       }
     },
   });
+
   const detectVscodeMutation = useMutation({
     mutationFn: () => invoke<string | null>("detect_vscode"),
     onSuccess: (editorPath) => {
       if (editorPath) {
-        setSettingsForm((currentValue) => ({ ...currentValue, externalEditorPath: editorPath }));
+        setSettingsForm((v) => ({ ...v, externalEditorPath: editorPath }));
         showToast(t("toast.editorDetected"));
       } else {
         showToast(t("toast.editorMissing"));
       }
     },
   });
+
   const savePlanMutation = useMutation({
     mutationFn: ({ sessionDir, content }: { sessionDir: string; content: string }) =>
       invoke("write_plan", { sessionDir, content }),
@@ -395,40 +256,21 @@ function App() {
   });
 
   const uncategorizedLabel = t("session.uncategorized");
+
   const groupedProjects = useMemo(
     () => buildProjectGroups(sessionsQuery.data ?? [], uncategorizedLabel),
     [sessionsQuery.data, uncategorizedLabel],
   );
 
   const activeProject = useMemo(
-    () => groupedProjects.find((project) => project.key === activeView) ?? null,
+    () => groupedProjects.find((p) => p.key === activeView) ?? null,
     [activeView, groupedProjects],
-  );
-
-  useEffect(() => {
-    setSelectedTags([]);
-  }, [activeProject?.key]);
-
-  const filteredSessions = useMemo(
-    () =>
-      activeProject
-        ? filterAndSortSessions(activeProject.sessions, searchTerm, sortKey, selectedTags)
-        : [],
-    [activeProject, searchTerm, sortKey, selectedTags],
-  );
-
-  const availableTags = useMemo(
-    () =>
-      [...new Set((activeProject?.sessions ?? []).flatMap((session) => session.tags))]
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right)),
-    [activeProject],
   );
 
   const recentSessions = useMemo(
     () =>
       [...(sessionsQuery.data ?? [])]
-        .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
         .slice(0, 10),
     [sessionsQuery.data],
   );
@@ -436,70 +278,71 @@ function App() {
   const planPreviewHtml = useMemo(
     () =>
       DOMPurify.sanitize(
-        marked.parse(planDraft || "_Empty plan_", {
-          async: false,
-        }),
+        marked.parse(planDraft || "_Empty plan_", { async: false }),
       ),
     [planDraft],
   );
 
   const openProjectTab = (projectKey: string) => {
-    setOpenProjectKeys((currentValue) =>
-      currentValue.includes(projectKey) ? currentValue : [...currentValue, projectKey],
-    );
+    setOpenProjectKeys((v) => (v.includes(projectKey) ? v : [...v, projectKey]));
     setActiveView(projectKey);
   };
 
   const closeProjectTab = (projectKey: string) => {
-    setOpenProjectKeys((currentValue) => currentValue.filter((item) => item !== projectKey));
-    setActiveView((currentValue) => (currentValue === projectKey ? "dashboard" : currentValue));
+    setOpenProjectKeys((v) => v.filter((k) => k !== projectKey));
+    setActiveView((v) => (v === projectKey ? "dashboard" : v));
   };
 
   const handleSaveSettings = async () => {
-    const nextSettings: AppSettings = {
+    const next: AppSettings = {
       copilotRoot: settingsForm.copilotRoot.trim(),
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: settingsForm.showArchived,
     };
 
-    if (!nextSettings.copilotRoot) {
+    if (!next.copilotRoot) {
       showToast(t("toast.settingsRootRequired"));
       return;
     }
 
-    if (nextSettings.terminalPath) {
-      const isValid = await invoke<boolean>("validate_terminal_path", {
-        path: nextSettings.terminalPath,
-      });
-
+    if (next.terminalPath) {
+      const isValid = await invoke<boolean>("validate_terminal_path", { path: next.terminalPath });
       if (!isValid) {
         showToast(t("toast.terminalInvalid"));
         return;
       }
     }
 
-    settingsMutation.mutate(nextSettings);
+    settingsMutation.mutate(next);
+  };
+
+  const handleBrowseDirectory = async (field: "copilotRoot") => {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
+  };
+
+  const handleBrowseFile = async (field: "terminalPath" | "externalEditorPath") => {
+    const selected = await open({ directory: false, multiple: false });
+    if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
+  };
+
+  const handleToggleArchived = async (nextValue: boolean) => {
+    const next: AppSettings = {
+      copilotRoot: settingsForm.copilotRoot.trim(),
+      terminalPath: settingsForm.terminalPath?.trim() || null,
+      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
+      showArchived: nextValue,
+    };
+    setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
+    settingsMutation.mutate(next);
   };
 
   const handleOpenTerminal = async (session: SessionInfo) => {
-    if (!session.cwd) {
-      showToast(t("toast.cwdMissing"));
-      return;
-    }
-
+    if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
     const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
-
-    if (!exists) {
-      showToast(t("toast.cwdMissing"));
-      return;
-    }
-
-    if (!settingsQuery.data?.terminalPath) {
-      showToast(t("toast.terminalInvalid"));
-      return;
-    }
-
+    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    if (!settingsQuery.data?.terminalPath) { showToast(t("toast.terminalInvalid")); return; }
     try {
       await invoke("open_terminal", {
         terminalPath: settingsQuery.data.terminalPath,
@@ -511,20 +354,20 @@ function App() {
     }
   };
 
-  const handleArchiveSession = async (session: SessionInfo) => {
+  const handleArchiveSession = (session: SessionInfo) => {
     setConfirmDialog({
       title: t("dialog.archiveTitle"),
-      message: `${t("session.confirm.archive")} ${getSessionTitle(session)}?`,
+      message: `${t("session.confirm.archive")} ${session.summary?.trim() || session.id}?`,
       actionLabel: t("session.actions.archive"),
       tone: "primary",
       onConfirm: () => archiveMutation.mutate(session.id),
     });
   };
 
-  const handleDeleteSession = async (session: SessionInfo) => {
+  const handleDeleteSession = (session: SessionInfo) => {
     setConfirmDialog({
       title: t("dialog.deleteTitle"),
-      message: `${t("session.confirm.delete")} ${getSessionTitle(session)}?`,
+      message: `${t("session.confirm.delete")} ${session.summary?.trim() || session.id}?`,
       actionLabel: t("session.actions.delete"),
       tone: "danger",
       onConfirm: () => deleteMutation.mutate(session.id),
@@ -536,57 +379,40 @@ function App() {
     showToast(t("toast.commandCopied"));
   };
 
-  const handleEditNotes = async (session: SessionInfo) => {
+  const handleEditNotes = (session: SessionInfo) => {
     setEditDialog({
       title: t("session.actions.editNotes"),
       message: t("session.prompt.notes"),
       actionLabel: t("session.actions.editNotes"),
       initialValue: session.notes ?? "",
       multiline: true,
-      onConfirm: (nextNotes) => {
+      onConfirm: (nextNotes) =>
         saveMetaMutation.mutate({
           sessionId: session.id,
-          notes: nextNotes.trim() ? nextNotes.trim() : null,
+          notes: nextNotes.trim() || null,
           tags: session.tags,
-        });
-      },
+        }),
     });
   };
 
-  const handleEditTags = async (session: SessionInfo) => {
+  const handleEditTags = (session: SessionInfo) => {
     setEditDialog({
       title: t("session.actions.editTags"),
       message: t("session.prompt.tags"),
       actionLabel: t("session.actions.editTags"),
       initialValue: session.tags.join(", "),
-      onConfirm: (nextTagsValue) => {
-        const tags = nextTagsValue
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean);
-
-        saveMetaMutation.mutate({
-          sessionId: session.id,
-          notes: session.notes ?? null,
-          tags,
-        });
+      onConfirm: (nextValue) => {
+        const tags = nextValue.split(",").map((v) => v.trim()).filter(Boolean);
+        saveMetaMutation.mutate({ sessionId: session.id, notes: session.notes ?? null, tags });
       },
     });
   };
 
-  const handleOpenPlan = (session: SessionInfo) => {
-    setActivePlanSession(session);
-  };
+  const handleOpenPlan = (session: SessionInfo) => setActivePlanSession(session);
 
   const handleSavePlan = () => {
-    if (!activePlanSession) {
-      return;
-    }
-
-    savePlanMutation.mutate({
-      sessionDir: activePlanSession.sessionDir,
-      content: planDraft,
-    });
+    if (!activePlanSession) return;
+    savePlanMutation.mutate({ sessionDir: activePlanSession.sessionDir, content: planDraft });
   };
 
   const handleOpenPlanExternal = async (session: SessionInfo) => {
@@ -601,141 +427,18 @@ function App() {
     }
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot") => {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected === "string") {
-      setSettingsForm((currentValue) => ({ ...currentValue, [field]: selected }));
-    }
-  };
-
-  const handleBrowseFile = async (field: "terminalPath" | "externalEditorPath") => {
-    const selected = await open({ directory: false, multiple: false });
-    if (typeof selected === "string") {
-      setSettingsForm((currentValue) => ({ ...currentValue, [field]: selected }));
-    }
-  };
-
-  const handleToggleArchived = async (nextValue: boolean) => {
-    const nextSettings: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: nextValue,
-    };
-
-    setSettingsForm((currentValue) => ({ ...currentValue, showArchived: nextValue }));
-    settingsMutation.mutate(nextSettings);
-  };
-
-  const realtimeLabel =
-    realtimeStatus === "error"
-      ? t("dashboard.status.realtimeError")
-      : realtimeStatus === "active"
-        ? t("dashboard.status.realtimeActive")
-        : t("dashboard.status.realtimeConnecting");
-
-  const loadingStatsValue = sessionsQuery.isLoading ? "..." : sessionsQuery.data?.length ?? 0;
-  const activeProjectCount = new Set(groupedProjects.map((project) => project.key)).size;
-  const archivedCount = (sessionsQuery.data ?? []).filter((session) => session.isArchived).length;
-  const parseErrorCount = (sessionsQuery.data ?? []).filter((session) => session.parseError).length;
-
   return (
     <main className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div className="sidebar-brand-icon">CS</div>
-          <div className="sidebar-brand-copy">
-            <span className="topbar-badge">{t("app.badge")}</span>
-            <h1 className="topbar-title">{t("app.title")}</h1>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          className="sidebar-collapse-button"
-          onClick={() => setIsSidebarCollapsed((currentValue) => !currentValue)}
-          aria-label={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-          title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-        >
-          {isSidebarCollapsed ? "»" : "«"}
-        </button>
-
-        <nav className="sidebar-menu">
-          <button
-            type="button"
-            className={`sidebar-link ${activeView === "dashboard" ? "active" : ""}`}
-            onClick={() => setActiveView("dashboard")}
-          >
-            <span className="sidebar-link-icon">◫</span>
-            <span>{t("sidebar.menu.dashboard")}</span>
-          </button>
-
-          <button
-            type="button"
-            className={`sidebar-link ${activeView === "settings" && settingsSection === "icon-style" ? "active" : ""}`}
-            onClick={() => {
-              setSettingsSection("icon-style");
-              setActiveView("settings");
-            }}
-          >
-            <span className="sidebar-link-icon">◌</span>
-            <span>{t("sidebar.menu.iconStyle")}</span>
-          </button>
-
-          <button
-            type="button"
-            className={`sidebar-link ${activeView === "settings" && settingsSection === "language" ? "active" : ""}`}
-            onClick={() => {
-              setSettingsSection("language");
-              setActiveView("settings");
-            }}
-          >
-            <span className="sidebar-link-icon">文</span>
-            <span>{t("sidebar.menu.language")}</span>
-          </button>
-
-          <button
-            type="button"
-            className={`sidebar-link ${activeView === "settings" && settingsSection === "general" ? "active" : ""}`}
-            onClick={() => {
-              setSettingsSection("general");
-              setActiveView("settings");
-            }}
-          >
-            <span className="sidebar-link-icon">⚙</span>
-            <span>{t("sidebar.menu.settings")}</span>
-          </button>
-        </nav>
-
-        <section className="sidebar-panel">
-          <span className="sidebar-panel-label">{t("sidebar.language.label")}</span>
-          <strong>{t("sidebar.language.current")}</strong>
-          <p>{t("sidebar.language.description")}</p>
-        </section>
-
-        <section className="sidebar-panel">
-          <span className="sidebar-panel-label">{t("sidebar.iconStyle.label")}</span>
-          <strong>{t("sidebar.iconStyle.current")}</strong>
-          <p>{t("sidebar.iconStyle.description")}</p>
-        </section>
-
-        <footer className="sidebar-footer">
-          <button
-            type="button"
-            className="ghost-button sidebar-footer-button"
-            onClick={() => {
-              setSettingsSection("general");
-              setActiveView("settings");
-            }}
-          >
-            {t("app.actions.configureCopilotPath")}
-          </button>
-          <div className="sidebar-version">
-            <span>{t("sidebar.version")}</span>
-            <strong>v{packageJson.version}</strong>
-          </div>
-        </footer>
-      </aside>
+      <Sidebar
+        activeView={activeView}
+        isSidebarCollapsed={isSidebarCollapsed}
+        realtimeStatus={realtimeStatus}
+        lastRealtimeSyncAt={lastRealtimeSyncAt}
+        onNavigate={(view) => setActiveView(view)}
+        onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
+        onRefresh={() => sessionsQuery.refetch()}
+        onConfigurePath={() => setActiveView("settings")}
+      />
 
       <section className="workspace">
         <header className="workspace-header">
@@ -755,19 +458,6 @@ function App() {
                   : activeProject?.pathLabel}
             </p>
           </div>
-
-          <div className="topbar-actions">
-            <div className={`realtime-indicator realtime-${realtimeStatus}`}>
-              <span className="realtime-dot" />
-              <span>
-                {realtimeLabel}
-                {lastRealtimeSyncAt ? ` · ${lastRealtimeSyncAt}` : ""}
-              </span>
-            </div>
-            <button type="button" onClick={() => sessionsQuery.refetch()}>
-              {t("app.actions.refresh")}
-            </button>
-          </div>
         </header>
 
         {activeView !== "settings" ? (
@@ -781,12 +471,8 @@ function App() {
             </button>
 
             {openProjectKeys.map((projectKey) => {
-              const project = groupedProjects.find((item) => item.key === projectKey);
-
-              if (!project) {
-                return null;
-              }
-
+              const project = groupedProjects.find((p) => p.key === projectKey);
+              if (!project) return null;
               return (
                 <div
                   key={project.key}
@@ -814,460 +500,57 @@ function App() {
         ) : null}
 
         {activeView === "dashboard" ? (
-          <section className="dashboard-layout">
-            <article className="hero-card">
-              <span className="hero-badge">{t("dashboard.badge")}</span>
-              <h2>{t("dashboard.title")}</h2>
-              <p className="hero-copy">{t("dashboard.description")}</p>
-            </article>
-
-            {sessionsQuery.isError ? (
-              <article className="info-card status-card status-card-error">
-                <h3>{t("dashboard.status.errorTitle")}</h3>
-                <p className="placeholder-copy">
-                  {sessionsQuery.error instanceof Error
-                    ? sessionsQuery.error.message
-                    : t("dashboard.status.errorDescription")}
-                </p>
-              </article>
-            ) : null}
-
-            <section className="stats-grid">
-              <article className="stat-card">
-                <span className="stat-label">{t("dashboard.stats.totalSessions")}</span>
-                <strong>{loadingStatsValue}</strong>
-              </article>
-              <article className="stat-card">
-                <span className="stat-label">{t("dashboard.stats.activeProjects")}</span>
-                <strong>{sessionsQuery.isLoading ? "..." : activeProjectCount}</strong>
-              </article>
-              <article className="stat-card">
-                <span className="stat-label">{t("dashboard.stats.archivedSessions")}</span>
-                <strong>{sessionsQuery.isLoading ? "..." : archivedCount}</strong>
-              </article>
-              <article className="stat-card">
-                <span className="stat-label">{t("dashboard.stats.parseErrors")}</span>
-                <strong>{sessionsQuery.isLoading ? "..." : parseErrorCount}</strong>
-              </article>
-              <article className="stat-card">
-                <span className="stat-label">{t("dashboard.stats.loadingState")}</span>
-                <strong>{realtimeLabel}</strong>
-              </article>
-            </section>
-
-            <section className="content-grid">
-              <article className="info-card">
-                <div className="section-heading">
-                  <h3>{t("dashboard.projects.title")}</h3>
-                  <span>{t("dashboard.projects.subtitle")}</span>
-                </div>
-
-                <div className="project-list">
-                  {groupedProjects.map((project) => (
-                    <button
-                      key={project.key}
-                      type="button"
-                      className="project-item"
-                      onClick={() => openProjectTab(project.key)}
-                    >
-                      <div>
-                        <strong>{project.title}</strong>
-                        <p>{project.pathLabel}</p>
-                      </div>
-
-                      <div className="project-meta">
-                        <span>
-                          {project.sessions.length} {t("dashboard.projects.sessionCountSuffix")}
-                        </span>
-                        <span>{project.updatedAtLabel}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </article>
-
-              <article className="info-card">
-                <div className="section-heading">
-                  <h3>{t("dashboard.recent.title")}</h3>
-                  <span>{t("dashboard.recent.subtitle")}</span>
-                </div>
-
-                <ul className="feature-list feature-list-tight">
-                  {recentSessions.map((session) => (
-                    <li key={session.id}>
-                      <button
-                        type="button"
-                        className="inline-link"
-                        onClick={() => {
-                          const projectKey = getProjectKey(session, uncategorizedLabel);
-                          openProjectTab(projectKey);
-                        }}
-                      >
-                        {getSessionTitle(session)}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </section>
-          </section>
+          <DashboardView
+            sessionsIsLoading={sessionsQuery.isLoading}
+            sessionsIsError={sessionsQuery.isError}
+            sessionsError={sessionsQuery.error}
+            groupedProjects={groupedProjects}
+            recentSessions={recentSessions}
+            realtimeStatus={realtimeStatus}
+            onOpenProject={openProjectTab}
+            onOpenRecentSession={(session) =>
+              openProjectTab(getProjectKey(session, uncategorizedLabel))
+            }
+          />
         ) : null}
 
         {activeView === "settings" ? (
-          <section className="settings-layout">
-            <article className="info-card">
-              <div className="section-heading">
-                <h3>{t("settings.general.title")}</h3>
-                <span>{t("settings.general.subtitle")}</span>
-              </div>
-
-              <div className="settings-form">
-                <label className="field-group">
-                  <span>{t("settings.fields.copilotRoot")}</span>
-                  <div className="field-with-action">
-                    <input
-                      value={settingsForm.copilotRoot}
-                      onChange={(event) =>
-                        setSettingsForm((currentValue) => ({
-                          ...currentValue,
-                          copilotRoot: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                    <button type="button" className="ghost-button" onClick={() => void handleBrowseDirectory("copilotRoot")}>
-                      {t("settings.actions.browseDirectory")}
-                    </button>
-                  </div>
-                </label>
-
-                <label className="field-group">
-                  <span>{t("settings.fields.terminalPath")}</span>
-                  <div className="field-with-action">
-                    <input
-                      value={settingsForm.terminalPath ?? ""}
-                      onChange={(event) =>
-                        setSettingsForm((currentValue) => ({
-                          ...currentValue,
-                          terminalPath: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                    <button type="button" className="ghost-button" onClick={() => void handleBrowseFile("terminalPath")}>
-                      {t("settings.actions.browseFile")}
-                    </button>
-                  </div>
-                </label>
-
-                <label className="field-group">
-                  <span>{t("settings.fields.externalEditorPath")}</span>
-                  <div className="field-with-action">
-                    <input
-                      value={settingsForm.externalEditorPath ?? ""}
-                      onChange={(event) =>
-                        setSettingsForm((currentValue) => ({
-                          ...currentValue,
-                          externalEditorPath: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => void handleBrowseFile("externalEditorPath")}
-                    >
-                      {t("settings.actions.browseFile")}
-                    </button>
-                  </div>
-                </label>
-
-                <label className="checkbox-group">
-                  <input
-                    type="checkbox"
-                    checked={settingsForm.showArchived}
-                    onChange={(event) =>
-                      setSettingsForm((currentValue) => ({
-                        ...currentValue,
-                        showArchived: event.currentTarget.checked,
-                      }))
-                    }
-                  />
-                  <span>{t("settings.fields.showArchived")}</span>
-                </label>
-
-                <div className="settings-actions">
-                  <button type="button" onClick={handleSaveSettings}>
-                    {t("settings.actions.save")}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => detectTerminalMutation.mutate()}
-                  >
-                    {t("settings.actions.detectTerminal")}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => detectVscodeMutation.mutate()}
-                  >
-                    {t("settings.actions.detectEditor")}
-                  </button>
-                </div>
-              </div>
-            </article>
-
-            <article className="info-card">
-              <div className="section-heading">
-                <h3>{t("settings.language.title")}</h3>
-                <span>{t("settings.language.subtitle")}</span>
-              </div>
-              <p className="placeholder-copy">{t("sidebar.language.description")}</p>
-            </article>
-
-            <article className="info-card">
-              <div className="section-heading">
-                <h3>{t("settings.iconStyle.title")}</h3>
-                <span>{t("settings.iconStyle.subtitle")}</span>
-              </div>
-              <p className="placeholder-copy">{t("sidebar.iconStyle.description")}</p>
-            </article>
-          </section>
+          <SettingsView
+            settingsForm={settingsForm}
+            onFormChange={setSettingsForm}
+            onSave={() => void handleSaveSettings()}
+            onBrowseDirectory={(field) => void handleBrowseDirectory(field)}
+            onBrowseFile={(field) => void handleBrowseFile(field)}
+            onDetectTerminal={() => detectTerminalMutation.mutate()}
+            onDetectVscode={() => detectVscodeMutation.mutate()}
+          />
         ) : null}
 
         {activeProject ? (
-          <section className="project-page">
-            <article className="hero-card">
-              <span className="hero-badge">{t("project.badge")}</span>
-              <h2>{activeProject.title}</h2>
-              <p className="hero-copy">{activeProject.pathLabel}</p>
-            </article>
-
-            <section className="toolbar-card">
-              <label className="field-group compact-field">
-                <span>{t("session.search")}</span>
-                <input
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.currentTarget.value)}
-                  placeholder={t("session.searchPlaceholder")}
-                />
-              </label>
-
-              <label className="field-group compact-field">
-                <span>{t("session.sort")}</span>
-                <select
-                  value={sortKey}
-                  onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
-                >
-                  <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
-                  <option value="createdAt">{t("session.sortCreatedAt")}</option>
-                  <option value="summaryCount">{t("session.sortSummaryCount")}</option>
-                  <option value="summary">{t("session.sortSummary")}</option>
-                </select>
-              </label>
-
-              <label className="checkbox-group compact-checkbox">
-                <input
-                  type="checkbox"
-                  checked={settingsForm.showArchived}
-                  onChange={(event) => void handleToggleArchived(event.currentTarget.checked)}
-                />
-                <span>{t("project.showArchivedToggle")}</span>
-              </label>
-            </section>
-
-            {availableTags.length > 0 ? (
-              <section className="tag-filter-bar">
-                <span className="session-meta-label">{t("session.tagFilter")}</span>
-                <div className="session-chip-row">
-                  {availableTags.map((tag) => {
-                    const isActive = selectedTags.includes(tag);
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={`tag-filter-chip ${isActive ? "active" : ""}`}
-                        onClick={() =>
-                          setSelectedTags((currentValue) =>
-                            currentValue.includes(tag)
-                              ? currentValue.filter((item) => item !== tag)
-                              : [...currentValue, tag],
-                          )
-                        }
-                      >
-                        #{tag}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            ) : null}
-
-            <div className="session-list">
-              {filteredSessions.map((session) => (
-                <article key={session.id} className="session-card">
-                  <div className="session-card-header">
-                    <div>
-                      <h3>{getSessionTitle(session)}</h3>
-                      <p>{session.id}</p>
-                    </div>
-
-                    <div className="session-chip-row">
-                      {session.isArchived ? (
-                        <span className="session-chip muted-chip">{t("session.archived")}</span>
-                      ) : null}
-                      {session.hasPlan ? (
-                        <span className="session-chip">{t("session.hasPlan")}</span>
-                      ) : null}
-                      {session.parseError ? (
-                        <span className="session-chip error-chip">{t("session.parseError")}</span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="session-meta-grid">
-                    <div>
-                      <span className="session-meta-label">{t("session.cwd")}</span>
-                      <p>{session.cwd ?? t("session.uncategorized")}</p>
-                    </div>
-                    <div>
-                      <span className="session-meta-label">{t("session.updatedAt")}</span>
-                      <p>{session.updatedAt ?? "-"}</p>
-                    </div>
-                    <div>
-                      <span className="session-meta-label">{t("session.createdAt")}</span>
-                      <p>{session.createdAt ?? "-"}</p>
-                    </div>
-                    <div>
-                      <span className="session-meta-label">{t("session.summaryCount")}</span>
-                      <p>{session.summaryCount ?? 0}</p>
-                    </div>
-                  </div>
-
-                  {session.notes ? (
-                    <p className="session-notes">
-                      <strong>{t("session.notes")}</strong> {session.notes}
-                    </p>
-                  ) : null}
-
-                  {session.tags.length > 0 ? (
-                    <div className="session-chip-row">
-                      {session.tags.map((tag) => (
-                        <span key={tag} className="session-chip">
-                          #{tag}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="session-actions">
-                    <button type="button" onClick={() => handleOpenTerminal(session)}>
-                      {t("session.actions.openTerminal")}
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => handleCopyCommand(session.id)}>
-                      {t("session.actions.copyCommand")}
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => handleEditNotes(session)}>
-                      {t("session.actions.editNotes")}
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => handleEditTags(session)}>
-                      {t("session.actions.editTags")}
-                    </button>
-                    <button type="button" className="ghost-button" onClick={() => handleOpenPlan(session)}>
-                      {t("session.actions.editPlan")}
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => handleOpenPlanExternal(session)}
-                    >
-                      {t("session.actions.openPlanExternal")}
-                    </button>
-                    {!session.isArchived ? (
-                      <button type="button" className="ghost-button" onClick={() => handleArchiveSession(session)}>
-                        {t("session.actions.archive")}
-                      </button>
-                    ) : null}
-                    <button type="button" className="danger-button" onClick={() => handleDeleteSession(session)}>
-                      {t("session.actions.delete")}
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            {activePlanSession ? (
-              <article className="info-card plan-editor-card">
-                <div className="section-heading">
-                  <h3>{t("plan.title")}</h3>
-                  <span>{getSessionTitle(activePlanSession)}</span>
-                </div>
-
-                <div className="plan-editor-layout">
-                  <label className="field-group">
-                    <span>{t("plan.editor")}</span>
-                    <textarea
-                      className="plan-textarea"
-                      value={planDraft}
-                      onChange={(event) => setPlanDraft(event.currentTarget.value)}
-                    />
-                  </label>
-
-                  <div className="plan-preview">
-                    <span className="session-meta-label">{t("plan.preview")}</span>
-                    <div
-                      className="plan-preview-markdown"
-                      dangerouslySetInnerHTML={{ __html: planPreviewHtml }}
-                    />
-                  </div>
-                </div>
-
-                <div className="settings-actions">
-                  <button type="button" onClick={handleSavePlan}>
-                    {t("plan.actions.save")}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => handleOpenPlanExternal(activePlanSession)}
-                  >
-                    {t("plan.actions.openExternal")}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => setActivePlanSession(null)}
-                  >
-                    {t("plan.actions.close")}
-                  </button>
-                </div>
-              </article>
-            ) : null}
-          </section>
+          <ProjectView
+            project={activeProject}
+            showArchived={settingsForm.showArchived}
+            activePlanSession={activePlanSession}
+            planDraft={planDraft}
+            planPreviewHtml={planPreviewHtml}
+            onToggleArchived={(v) => void handleToggleArchived(v)}
+            onOpenTerminal={(s) => void handleOpenTerminal(s)}
+            onCopyCommand={(id) => void handleCopyCommand(id)}
+            onEditNotes={handleEditNotes}
+            onEditTags={handleEditTags}
+            onOpenPlan={handleOpenPlan}
+            onOpenPlanExternal={(s) => void handleOpenPlanExternal(s)}
+            onArchive={handleArchiveSession}
+            onDelete={handleDeleteSession}
+            onPlanDraftChange={setPlanDraft}
+            onSavePlan={handleSavePlan}
+            onClosePlan={() => setActivePlanSession(null)}
+          />
         ) : null}
       </section>
 
       {confirmDialog ? (
-        <div className="dialog-backdrop">
-          <article className="dialog-card">
-            <h3>{confirmDialog.title}</h3>
-            <p>{confirmDialog.message}</p>
-            <div className="dialog-actions">
-              <button type="button" className="ghost-button" onClick={() => setConfirmDialog(null)}>
-                {t("dialog.cancel")}
-              </button>
-              <button
-                type="button"
-                className={confirmDialog.tone === "danger" ? "danger-button" : "dialog-confirm-button"}
-                onClick={() => {
-                  confirmDialog.onConfirm();
-                  setConfirmDialog(null);
-                }}
-              >
-                {confirmDialog.actionLabel}
-              </button>
-            </div>
-          </article>
-        </div>
+        <ConfirmDialog dialog={confirmDialog} onCancel={() => setConfirmDialog(null)} />
       ) : null}
 
       {editDialog ? (
@@ -1283,53 +566,6 @@ function App() {
 
       {toastMessage ? <div className="toast-banner">{toastMessage}</div> : null}
     </main>
-  );
-}
-
-type EditDialogProps = {
-  dialog: EditDialogState;
-  onCancel: () => void;
-  onConfirm: (value: string) => void;
-};
-
-function EditDialog({ dialog, onCancel, onConfirm }: EditDialogProps) {
-  const { t } = useI18n();
-  const [value, setValue] = useState(dialog.initialValue);
-
-  useEffect(() => {
-    setValue(dialog.initialValue);
-  }, [dialog.initialValue]);
-
-  return (
-    <div className="dialog-backdrop">
-      <article className="dialog-card">
-        <h3>{dialog.title}</h3>
-        <p>{dialog.message}</p>
-        <div className="dialog-form">
-          {dialog.multiline ? (
-            <textarea
-              className="dialog-input dialog-input-multiline"
-              value={value}
-              onChange={(event) => setValue(event.currentTarget.value)}
-            />
-          ) : (
-            <input
-              className="dialog-input"
-              value={value}
-              onChange={(event) => setValue(event.currentTarget.value)}
-            />
-          )}
-        </div>
-        <div className="dialog-actions">
-          <button type="button" className="ghost-button" onClick={onCancel}>
-            {t("dialog.cancel")}
-          </button>
-          <button type="button" className="dialog-confirm-button" onClick={() => onConfirm(value)}>
-            {dialog.actionLabel}
-          </button>
-        </div>
-      </article>
-    </div>
   );
 }
 
