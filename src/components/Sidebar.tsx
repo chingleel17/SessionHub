@@ -4,6 +4,7 @@ import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
+import { MoonIcon, SunIcon } from "./Icons";
 
 type Props = {
   activeView: string;
@@ -164,26 +165,35 @@ export function Sidebar({
         : null}
 
       <footer className="sidebar-footer">
-        {/* Theme toggle switch row */}
-        <div className="theme-toggle-row">
-          <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}>☀</span>
+        {/* Theme toggle: icon button when collapsed, switch row when expanded */}
+        {isSidebarCollapsed ? (
           <button
             type="button"
-            role="switch"
-            aria-checked={theme === "dark"}
-            className={`theme-toggle-switch ${theme === "dark" ? "dark" : ""}`}
+            className="sidebar-icon-button"
             title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
             onClick={() => setTheme(theme === "light" ? "dark" : "light")}
           >
-            <span className="theme-toggle-thumb" />
+            {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
           </button>
-          <span className={`theme-toggle-icon ${theme === "dark" ? "active" : ""}`}>☾</span>
-          {!isSidebarCollapsed ? (
+        ) : (
+          <div className="theme-toggle-row">
+            <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}>☀</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={theme === "dark"}
+              className={`theme-toggle-switch ${theme === "dark" ? "dark" : ""}`}
+              title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              <span className="theme-toggle-thumb" />
+            </button>
+            <span className={`theme-toggle-icon ${theme === "dark" ? "active" : ""}`}>☾</span>
             <span className="theme-toggle-label">
               {theme === "light" ? t("sidebar.theme.light") : t("sidebar.theme.dark")}
             </span>
-          ) : null}
-        </div>
+          </div>
+        )}
 
         {/* Language row */}
         {!isSidebarCollapsed ? (

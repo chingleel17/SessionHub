@@ -7,9 +7,17 @@ type Props = {
   sessionsError: unknown;
   groupedProjects: ProjectGroup[];
   recentSessions: SessionInfo[];
+  totalOutputTokens: number;
+  totalInteractions: number;
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
 };
+
+function formatCompactNumber(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
+  return String(value);
+}
 
 function getSessionTitle(session: SessionInfo) {
   return session.summary?.trim() || session.id;
@@ -21,6 +29,8 @@ export function DashboardView({
   sessionsError,
   groupedProjects,
   recentSessions,
+  totalOutputTokens,
+  totalInteractions,
   onOpenProject,
   onOpenRecentSession,
 }: Props) {
@@ -52,6 +62,14 @@ export function DashboardView({
         <article className="stat-card">
           <span className="stat-label">{t("dashboard.stats.parseErrors")}</span>
           <strong>{sessionsIsLoading ? "..." : parseErrorCount}</strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">{t("dashboard.stats.totalTokens")}</span>
+          <strong>{sessionsIsLoading ? "..." : formatCompactNumber(totalOutputTokens)}</strong>
+        </article>
+        <article className="stat-card">
+          <span className="stat-label">{t("dashboard.stats.totalInteractions")}</span>
+          <strong>{sessionsIsLoading ? "..." : formatCompactNumber(totalInteractions)}</strong>
         </article>
       </section>
 

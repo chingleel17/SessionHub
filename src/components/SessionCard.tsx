@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { SessionInfo } from "../types";
+import type { SessionInfo, SessionStats } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import {
   ArchiveIcon,
@@ -8,9 +9,12 @@ import {
   EditNotesIcon,
   EditTagsIcon,
   PlanIcon,
+  StatsIcon,
   TerminalIcon,
   UnarchiveIcon,
 } from "./Icons";
+import { SessionStatsBadge } from "./SessionStatsBadge";
+import { SessionStatsPanel } from "./SessionStatsPanel";
 
 type Props = {
   session: SessionInfo;
@@ -22,6 +26,8 @@ type Props = {
   onArchive: (session: SessionInfo) => void;
   onUnarchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
+  stats?: SessionStats;
+  statsLoading: boolean;
 };
 
 function getSessionTitle(session: SessionInfo) {
@@ -38,8 +44,11 @@ export function SessionCard({
   onArchive,
   onUnarchive,
   onDelete,
+  stats,
+  statsLoading,
 }: Props) {
   const { t, locale } = useI18n();
+  const [showStats, setShowStats] = useState(false);
 
   return (
     <article className="session-card">
@@ -163,6 +172,16 @@ export function SessionCard({
 
         <button
           type="button"
+          className="icon-button"
+          title={t("stats.detail.title")}
+          aria-label={t("stats.detail.title")}
+          onClick={() => setShowStats((value) => !value)}
+        >
+          <StatsIcon size={16} />
+        </button>
+
+        <button
+          type="button"
           className="icon-button icon-button--danger"
           title={t("session.actions.delete")}
           aria-label={t("session.actions.delete")}
@@ -171,6 +190,9 @@ export function SessionCard({
           <DeleteIcon size={16} />
         </button>
       </div>
+
+      <SessionStatsBadge stats={stats} isLoading={statsLoading} />
+      {showStats && stats ? <SessionStatsPanel stats={stats} /> : null}
     </article>
   );
 }

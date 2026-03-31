@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { ProjectGroup, SessionInfo, SortKey } from "../types";
+import type { ProjectGroup, SessionInfo, SessionStats, SortKey } from "../types";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
+import { ProjectStatsBanner } from "./ProjectStatsBanner";
 import { SessionCard } from "./SessionCard";
 
 type Props = {
@@ -19,6 +20,8 @@ type Props = {
   onDeleteEmptySessions: () => void;
   isPinned: boolean;
   onTogglePin: () => void;
+  sessionStats: Record<string, SessionStats | undefined>;
+  sessionStatsLoading: Record<string, boolean | undefined>;
 };
 
 function filterAndSortSessions(
@@ -82,6 +85,8 @@ export function ProjectView({
   onDeleteEmptySessions,
   isPinned,
   onTogglePin,
+  sessionStats,
+  sessionStatsLoading,
 }: Props) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState("");
@@ -115,8 +120,14 @@ export function ProjectView({
   return (
     <section className="project-page">
       <section className="toolbar-card">
+        <ProjectStatsBanner
+          sessions={filteredSessions}
+          sessionStats={sessionStats}
+          sessionStatsLoading={sessionStatsLoading}
+        />
+
         <div className="filter-bar">
-          <label className="field-group compact-field" style={{ flex: 1 }}>
+          <label className="field-group compact-field" style={{ flex: 2, minWidth: '160px' }}>
             <span>{t("session.search")}</span>
             <input
               value={searchTerm}
@@ -228,6 +239,8 @@ export function ProjectView({
             onArchive={onArchive}
             onUnarchive={onUnarchive}
             onDelete={onDelete}
+            stats={sessionStats[session.id]}
+            statsLoading={Boolean(sessionStatsLoading[session.id])}
           />
         ))}
       </div>

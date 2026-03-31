@@ -417,10 +417,11 @@ textarea {
 .tabbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   overflow-x: auto;
   padding: 12px 20px 8px;
   flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 .tab-item {
@@ -428,6 +429,8 @@ textarea {
   align-items: center;
   gap: 8px;
   min-height: 44px;
+  min-width: 60px;
+  max-width: 200px;
   padding: 0 16px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 14px;
@@ -435,6 +438,8 @@ textarea {
   color: var(--color-text-secondary);
   white-space: nowrap;
   cursor: pointer;
+  flex-shrink: 1;
+  overflow: hidden;
 }
 
 .tab-item.active {
@@ -455,10 +460,23 @@ textarea {
   cursor: pointer;
 }
 
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
 .tab-close {
   width: 28px;
   height: 28px;
+  min-width: 28px;
   border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .tab-close:hover {
@@ -594,7 +612,7 @@ textarea {
 }
 
 .compact-checkbox {
-  align-self: end;
+  align-self: center;
   min-height: 42px;
 }
 
@@ -753,6 +771,80 @@ textarea {
   line-height: 1.6;
 }
 
+.stats-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stats-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-input);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.stats-badge-loading {
+  min-width: 54px;
+  justify-content: center;
+}
+
+.stats-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  background: var(--color-surface-input);
+}
+
+.stats-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stats-panel-row-block {
+  align-items: start;
+  flex-direction: column;
+}
+
+.stats-panel-live {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.stats-tool-table {
+  display: grid;
+  gap: 8px;
+}
+
+.stats-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.project-stats-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--color-text-secondary);
+}
+
 .inline-link {
   padding: 0;
   border: 0;
@@ -895,11 +987,16 @@ textarea {
 
 .sidebar-collapsed .sidebar-menu {
   order: 2;
+  align-items: center;
 }
 
 .sidebar-collapsed .sidebar-link {
   justify-content: center;
-  padding-inline: 0;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  min-height: unset;
+  border-radius: 12px;
 }
 
 .sidebar-collapsed .sidebar-link-icon {
@@ -1053,8 +1150,8 @@ textarea {
 .sidebar-icon-button {
   display: inline-grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
   background: var(--color-surface-panel);
@@ -1162,15 +1259,6 @@ textarea {
   align-items: center;
 }
 
-.sidebar-collapsed .theme-toggle-row {
-  padding: 4px 0;
-  justify-content: center;
-}
-
-.sidebar-collapsed .theme-toggle-label {
-  display: none;
-}
-
 .sidebar-collapsed .sidebar-realtime {
   justify-content: center;
   padding: 8px;
@@ -1250,10 +1338,9 @@ textarea {
 
 /* Pinned indicator on tab */
 .tab-pin-indicator {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
   opacity: 0.7;
-  margin-left: 2px;
   flex-shrink: 0;
 }
 

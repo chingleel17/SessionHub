@@ -1,0 +1,81 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 004e76b..944cee3 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useMemo, useState } from "react";
+-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { invoke } from "@tauri-apps/api/core";
+ import { listen } from "@tauri-apps/api/event";
+ import { open } from "@tauri-apps/plugin-dialog";
+@@ -7,7 +7,7 @@ import DOMPurify from "dompurify";
+ import { marked } from "marked";
+ 
+ import { useI18n } from "./i18n/I18nProvider";
+-import type { AppSettings, ConfirmDialogState, EditDialogState, ProjectGroup, SessionInfo } from "./types";
++import type { AppSettings, ConfirmDialogState, EditDialogState, ProjectGroup, SessionInfo, SessionStats } from "./types";
+ import { formatDateTime } from "./utils/formatDate";
+ 
+ import { ConfirmDialog } from "./components/ConfirmDialog";
+@@ -324,6 +324,42 @@ function App() {
+     [sessionsQuery.data],
+   );
+ 
++  const sessionStatsQueries = useQueries({
++    queries: (sessionsQuery.data ?? []).map((session) => ({
++      queryKey: ["session_stats", session.sessionDir],
++      queryFn: () => invoke<SessionStats>("get_session_stats", { sessionDir: session.sessionDir }),
++      staleTime: 60_000,
++      enabled: Boolean(session.sessionDir),
++    })),
++  });
++
++  const sessionStatsMap = useMemo(
++    () => Object.fromEntries(
++      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.data]),
++    ) as Record<string, SessionStats | undefined>,
++    [sessionStatsQueries, sessionsQuery.data],
++  );
++
++  const sessionStatsLoadingMap = useMemo(
++    () => Object.fromEntries(
++      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.isLoading]),
++    ) as Record<string, boolean | undefined>,
++    [sessionStatsQueries, sessionsQuery.data],
++  );
++
++  const dashboardTotals = useMemo(
++    () => Object.values(sessionStatsMap).reduce(
++      (acc, stats) => {
++        if (!stats) return acc;
++        acc.totalOutputTokens += stats.outputTokens;
++        acc.totalInteractions += stats.interactionCount;
++        return acc;
++      },
++      { totalOutputTokens: 0, totalInteractions: 0 },
++    ),
++    [sessionStatsMap],
++  );
++
+   const planPreviewHtml = useMemo(
+     () =>
+       DOMPurify.sanitize(
+@@ -632,6 +668,8 @@ function App() {
+               sessionsError={sessionsQuery.error}
+               groupedProjects={groupedProjects}
+               recentSessions={recentSessions}
++              totalOutputTokens={dashboardTotals.totalOutputTokens}
++              totalInteractions={dashboardTotals.totalInteractions}
+               onOpenProject={openProjectTab}
+               onOpenRecentSession={(session) =>
+                 openProjectTab(getProjectKey(session, uncategorizedLabel))
+@@ -671,6 +709,8 @@ function App() {
+               }
+               isPinned={pinnedProjects.includes(activeProject.key)}
+               onTogglePin={() => void togglePinProject(activeProject.key)}
++              sessionStats={sessionStatsMap}
++              sessionStatsLoading={sessionStatsLoadingMap}
+             />
+           ) : null}
+ 

@@ -21,6 +21,17 @@ export type AppSettings = {
     pinnedProjects?: string[];
 };
 
+export type SessionStats = {
+    outputTokens: number;
+    interactionCount: number;
+    toolCallCount: number;
+    durationMinutes: number;
+    modelsUsed: string[];
+    reasoningCount: number;
+    toolBreakdown: Record<string, number>;
+    isLive: boolean;
+};
+
 export type SettingsSection = "general" | "language" | "icon-style";
 
 export type ProjectGroup = {

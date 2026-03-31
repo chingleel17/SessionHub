@@ -1,0 +1,22 @@
+diff --git a/src/types/index.ts b/src/types/index.ts
+index be22f59..a1a298d 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -21,6 +21,17 @@ export type AppSettings = {
+     pinnedProjects?: string[];
+ };
+ 
++export type SessionStats = {
++    outputTokens: number;
++    interactionCount: number;
++    toolCallCount: number;
++    durationMinutes: number;
++    modelsUsed: string[];
++    reasoningCount: number;
++    toolBreakdown: Record<string, number>;
++    isLive: boolean;
++};
++
+ export type SettingsSection = "general" | "language" | "icon-style";
+ 
+ export type ProjectGroup = {

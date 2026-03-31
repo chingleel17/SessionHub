@@ -1,0 +1,31 @@
+diff --git a/src/locales/en-US.ts b/src/locales/en-US.ts
+index fc07900..2145693 100644
+--- a/src/locales/en-US.ts
++++ b/src/locales/en-US.ts
+@@ -46,6 +46,8 @@ export const enUsMessages: Record<MessageKey, string> = {
+   "dashboard.stats.archivedSessions": "Archived sessions",
+   "dashboard.stats.recentSessions": "Updated last 7 days",
+   "dashboard.stats.parseErrors": "Parse errors",
++  "dashboard.stats.totalTokens": "Total tokens",
++  "dashboard.stats.totalInteractions": "Total interactions",
+   "dashboard.stats.loadingState": "Sync status",
+   "dashboard.projects.title": "Project tab preview",
+   "dashboard.projects.subtitle": "Click to open or switch project tab",
+@@ -126,6 +128,17 @@ export const enUsMessages: Record<MessageKey, string> = {
+   "session.prompt.notes": "Enter notes",
+   "session.prompt.tags": "Enter tags separated by commas",
+   "session.tagFilter": "Tag filter",
++  "stats.turns": "turns",
++  "stats.tokens": "tokens",
++  "stats.duration": "min",
++  "stats.noData": "No stats",
++  "stats.projectBanner": "{count} sessions in this project",
++  "stats.detail.title": "Stats details",
++  "stats.detail.toolCalls": "Tool calls",
++  "stats.detail.reasoning": "Reasoning count",
++  "stats.detail.avgTokens": "Avg tokens per turn",
++  "stats.detail.models": "Models used",
++  "stats.detail.live": "Session in progress, showing current snapshot",
+   "dialog.archiveTitle": "Archive session",
+   "dialog.deleteTitle": "Delete session",
+   "dialog.cancel": "Cancel",
