@@ -42,7 +42,7 @@
 
 封存 = 將 `session-state/<id>/` 移動至 `session-state-archive/<id>/`，不破壞原始資料。
 
-### D4：設定儲存位置 — `%APPDATA%\CopilotSessionManager\`
+### D4：設定儲存位置 — `%APPDATA%\SessionHub\`
 
 - `settings.json`：Copilot 根目錄、終端路徑、外部編輯器路徑等設定
 - `metadata.db`：SQLite，存 session 的備註與標籤
@@ -58,7 +58,7 @@
 ### D7：資料層架構 — 掃描 + SQLite 混合模式
 
 - **來源資料（唯讀）**：每次啟動/重新整理時掃描 `session-state/` 目錄，解析 `workspace.yaml`
-- **使用者 metadata（可寫）**：`%APPDATA%\CopilotSessionManager\metadata.db`（SQLite）
+- **使用者 metadata（可寫）**：`%APPDATA%\SessionHub\metadata.db`（SQLite）
 
 ### D8：即時更新 — `notify` crate（Filesystem Watch）
 

@@ -1,6 +1,6 @@
 export const zhTwMessages = {
   "app.badge": "OpenSpec 初始化",
-  "app.title": "Copilot Session Manager",
+  "app.title": "SessionHub",
   "app.description":
     "用來瀏覽、篩選、重新開啟與管理 GitHub Copilot CLI sessions 的 Windows 桌面應用程式。",
   "app.actions.startDashboard": "開始實作 Dashboard",

@@ -1,4 +1,4 @@
-# Copilot Session Manager
+# SessionHub
 
 > 一個 Windows 桌面應用程式，讓你輕鬆管理所有 GitHub Copilot CLI 的 Session。
 
@@ -12,7 +12,7 @@
 
 使用 GitHub Copilot CLI 一段時間後，`~/.copilot/session-state/` 目錄下會累積大量 session 資料夾。這些 session 分散在不同專案之間，既沒有統一的檢視介面，也沒有方法快速回到某個 session 繼續工作。
 
-**Copilot Session Manager 解決了以下問題：**
+**SessionHub 解決了以下問題：**
 
 - 無法一覽所有 session 及其對應專案
 - 不知道哪些 session 有進行中的 `plan.md` 計畫
@@ -55,7 +55,7 @@
 1. 前往 [Releases](../../releases) 下載最新版本
 2. 執行 `.msi` 或 `-setup.exe` 安裝檔
 3. 依照安裝精靈完成安裝
-4. 從開始選單或桌面捷徑開啟 **Copilot Session Manager**
+4. 從開始選單或桌面捷徑開啟 **SessionHub**
 
 ### 方式二：從原始碼建置
 
@@ -78,8 +78,8 @@ bun run tauri build
 建置完成後，安裝檔位於：
 ```
 src-tauri/target/release/bundle/
-  msi/    → Copilot Session Manager_0.1.0_x64_en-US.msi
-  nsis/   → Copilot Session Manager_0.1.0_x64-setup.exe
+  msi/    → SessionHub_0.1.0_x64_en-US.msi
+  nsis/   → SessionHub_0.1.0_x64-setup.exe
 ```
 
 ---
@@ -121,8 +121,8 @@ Session 卡片上若有 📄 圖示，代表該 session 包含 `plan.md`：
 
 | 資料 | 路徑 |
 |------|------|
-| 應用程式設定 | `%APPDATA%\CopilotSessionManager\settings.json` |
-| 備註與標籤（SQLite）| `%APPDATA%\CopilotSessionManager\metadata.db` |
+| 應用程式設定 | `%APPDATA%\SessionHub\settings.json` |
+| 備註與標籤（SQLite）| `%APPDATA%\SessionHub\metadata.db` |
 | Copilot Sessions | `~/.copilot/session-state/`（可自訂）|
 
 ---

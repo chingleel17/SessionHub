@@ -42,5 +42,5 @@
 - **新增應用程式**：全新專案
 - **檔案系統存取**：唯讀存取 `~/.copilot/session-state/`；封存操作移動目錄；刪除操作移除目錄
 - **外部相依**：需要系統安裝 pwsh 或 powershell；Rust + Tauri（需 Node.js + Cargo）；`notify` crate（filesystem watch）；`rusqlite` crate（SQLite）
-- **設定持久化**：應用程式設定儲存於本機（`%APPDATA%\CopilotSessionManager\settings.json`），metadata DB 存於 `%APPDATA%\CopilotSessionManager\metadata.db`
+- **設定持久化**：應用程式設定儲存於本機（`%APPDATA%\SessionHub\settings.json`），metadata DB 存於 `%APPDATA%\SessionHub\metadata.db`
 - **即時更新**：透過 filesystem watch 監聽 session-state 目錄，無 Copilot CLI 官方 hook 機制，以 OS 檔案事件間接感知變化

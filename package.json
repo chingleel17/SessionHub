@@ -1,5 +1,5 @@
 {
-  "name": "copilot-session-manager",
+  "name": "session-hub",
   "private": true,
   "version": "0.1.0",
   "type": "module",

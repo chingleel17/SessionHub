@@ -67,13 +67,13 @@ fn default_copilot_root() -> Result<PathBuf, String> {
 
 fn default_app_data_dir() -> Result<PathBuf, String> {
     if let Ok(override_dir) = env::var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE") {
-        return Ok(PathBuf::from(override_dir).join("CopilotSessionManager"));
+        return Ok(PathBuf::from(override_dir).join("SessionHub"));
     }
 
     let app_data =
         env::var("APPDATA").map_err(|_| "APPDATA environment variable is not set".to_string())?;
 
-    Ok(PathBuf::from(app_data).join("CopilotSessionManager"))
+    Ok(PathBuf::from(app_data).join("SessionHub"))
 }
 
 fn resolve_copilot_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
@@ -733,7 +733,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos();
-        std::env::temp_dir().join(format!("copilot-session-manager-{name}-{suffix}"))
+        std::env::temp_dir().join(format!("session-hub-{name}-{suffix}"))
     }
 
     #[test]
