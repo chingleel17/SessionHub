@@ -34,7 +34,7 @@ function filterAndSortSessions(
   const normalizedSearchTerm = searchTerm.trim().toLowerCase();
 
   const filtered = sessions.filter((session) => {
-    if (hideEmpty && (session.summaryCount ?? 0) === 0) return false;
+    if (hideEmpty && !session.hasEvents) return false;
 
     const matchesTags =
       selectedTags.length === 0 || selectedTags.every((tag) => session.tags.includes(tag));
@@ -103,7 +103,7 @@ export function ProjectView({
   );
 
   const emptySessions = useMemo(
-    () => project.sessions.filter((s) => (s.summaryCount ?? 0) === 0),
+    () => project.sessions.filter((s) => !s.hasEvents),
     [project.sessions],
   );
 
@@ -112,10 +112,11 @@ export function ProjectView({
     [project.sessions, searchTerm, sortKey, selectedTags, hideEmpty],
   );
 
-  const hiddenCount = useMemo(
-    () => project.sessions.filter((s) => (s.summaryCount ?? 0) === 0).length,
-    [project.sessions],
-  );
+  const hiddenCount = useMemo(() => {
+    const withoutHide = filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, false);
+    const withHide = filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, true);
+    return withoutHide.length - withHide.length;
+  }, [project.sessions, searchTerm, sortKey, selectedTags]);
 
   return (
     <section className="project-page">

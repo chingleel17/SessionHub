@@ -704,7 +704,7 @@ function App() {
               onDelete={handleDeleteSession}
               onDeleteEmptySessions={() =>
                 handleDeleteEmptySessions(
-                  activeProject.sessions.filter((s) => (s.summaryCount ?? 0) === 0).length,
+                  activeProject.sessions.filter((s) => !s.hasEvents).length,
                 )
               }
               isPinned={pinnedProjects.includes(activeProject.key)}

@@ -11,6 +11,7 @@ export type SessionInfo = {
     notes?: string | null;
     tags: string[];
     hasPlan: boolean;
+    hasEvents: boolean;
 };
 
 export type AppSettings = {

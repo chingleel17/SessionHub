@@ -43,6 +43,7 @@ struct SessionInfo {
     notes: Option<String>,
     tags: Vec<String>,
     has_plan: bool,
+    has_events: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -711,6 +712,11 @@ fn parse_workspace_file(
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown-session".to_string());
     let has_plan = session_dir.join("plan.md").exists();
+    let has_events = session_dir
+        .join("events.jsonl")
+        .metadata()
+        .map(|meta| meta.len() > 0)
+        .unwrap_or(false);
     let fallback_session = || SessionInfo {
         id: fallback_id.clone(),
         cwd: None,
@@ -724,6 +730,7 @@ fn parse_workspace_file(
         notes: meta.notes.clone(),
         tags: meta.tags.clone(),
         has_plan,
+        has_events,
     };
 
     match fs::read_to_string(workspace_path) {
@@ -741,6 +748,7 @@ fn parse_workspace_file(
                 notes: meta.notes,
                 tags: meta.tags,
                 has_plan,
+                has_events,
             },
             Err(_) => fallback_session(),
         },
@@ -969,18 +977,12 @@ fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String> {
             continue;
         }
 
-        let content = match fs::read_to_string(&workspace_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let workspace: WorkspaceYaml = match serde_yaml::from_str(&content) {
-            Ok(w) => w,
-            Err(_) => continue,
-        };
-
-        let count = workspace.summary_count.unwrap_or(0);
-        if count > 0 {
+        let events_path = session_dir.join("events.jsonl");
+        let has_events = events_path
+            .metadata()
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false);
+        if has_events {
             continue;
         }
 
@@ -1366,30 +1368,35 @@ mod tests {
     }
 
     #[test]
-    fn delete_empty_sessions_deletes_sessions_with_zero_summary_count() {
+    fn delete_empty_sessions_deletes_sessions_without_events() {
         let _guard = test_lock().lock().expect("failed to lock test mutex");
         let root_dir = unique_test_dir("empty-del-some");
         let appdata_dir = unique_test_dir("appdata");
 
-        // session with summary_count = 0 (should be deleted)
+        // session without events.jsonl (should be deleted)
         let empty_session = root_dir.join("session-state").join("session-empty");
         fs::create_dir_all(&empty_session).expect("create empty session dir");
         fs::write(
             empty_session.join("workspace.yaml"),
-            "id: session-empty\nsummary_count: 0\n",
+            "id: session-empty\n",
         )
         .expect("write workspace.yaml");
 
-        // session with summary_count = 3 (should be kept)
+        // session with non-empty events.jsonl (should be kept)
         let active_session = root_dir.join("session-state").join("session-active");
         fs::create_dir_all(&active_session).expect("create active session dir");
         fs::write(
             active_session.join("workspace.yaml"),
-            "id: session-active\nsummary_count: 3\n",
+            "id: session-active\n",
         )
         .expect("write workspace.yaml");
+        fs::write(
+            active_session.join("events.jsonl"),
+            "{\"type\":\"session_start\"}\n",
+        )
+        .expect("write events.jsonl");
 
-        // session with no summary_count field (should be deleted — defaults to 0)
+        // session with empty events.jsonl (should be deleted)
         let no_count_session = root_dir.join("session-state").join("session-no-count");
         fs::create_dir_all(&no_count_session).expect("create no-count session dir");
         fs::write(
@@ -1397,6 +1404,8 @@ mod tests {
             "id: session-no-count\n",
         )
         .expect("write workspace.yaml");
+        fs::write(no_count_session.join("events.jsonl"), "")
+            .expect("write empty events.jsonl");
 
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
