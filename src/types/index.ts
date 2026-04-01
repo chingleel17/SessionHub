@@ -23,6 +23,23 @@ export type AppSettings = {
     showArchived: boolean;
     pinnedProjects?: string[];
     enabledProviders: string[];
+    providerIntegrations?: ProviderIntegrationStatus[];
+};
+
+export type ProviderIntegrationState =
+    | "installed"
+    | "outdated"
+    | "missing"
+    | "manual_required"
+    | "error";
+
+export type ProviderIntegrationStatus = {
+    provider: string;
+    status: ProviderIntegrationState;
+    configPath?: string | null;
+    bridgePath?: string | null;
+    lastEventAt?: string | null;
+    lastError?: string | null;
 };
 
 export type SessionStats = {

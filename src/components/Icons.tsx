@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
+
 type IconProps = {
   size?: number;
   className?: string;
 };
 
-function icon(path: React.ReactNode, viewBox = "0 0 24 24") {
+function icon(path: ReactNode, viewBox = "0 0 24 24") {
   return function Icon({ size = 16, className }: IconProps) {
     return (
       <svg

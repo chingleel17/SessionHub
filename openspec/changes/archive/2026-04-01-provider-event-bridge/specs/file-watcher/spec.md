@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: 目錄變更即時偵測
 系統 SHALL 以 provider bridge 事件作為 session 更新的主要來源，並保留 OS filesystem watch 作為 fallback。fallback watcher MUST 僅監看關鍵路徑與檔案，且在通知前端前先完成事件過濾與 cheap verify。

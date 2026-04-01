@@ -3,11 +3,22 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
-import type { AppSettings, ConfirmDialogState, EditDialogState, OpenSpecData, ProjectGroup, SessionInfo, SessionStats, SisyphusData } from "./types";
+import type {
+  AppSettings,
+  ConfirmDialogState,
+  EditDialogState,
+  OpenSpecData,
+  ProjectGroup,
+  ProviderIntegrationStatus,
+  SessionInfo,
+  SessionStats,
+  SisyphusData,
+} from "./types";
 import { formatDateTime } from "./utils/formatDate";
 
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -66,6 +77,72 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string,
     .sort((a, b) => b.sessions.length - a.sessions.length);
 }
 
+type ProviderIntegrationAction = "install" | "update" | "recheck";
+
+function getProviderLabel(
+  provider: string,
+  copilotLabel: string,
+  opencodeLabel: string,
+): string {
+  switch (provider) {
+    case "copilot":
+      return copilotLabel;
+    case "opencode":
+      return opencodeLabel;
+    default:
+      return provider;
+  }
+}
+
+function resolveProviderTargetPath(integration: ProviderIntegrationStatus): string | null {
+  const configPath = integration.configPath?.trim();
+  if (configPath) return configPath;
+  const bridgePath = integration.bridgePath?.trim();
+  return bridgePath || null;
+}
+
+function upsertProviderIntegrationStatus(
+  integrations: ProviderIntegrationStatus[] | undefined,
+  nextStatus: ProviderIntegrationStatus,
+): ProviderIntegrationStatus[] {
+  const nextIntegrations = [...(integrations ?? [])];
+  const existingIndex = nextIntegrations.findIndex(
+    (integration) => integration.provider === nextStatus.provider,
+  );
+
+  if (existingIndex === -1) {
+    nextIntegrations.push(nextStatus);
+  } else {
+    nextIntegrations[existingIndex] = nextStatus;
+  }
+
+  const providerOrder = ["copilot", "opencode"];
+  nextIntegrations.sort((left, right) => {
+    const leftIndex = providerOrder.indexOf(left.provider);
+    const rightIndex = providerOrder.indexOf(right.provider);
+    const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+    const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+    return normalizedLeft - normalizedRight || left.provider.localeCompare(right.provider);
+  });
+
+  return nextIntegrations;
+}
+
+function resolveErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (
+    typeof error === "object" &&
+    error &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.trim()
+  ) {
+    return error.message;
+  }
+  return fallback;
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -75,6 +152,7 @@ function App() {
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<string>("dashboard");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [hideEmptySessions, setHideEmptySessions] = useState(false);
   const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
 
   const [activePlanSessionId, setActivePlanSessionId] = useState<string | null>(null);
@@ -104,6 +182,7 @@ function App() {
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
   const [forceFull, setForceFull] = useState(false);
+  const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
@@ -112,6 +191,7 @@ function App() {
     externalEditorPath: "",
     showArchived: false,
     enabledProviders: ["copilot", "opencode"],
+    providerIntegrations: [],
   });
 
   const settingsQuery = useQuery({
@@ -174,6 +254,7 @@ function App() {
         showArchived: settingsQuery.data.showArchived,
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
+        providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
@@ -329,6 +410,69 @@ function App() {
     },
   });
 
+  const providerIntegrationMutation = useMutation({
+    mutationFn: ({ provider, action }: { provider: string; action: ProviderIntegrationAction }) => {
+      const command =
+        action === "install"
+          ? "install_provider_integration"
+          : action === "update"
+            ? "update_provider_integration"
+            : "recheck_provider_integration";
+
+      return invoke<ProviderIntegrationStatus>(command, {
+        provider,
+        copilotRoot: settingsForm.copilotRoot.trim() || null,
+      });
+    },
+    onSuccess: (status, variables) => {
+      const providerLabel = getProviderLabel(
+        status.provider,
+        t("settings.fields.providerCopilot"),
+        t("settings.fields.providerOpencode"),
+      );
+      setSettingsForm((current) => ({
+        ...current,
+        providerIntegrations: upsertProviderIntegrationStatus(
+          current.providerIntegrations,
+          status,
+        ),
+      }));
+
+      if (
+        (variables.action === "install" || variables.action === "update") &&
+        status.status !== "installed"
+      ) {
+        showToast(
+          status.lastError ||
+            t("toast.providerActionIncomplete").replace("{provider}", providerLabel),
+        );
+        return;
+      }
+
+      const toastMessage =
+        variables.action === "install"
+          ? t("toast.providerInstalled")
+          : variables.action === "update"
+            ? t("toast.providerUpdated")
+            : t("toast.providerRechecked");
+      showToast(toastMessage.replace("{provider}", providerLabel));
+    },
+    onError: (error, variables) => {
+      const providerLabel = getProviderLabel(
+        variables.provider,
+        t("settings.fields.providerCopilot"),
+        t("settings.fields.providerOpencode"),
+      );
+      showToast(
+        resolveErrorMessage(
+          error,
+          t("toast.providerActionFailed").replace("{provider}", providerLabel),
+        ),
+      );
+    },
+    onSettled: () => setPendingProviderAction(null),
+  });
+
   const savePlanMutation = useMutation({
     mutationFn: ({ sessionDir, content }: { sessionDir: string; content: string }) =>
       invoke("write_plan", { sessionDir, content }),
@@ -374,6 +518,33 @@ function App() {
     [sessionsQuery.data, uncategorizedLabel, locale],
   );
 
+  useEffect(() => {
+    const availableProjectKeys = new Set(groupedProjects.map((project) => project.key));
+    const normalizedPinnedKeys = pinnedProjects.filter((projectKey) => availableProjectKeys.has(projectKey));
+
+    setOpenProjectKeys((current) => {
+      const normalizedCurrent = current.filter((projectKey) => availableProjectKeys.has(projectKey));
+      const next = [...new Set([...normalizedPinnedKeys, ...normalizedCurrent])];
+
+      if (
+        next.length === current.length &&
+        next.every((projectKey, index) => projectKey === current[index])
+      ) {
+        return current;
+      }
+
+      return next;
+    });
+
+    if (
+      activeView !== "dashboard" &&
+      activeView !== "settings" &&
+      !availableProjectKeys.has(activeView)
+    ) {
+      setActiveView("dashboard");
+    }
+  }, [activeView, groupedProjects, pinnedProjects]);
+
   const activeProject = useMemo(
     () => groupedProjects.find((p) => p.key === activeView) ?? null,
     [activeView, groupedProjects],
@@ -384,6 +555,14 @@ function App() {
       [...(sessionsQuery.data ?? [])]
         .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
         .slice(0, 10),
+    [sessionsQuery.data],
+  );
+
+  const deletableEmptySessionCount = useMemo(
+    () =>
+      (sessionsQuery.data ?? []).filter(
+        (session) => session.provider === "copilot" && !session.hasEvents,
+      ).length,
     [sessionsQuery.data],
   );
 
@@ -641,6 +820,58 @@ function App() {
     savePlanMutation.mutate({ sessionDir: activePlanSession.sessionDir, content: planDraft });
   };
 
+  const handleProviderAction = (provider: string, action: ProviderIntegrationAction) => {
+    setPendingProviderAction(`${provider}:${action}`);
+    providerIntegrationMutation.mutate({ provider, action });
+  };
+
+  const handleOpenProviderPath = async (integration: ProviderIntegrationStatus) => {
+    const targetPath = resolveProviderTargetPath(integration);
+    if (!targetPath) {
+      showToast(t("toast.providerPathUnavailable"));
+      return;
+    }
+
+    try {
+      await revealItemInDir(targetPath);
+      showToast(t("toast.providerPathOpened"));
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.providerPathOpenFailed")));
+    }
+  };
+
+  const handleEditProviderPath = async (integration: ProviderIntegrationStatus) => {
+    const targetPath = resolveProviderTargetPath(integration);
+    if (!targetPath) {
+      showToast(t("toast.providerPathUnavailable"));
+      return;
+    }
+
+    const editorPath = settingsForm.externalEditorPath?.trim();
+
+    try {
+      if (editorPath) {
+        await openPath(targetPath, editorPath);
+      } else {
+        await openPath(targetPath);
+      }
+      showToast(t("toast.providerPathEdited"));
+    } catch (error) {
+      if (editorPath) {
+        try {
+          await openPath(targetPath);
+          showToast(t("toast.providerPathEdited"));
+          return;
+        } catch (fallbackError) {
+          showToast(resolveErrorMessage(fallbackError, t("toast.providerPathEditFailed")));
+          return;
+        }
+      }
+
+      showToast(resolveErrorMessage(error, t("toast.providerPathEditFailed")));
+    }
+  };
+
   const handleOpenPlanExternal = async (session: SessionInfo) => {
     try {
       await invoke("open_plan_external", {
@@ -706,12 +937,12 @@ function App() {
             ].map((projectKey) => {
               const project = groupedProjects.find((p) => p.key === projectKey);
               if (!project) return null;
-              const isPinned = pinnedProjects.includes(projectKey);
-              return (
-                <div
-                  key={project.key}
-                  className={`tab-item tab-item-project ${activeView === project.key ? "active" : ""}`}
-                >
+                const isPinned = pinnedProjects.includes(projectKey);
+                return (
+                  <div
+                    key={project.key}
+                    className={`tab-item tab-item-project ${isPinned ? "tab-item--pinned" : ""} ${activeView === project.key ? "active" : ""}`}
+                  >
                   <button
                     type="button"
                     className="tab-label"
@@ -767,6 +998,10 @@ function App() {
               onBrowseFile={(field) => void handleBrowseFile(field)}
               onDetectTerminal={() => detectTerminalMutation.mutate()}
               onDetectVscode={() => detectVscodeMutation.mutate()}
+              onProviderAction={handleProviderAction}
+              onOpenProviderPath={(integration) => void handleOpenProviderPath(integration)}
+              onEditProviderPath={(integration) => void handleEditProviderPath(integration)}
+              pendingProviderAction={pendingProviderAction}
             />
           ) : null}
 
@@ -774,6 +1009,9 @@ function App() {
             <ProjectView
               project={activeProject}
               showArchived={settingsForm.showArchived}
+              hideEmptySessions={hideEmptySessions}
+              onHideEmptySessionsChange={setHideEmptySessions}
+              totalEmptySessions={deletableEmptySessionCount}
               onToggleArchived={(v) => void handleToggleArchived(v)}
               onOpenTerminal={(s) => void handleOpenTerminal(s)}
               onCopyCommand={(s) => void handleCopyCommand(s)}
@@ -783,11 +1021,7 @@ function App() {
               onArchive={handleArchiveSession}
               onUnarchive={handleUnarchiveSession}
               onDelete={handleDeleteSession}
-              onDeleteEmptySessions={() =>
-                handleDeleteEmptySessions(
-                  activeProject.sessions.filter((s) => !s.hasEvents).length,
-                )
-              }
+              onDeleteEmptySessions={() => handleDeleteEmptySessions(deletableEmptySessionCount)}
               isPinned={pinnedProjects.includes(activeProject.key)}
               onTogglePin={() => void togglePinProject(activeProject.key)}
               sessionStats={sessionStatsMap}

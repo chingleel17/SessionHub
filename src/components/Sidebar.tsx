@@ -4,7 +4,7 @@ import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
-import { MoonIcon, SunIcon } from "./Icons";
+import { MoonIcon, PinIcon, SunIcon } from "./Icons";
 
 type Props = {
   activeView: string;
@@ -113,32 +113,46 @@ export function Sidebar({
           <span>{t("sidebar.menu.dashboard")}</span>
         </button>
 
-        {/* 釘選專案：接在 Dashboard 下方，展開/收折都顯示 */}
-        {visiblePinnedGroups.map((group) => {
-          const initial = group.title.charAt(0).toUpperCase();
-          return isSidebarCollapsed ? (
-            <button
-              key={group.key}
-              type="button"
-              className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
-              title={group.title}
-              onClick={() => onOpenProject(group.key)}
-            >
-              {initial}
-            </button>
-          ) : (
-            <button
-              key={group.key}
-              type="button"
-              className={`sidebar-link ${activeView === group.key ? "active" : ""}`}
-              title={group.pathLabel}
-              onClick={() => onOpenProject(group.key)}
-            >
-              <span className="sidebar-link-icon sidebar-pinned-initial">{initial}</span>
-              <span className="sidebar-pinned-item-label">{group.title}</span>
-            </button>
-          );
-        })}
+        {visiblePinnedGroups.length > 0 ? (
+          <div className="sidebar-section">
+            {!isSidebarCollapsed ? (
+              <div className="sidebar-section-title">
+                <PinIcon size={12} />
+                <span>{t("sidebar.pinnedProjects")}</span>
+              </div>
+            ) : (
+              <div className="sidebar-section-divider" aria-hidden="true" />
+            )}
+
+            <div className={`sidebar-section-list ${isSidebarCollapsed ? "sidebar-section-list--collapsed" : ""}`}>
+              {visiblePinnedGroups.map((group) => {
+                const initial = group.title.charAt(0).toUpperCase();
+                return isSidebarCollapsed ? (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
+                    title={`${t("sidebar.pinnedProjects")}: ${group.title}`}
+                    onClick={() => onOpenProject(group.key)}
+                  >
+                    {initial}
+                  </button>
+                ) : (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className={`sidebar-link ${activeView === group.key ? "active" : ""}`}
+                    title={group.pathLabel}
+                    onClick={() => onOpenProject(group.key)}
+                  >
+                    <span className="sidebar-link-icon sidebar-pinned-initial">{initial}</span>
+                    <span className="sidebar-pinned-item-label">{group.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </nav>
 
       {openPopover === "language"

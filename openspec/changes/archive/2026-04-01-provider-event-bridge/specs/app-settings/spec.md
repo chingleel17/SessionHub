@@ -1,14 +1,5 @@
 ## ADDED Requirements
 
-### Requirement: 設定持久化
-系統 SHALL 將應用程式設定儲存於 `%APPDATA%\SessionHub\settings.json`，應用程式重啟後設定保持不變。
-
-#### Scenario: 儲存設定
-- **WHEN** 使用者修改設定並點擊儲存
-- **THEN** 系統將設定寫入 `settings.json`
-
-## ADDED Requirements
-
 ### Requirement: 設定頁顯示 provider integration 狀態
 系統 SHALL 在設定頁顯示每個已支援 provider 的 integration 狀態、設定檔位置，以及最後檢查結果，讓使用者了解目前使用 bridge 或 fallback 模式。
 

@@ -104,12 +104,12 @@
 
 ## 15. 測試與驗證
 
-- [ ] 15.1 Rust 單元測試：`scan_opencode_sessions_internal` 對測試用 SQLite 資料庫的讀取與映射
-- [ ] 15.2 Rust 單元測試：OpenCode DB 不存在時的容錯行為
-- [ ] 15.3 Rust 單元測試：`enabled_providers` 篩選邏輯（僅 copilot / 僅 opencode / 全部）
-- [ ] 15.4 Rust 單元測試：`scan_sisyphus_internal` 對測試用 `.sisyphus/` 目錄的讀取
-- [ ] 15.5 Rust 單元測試：`scan_openspec_internal` 對測試用 `openspec/` 目錄的讀取
-- [ ] 15.6 Rust 單元測試：`.sisyphus/` 或 `openspec/` 不存在時的空結構回傳
+- [x] 15.1 Rust 單元測試：`scan_opencode_sessions_internal` 對測試用 SQLite 資料庫的讀取與映射
+- [x] 15.2 Rust 單元測試：OpenCode DB 不存在時的容錯行為
+- [x] 15.3 Rust 單元測試：`enabled_providers` 篩選邏輯（僅 copilot / 僅 opencode / 全部）
+- [x] 15.4 Rust 單元測試：`scan_sisyphus_internal` 對測試用 `.sisyphus/` 目錄的讀取
+- [x] 15.5 Rust 單元測試：`scan_openspec_internal` 對測試用 `openspec/` 目錄的讀取
+- [x] 15.6 Rust 單元測試：`.sisyphus/` 或 `openspec/` 不存在時的空結構回傳
 - [x] 15.7 前端型別檢查：`bun run build` 通過
 - [ ] 15.8 整合驗證：`bun run tauri dev` 啟動後可同時看到 Copilot 與 OpenCode session
 - [ ] 15.9 整合驗證：進入專案頁面，切換到 Plans & Specs 分頁，可看到 `.sisyphus` 與 `openspec` 資料

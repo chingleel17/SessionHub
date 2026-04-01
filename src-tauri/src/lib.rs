@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -71,6 +71,99 @@ struct AppSettings {
     pinned_projects: Vec<String>,
     #[serde(default = "default_enabled_providers")]
     enabled_providers: Vec<String>,
+    #[serde(default)]
+    provider_integrations: Vec<ProviderIntegrationStatus>,
+}
+
+const PROVIDER_INTEGRATION_VERSION: u32 = 1;
+const COPILOT_PROVIDER: &str = "copilot";
+const OPENCODE_PROVIDER: &str = "opencode";
+const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
+const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";
+const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider-event-bridge:";
+
+fn default_provider_bridge_version() -> u32 {
+    PROVIDER_INTEGRATION_VERSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProviderIntegrationState {
+    Installed,
+    Outdated,
+    Missing,
+    ManualRequired,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProviderBridgeRecord {
+    #[serde(default = "default_provider_bridge_version")]
+    version: u32,
+    provider: String,
+    event_type: String,
+    timestamp: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProviderIntegrationStatus {
+    provider: String,
+    status: ProviderIntegrationState,
+    config_path: Option<String>,
+    bridge_path: Option<String>,
+    last_event_at: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagedProviderIntegrationMetadata {
+    provider: String,
+    bridge_path: String,
+    integration_version: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotIntegrationConfig {
+    #[serde(default)]
+    session_hub: Option<ManagedProviderIntegrationMetadata>,
+}
+
+#[derive(Debug, Default)]
+struct ProviderBridgeDiagnostics {
+    bridge_path: Option<PathBuf>,
+    last_event_at: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CopilotWatchSnapshot {
+    active_session_count: usize,
+    archived_session_count: usize,
+    active_workspace_mtime_ms: u128,
+    archived_workspace_mtime_ms: u128,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct OpenCodeWatchSnapshot {
+    db_exists: bool,
+    wal_exists: bool,
+    db_mtime_ms: u128,
+    wal_mtime_ms: u128,
+    max_cursor: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,12 +261,19 @@ struct WatcherState {
     sessions: Mutex<Option<RecommendedWatcher>>,
     plan: Mutex<Option<RecommendedWatcher>>,
     opencode: Mutex<Option<RecommendedWatcher>>,
+    provider_bridge: Mutex<Option<RecommendedWatcher>>,
+    last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
+    last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Copilot watcher 防抖時間（毫秒）
 const COPILOT_DEBOUNCE_MS: u64 = 800;
 /// OpenCode WAL watcher 防抖時間（毫秒）
 const OPENCODE_DEBOUNCE_MS: u64 = 500;
+/// Provider bridge watcher 防抖時間（毫秒）
+const PROVIDER_BRIDGE_DEBOUNCE_MS: u64 = 250;
+/// 短時間內同 provider refresh 去重視窗（毫秒）
+const PROVIDER_REFRESH_DEDUP_MS: u64 = 1_500;
 /// 觸發全掃描的閾值（秒），超過此值自動執行全掃
 const FULL_SCAN_THRESHOLD_SECS: u64 = 1800;
 
@@ -213,6 +313,13 @@ fn default_opencode_root() -> Result<PathBuf, String> {
         .join("opencode"))
 }
 
+fn default_opencode_config_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+
+    Ok(PathBuf::from(user_profile).join(".config").join("opencode"))
+}
+
 fn default_app_data_dir() -> Result<PathBuf, String> {
     if let Ok(override_dir) = env::var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE") {
         return Ok(PathBuf::from(override_dir).join("SessionHub"));
@@ -235,6 +342,958 @@ fn resolve_opencode_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
     match root_dir {
         Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
         _ => default_opencode_root(),
+    }
+}
+
+fn provider_bridge_dir() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join("provider-bridge"))
+}
+
+fn resolve_provider_bridge_path(provider: &str) -> Result<PathBuf, String> {
+    Ok(provider_bridge_dir()?.join(format!("{provider}.jsonl")))
+}
+
+fn resolve_copilot_integration_path(copilot_root: &Path) -> PathBuf {
+    copilot_root.join("hooks").join(COPILOT_HOOK_FILE_NAME)
+}
+
+fn resolve_opencode_integration_path() -> Result<PathBuf, String> {
+    Ok(default_opencode_config_root()?
+        .join("plugins")
+        .join(OPENCODE_PLUGIN_FILE_NAME))
+}
+
+fn provider_refresh_event_name(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        COPILOT_PROVIDER => Ok("copilot-sessions-updated"),
+        OPENCODE_PROVIDER => Ok("opencode-sessions-updated"),
+        _ => Err(format!("unsupported provider: {provider}")),
+    }
+}
+
+fn provider_bridge_record_fingerprint(record: &ProviderBridgeRecord) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        record.version,
+        record.provider,
+        record.event_type,
+        record.timestamp,
+        record.session_id.as_deref().unwrap_or_default(),
+        record.cwd.as_deref().unwrap_or_default(),
+        record.source_path.as_deref().unwrap_or_default(),
+        record.title.as_deref().unwrap_or_default(),
+        record.error.as_deref().unwrap_or_default()
+    )
+}
+
+fn register_provider_bridge_record(
+    last_bridge_records: &Arc<Mutex<HashMap<String, String>>>,
+    provider: &str,
+    record: &ProviderBridgeRecord,
+) -> Result<bool, String> {
+    let fingerprint = provider_bridge_record_fingerprint(record);
+    let mut tracked = last_bridge_records
+        .lock()
+        .map_err(|_| "failed to lock provider bridge record state".to_string())?;
+
+    if tracked
+        .get(provider)
+        .is_some_and(|previous| previous == &fingerprint)
+    {
+        return Ok(false);
+    }
+
+    tracked.insert(provider.to_string(), fingerprint);
+    Ok(true)
+}
+
+fn should_emit_provider_refresh_at(
+    refresh_state: &Arc<Mutex<HashMap<String, Instant>>>,
+    provider: &str,
+    now: Instant,
+) -> Result<bool, String> {
+    let mut tracked = refresh_state
+        .lock()
+        .map_err(|_| "failed to lock provider refresh state".to_string())?;
+    let dedup_window = Duration::from_millis(PROVIDER_REFRESH_DEDUP_MS);
+    tracked.retain(|_, last_emit| now.duration_since(*last_emit) < dedup_window);
+
+    if tracked
+        .get(provider)
+        .is_some_and(|last_emit| now.duration_since(*last_emit) < dedup_window)
+    {
+        return Ok(false);
+    }
+
+    tracked.insert(provider.to_string(), now);
+    Ok(true)
+}
+
+fn emit_provider_refresh(
+    app: &tauri::AppHandle,
+    refresh_state: &Arc<Mutex<HashMap<String, Instant>>>,
+    provider: &str,
+) -> Result<bool, String> {
+    if !should_emit_provider_refresh_at(refresh_state, provider, Instant::now())? {
+        return Ok(false);
+    }
+
+    app.emit(provider_refresh_event_name(provider)?, ())
+        .map_err(|error| format!("failed to emit {provider} refresh: {error}"))?;
+    Ok(true)
+}
+
+fn path_mtime_millis(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn is_relevant_watcher_event_kind(kind: &notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Create(_)
+            | notify::EventKind::Modify(notify::event::ModifyKind::Any)
+            | notify::EventKind::Modify(notify::event::ModifyKind::Data(_))
+            | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+            | notify::EventKind::Remove(_)
+    )
+}
+
+fn path_file_name_matches(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
+fn collect_copilot_workspace_state(session_root: &Path) -> (usize, u128) {
+    if !session_root.exists() {
+        return (0, 0);
+    }
+
+    let Ok(entries) = fs::read_dir(session_root) else {
+        return (0, 0);
+    };
+
+    let mut session_count = 0;
+    let mut latest_workspace_mtime_ms = 0;
+    for entry in entries.flatten() {
+        let session_dir = entry.path();
+        if !session_dir.is_dir() {
+            continue;
+        }
+
+        let workspace_path = session_dir.join("workspace.yaml");
+        if !workspace_path.is_file() {
+            continue;
+        }
+
+        session_count += 1;
+        latest_workspace_mtime_ms =
+            latest_workspace_mtime_ms.max(path_mtime_millis(&workspace_path));
+    }
+
+    (session_count, latest_workspace_mtime_ms)
+}
+
+fn build_copilot_watch_snapshot(root: &Path) -> CopilotWatchSnapshot {
+    let session_state_dir = root.join("session-state");
+    let archive_dir = root.join("session-state-archive");
+    let (active_session_count, active_workspace_mtime_ms) =
+        collect_copilot_workspace_state(&session_state_dir);
+    let (archived_session_count, archived_workspace_mtime_ms) =
+        collect_copilot_workspace_state(&archive_dir);
+
+    CopilotWatchSnapshot {
+        active_session_count,
+        archived_session_count,
+        active_workspace_mtime_ms,
+        archived_workspace_mtime_ms,
+    }
+}
+
+fn should_emit_copilot_refresh(
+    root: &Path,
+    snapshot_state: &Arc<Mutex<CopilotWatchSnapshot>>,
+) -> Result<bool, String> {
+    let next_snapshot = build_copilot_watch_snapshot(root);
+    let mut current_snapshot = snapshot_state
+        .lock()
+        .map_err(|_| "failed to lock copilot watcher snapshot".to_string())?;
+
+    if *current_snapshot == next_snapshot {
+        return Ok(false);
+    }
+
+    *current_snapshot = next_snapshot;
+    Ok(true)
+}
+
+fn is_relevant_copilot_event(event: &notify::Event, session_roots: &[PathBuf]) -> bool {
+    if !is_relevant_watcher_event_kind(&event.kind) {
+        return false;
+    }
+
+    event.paths.iter().any(|path| {
+        path_file_name_matches(path, "workspace.yaml")
+            || session_roots.iter().any(|root| path == root)
+            || path
+                .parent()
+                .is_some_and(|parent| session_roots.iter().any(|root| parent == root))
+    })
+}
+
+fn build_opencode_watch_snapshot(opencode_root: &Path) -> OpenCodeWatchSnapshot {
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
+
+    OpenCodeWatchSnapshot {
+        db_exists: db_path.exists(),
+        wal_exists: wal_path.exists(),
+        db_mtime_ms: path_mtime_millis(&db_path),
+        wal_mtime_ms: path_mtime_millis(&wal_path),
+        max_cursor: get_opencode_max_cursor(opencode_root).ok(),
+    }
+}
+
+fn should_emit_opencode_refresh(
+    opencode_root: &Path,
+    snapshot_state: &Arc<Mutex<OpenCodeWatchSnapshot>>,
+) -> Result<bool, String> {
+    let next_snapshot = build_opencode_watch_snapshot(opencode_root);
+    let mut current_snapshot = snapshot_state
+        .lock()
+        .map_err(|_| "failed to lock opencode watcher snapshot".to_string())?;
+
+    if *current_snapshot == next_snapshot {
+        return Ok(false);
+    }
+
+    *current_snapshot = next_snapshot;
+    Ok(true)
+}
+
+fn is_relevant_opencode_event(event: &notify::Event, opencode_root: &Path) -> bool {
+    if !is_relevant_watcher_event_kind(&event.kind) {
+        return false;
+    }
+
+    event.paths.iter().any(|path| {
+        path == opencode_root
+            || path_file_name_matches(path, "opencode.db")
+            || path_file_name_matches(path, "opencode.db-wal")
+    })
+}
+
+fn matched_bridge_providers(
+    event: &notify::Event,
+    provider_bridge_paths: &HashMap<String, PathBuf>,
+) -> BTreeSet<String> {
+    if !is_relevant_watcher_event_kind(&event.kind) {
+        return BTreeSet::new();
+    }
+
+    provider_bridge_paths
+        .iter()
+        .filter(|(_, bridge_path)| {
+            event.paths.iter().any(|path| {
+                path == *bridge_path
+                    || (path.parent() == bridge_path.parent()
+                        && path
+                            .file_name()
+                            .zip(bridge_path.file_name())
+                            .is_some_and(|(left, right)| left == right))
+            })
+        })
+        .map(|(provider, _)| provider.clone())
+        .collect()
+}
+
+fn process_provider_bridge_event(
+    app: &tauri::AppHandle,
+    refresh_state: &Arc<Mutex<HashMap<String, Instant>>>,
+    last_bridge_records: &Arc<Mutex<HashMap<String, String>>>,
+    provider: &str,
+) -> Result<bool, String> {
+    let bridge_path = resolve_provider_bridge_path(provider)?;
+    let Some(record) = read_last_bridge_record(&bridge_path)? else {
+        return Ok(false);
+    };
+
+    if record.provider != provider {
+        return Err(format!(
+            "unexpected provider '{}' in {} bridge file",
+            record.provider,
+            bridge_path.display()
+        ));
+    }
+
+    if !register_provider_bridge_record(last_bridge_records, provider, &record)? {
+        return Ok(false);
+    }
+
+    emit_provider_refresh(app, refresh_state, provider)
+}
+
+fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRecord>, String> {
+    if !bridge_path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(bridge_path).map_err(|error| {
+        format!(
+            "failed to open bridge file {}: {error}",
+            bridge_path.display()
+        )
+    })?;
+    let mut last_non_empty_line: Option<String> = None;
+
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|error| {
+            format!(
+                "failed to read bridge file {}: {error}",
+                bridge_path.display()
+            )
+        })?;
+        if !line.trim().is_empty() {
+            last_non_empty_line = Some(line);
+        }
+    }
+
+    let Some(last_line) = last_non_empty_line else {
+        return Ok(None);
+    };
+
+    serde_json::from_str::<ProviderBridgeRecord>(&last_line)
+        .map(Some)
+        .map_err(|error| {
+            format!(
+                "failed to parse bridge file {}: {error}",
+                bridge_path.display()
+            )
+        })
+}
+
+fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnostics {
+    let bridge_path = match resolve_provider_bridge_path(provider) {
+        Ok(path) => path,
+        Err(error) => {
+            return ProviderBridgeDiagnostics {
+                last_error: Some(error),
+                ..ProviderBridgeDiagnostics::default()
+            };
+        }
+    };
+
+    let mut diagnostics = ProviderBridgeDiagnostics {
+        bridge_path: Some(bridge_path.clone()),
+        ..ProviderBridgeDiagnostics::default()
+    };
+
+    match read_last_bridge_record(&bridge_path) {
+        Ok(Some(record)) => {
+            diagnostics.last_event_at = Some(record.timestamp.clone());
+            diagnostics.last_error = if record.provider != provider {
+                Some(format!(
+                    "unexpected provider '{}' in {} bridge file",
+                    record.provider, provider
+                ))
+            } else {
+                record.error.or_else(|| {
+                    record
+                        .event_type
+                        .ends_with(".error")
+                        .then(|| format!("{provider} bridge reported {}", record.event_type))
+                })
+            };
+        }
+        Ok(None) => {}
+        Err(error) => diagnostics.last_error = Some(error),
+    }
+
+    diagnostics
+}
+
+fn validate_integration_target(config_path: &Path) -> Result<(), String> {
+    let parent = config_path.parent().ok_or_else(|| {
+        format!(
+            "integration path {} does not have a parent directory",
+            config_path.display()
+        )
+    })?;
+
+    if parent.exists() && !parent.is_dir() {
+        return Err(format!(
+            "integration parent path is not a directory: {}",
+            parent.display()
+        ));
+    }
+
+    if config_path.exists() && config_path.is_dir() {
+        return Err(format!(
+            "integration path points to a directory: {}",
+            config_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_managed_metadata(
+    metadata: &ManagedProviderIntegrationMetadata,
+    provider: &str,
+    expected_bridge_path: &Path,
+) -> Result<(), String> {
+    if metadata.provider != provider {
+        return Err(format!(
+            "integration provider mismatch: expected {}, found {}",
+            provider, metadata.provider
+        ));
+    }
+
+    if metadata.integration_version != PROVIDER_INTEGRATION_VERSION {
+        return Err(format!(
+            "integration version {} is outdated (expected {})",
+            metadata.integration_version, PROVIDER_INTEGRATION_VERSION
+        ));
+    }
+
+    let expected_path = expected_bridge_path.to_string_lossy();
+    if metadata.bridge_path != expected_path {
+        return Err(format!(
+            "bridge path mismatch: expected {}, found {}",
+            expected_path, metadata.bridge_path
+        ));
+    }
+
+    Ok(())
+}
+
+fn build_provider_integration_status(
+    provider: &str,
+    status: ProviderIntegrationState,
+    config_path: Option<PathBuf>,
+    diagnostics: ProviderBridgeDiagnostics,
+    last_error: Option<String>,
+) -> ProviderIntegrationStatus {
+    ProviderIntegrationStatus {
+        provider: provider.to_string(),
+        status,
+        config_path: config_path.map(|path| path.to_string_lossy().to_string()),
+        bridge_path: diagnostics
+            .bridge_path
+            .map(|path| path.to_string_lossy().to_string()),
+        last_event_at: diagnostics.last_event_at,
+        last_error: last_error.or(diagnostics.last_error),
+    }
+}
+
+fn managed_provider_metadata(
+    provider: &str,
+    bridge_path: &Path,
+) -> ManagedProviderIntegrationMetadata {
+    ManagedProviderIntegrationMetadata {
+        provider: provider.to_string(),
+        bridge_path: bridge_path.to_string_lossy().to_string(),
+        integration_version: PROVIDER_INTEGRATION_VERSION,
+    }
+}
+
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn render_copilot_hook_powershell(bridge_path: &Path) -> String {
+    let bridge_path_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
+    let bridge_parent_literal = powershell_single_quoted(
+        &bridge_path
+            .parent()
+            .unwrap_or(bridge_path)
+            .to_string_lossy(),
+    );
+
+    format!(
+        concat!(
+            "$payload = [Console]::In.ReadToEnd(); ",
+            "if ([string]::IsNullOrWhiteSpace($payload)) {{ exit 0 }}; ",
+            "$event = $payload | ConvertFrom-Json; ",
+            "$timestamp = if ($event.timestamp) {{ [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$event.timestamp).UtcDateTime.ToString('o') }} else {{ [DateTimeOffset]::UtcNow.ToString('o') }}; ",
+            "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
+            "$error = if ($event.reason -eq 'error') {{ 'copilot session ended with error' }} else {{ $null }}; ",
+            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = 'session.ended'; timestamp = $timestamp; sessionId = $null; cwd = $cwd; sourcePath = $null; title = $null; error = $error }}; ",
+            "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
+            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false));"
+        ),
+        version = PROVIDER_INTEGRATION_VERSION,
+        provider = powershell_single_quoted(COPILOT_PROVIDER),
+        bridge_parent = bridge_parent_literal,
+        bridge_path = bridge_path_literal
+    )
+}
+
+fn render_copilot_integration(bridge_path: &Path) -> Result<String, String> {
+    let integration = serde_json::json!({
+        "version": 1,
+        "sessionHub": managed_provider_metadata(COPILOT_PROVIDER, bridge_path),
+        "hooks": {
+            "sessionEnd": [
+                {
+                    "type": "command",
+                    "powershell": render_copilot_hook_powershell(bridge_path)
+                }
+            ]
+        }
+    });
+
+    serde_json::to_string_pretty(&integration)
+        .map_err(|error| format!("failed to serialize Copilot integration: {error}"))
+}
+
+fn render_opencode_integration(bridge_path: &Path) -> Result<String, String> {
+    let metadata =
+        serde_json::to_string(&managed_provider_metadata(OPENCODE_PROVIDER, bridge_path)).map_err(
+            |error| format!("failed to serialize OpenCode integration metadata: {error}"),
+        )?;
+    let bridge_path_literal = serde_json::to_string(&bridge_path.to_string_lossy().to_string())
+        .map_err(|error| format!("failed to serialize OpenCode bridge path: {error}"))?;
+    let bridge_parent_literal = serde_json::to_string(
+        &bridge_path
+            .parent()
+            .unwrap_or(bridge_path)
+            .to_string_lossy()
+            .to_string(),
+    )
+    .map_err(|error| format!("failed to serialize OpenCode bridge directory: {error}"))?;
+
+    Ok(format!(
+        concat!(
+            "{metadata_prefix}{metadata}\n",
+            "import {{ appendFile, mkdir }} from \"node:fs/promises\";\n",
+            "import type {{ Plugin }} from \"@opencode-ai/plugin\";\n\n",
+            "const BRIDGE_PATH = {bridge_path};\n",
+            "const BRIDGE_DIR = {bridge_dir};\n\n",
+            "function toIsoTimestamp(value: unknown): string {{\n",
+            "  if (typeof value === \"string\" && value.trim().length > 0) return value;\n",
+            "  if (typeof value === \"number\" && Number.isFinite(value)) return new Date(value).toISOString();\n",
+            "  return new Date().toISOString();\n",
+            "}}\n\n",
+            "function buildRecord(eventType: string, event: any) {{\n",
+            "  const session = event?.session ?? event?.output?.session ?? event ?? {{}};\n",
+            "  return {{\n",
+            "    version: {version},\n",
+            "    provider: \"{provider}\",\n",
+            "    eventType,\n",
+            "    timestamp: toIsoTimestamp(event?.timestamp ?? session?.updatedAt ?? session?.timeUpdated),\n",
+            "    sessionId: session?.id ?? event?.sessionId ?? null,\n",
+            "    cwd: session?.cwd ?? event?.cwd ?? null,\n",
+            "    sourcePath: session?.path ?? null,\n",
+            "    title: session?.title ?? session?.summary ?? null,\n",
+            "    error: event?.error?.message ?? null,\n",
+            "  }};\n",
+            "}}\n\n",
+            "async function appendRecord(record: ReturnType<typeof buildRecord>) {{\n",
+            "  await mkdir(BRIDGE_DIR, {{ recursive: true }});\n",
+            "  await appendFile(BRIDGE_PATH, `${{JSON.stringify(record)}}\\n`, \"utf8\");\n",
+            "}}\n\n",
+            "export const SessionHubBridge: Plugin = async () => {{\n",
+            "  return {{\n",
+            "    \"session.updated\": async (event) => {{\n",
+            "      await appendRecord(buildRecord(\"session.updated\", event));\n",
+            "    }},\n",
+            "    \"session.error\": async (event) => {{\n",
+            "      await appendRecord(buildRecord(\"session.error\", event));\n",
+            "    }},\n",
+            "  }};\n",
+            "}};\n"
+        ),
+        metadata_prefix = OPENCODE_PLUGIN_METADATA_PREFIX,
+        metadata = metadata,
+        bridge_path = bridge_path_literal,
+        bridge_dir = bridge_parent_literal,
+        version = PROVIDER_INTEGRATION_VERSION,
+        provider = OPENCODE_PROVIDER
+    ))
+}
+
+fn write_provider_integration_file(config_path: &Path, content: &str) -> Result<(), String> {
+    validate_integration_target(config_path)?;
+    ensure_parent_dir(config_path)?;
+    fs::write(config_path, content).map_err(|error| {
+        format!(
+            "failed to write integration file {}: {error}",
+            config_path.display()
+        )
+    })
+}
+
+fn build_install_failure_status(
+    provider: &str,
+    config_path: Option<PathBuf>,
+    diagnostics: ProviderBridgeDiagnostics,
+    error: String,
+) -> ProviderIntegrationStatus {
+    let status = if error.contains("Access is denied")
+        || error.contains("Permission denied")
+        || error.contains("failed to create directory")
+    {
+        ProviderIntegrationState::ManualRequired
+    } else {
+        ProviderIntegrationState::Error
+    };
+
+    build_provider_integration_status(provider, status, config_path, diagnostics, Some(error))
+}
+
+fn install_or_update_copilot_integration(copilot_root: Option<&str>) -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(COPILOT_PROVIDER);
+    let copilot_root = match resolve_copilot_root(copilot_root) {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                Some(error),
+            );
+        }
+    };
+    let config_path = resolve_copilot_integration_path(&copilot_root);
+    let Some(bridge_path) = diagnostics.bridge_path.clone() else {
+        return build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some("failed to resolve Copilot bridge path".to_string()),
+        );
+    };
+
+    let content = match render_copilot_integration(&bridge_path) {
+        Ok(content) => content,
+        Err(error) => {
+            return build_install_failure_status(
+                COPILOT_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                error,
+            );
+        }
+    };
+
+    if let Err(error) = ensure_parent_dir(&bridge_path)
+        .and_then(|_| write_provider_integration_file(&config_path, &content))
+    {
+        return build_install_failure_status(
+            COPILOT_PROVIDER,
+            Some(config_path),
+            diagnostics,
+            error,
+        );
+    }
+
+    detect_copilot_integration_status(copilot_root.to_str())
+}
+
+fn install_or_update_opencode_integration() -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(OPENCODE_PROVIDER);
+    let config_path = match resolve_opencode_integration_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                Some(error),
+            );
+        }
+    };
+    let Some(bridge_path) = diagnostics.bridge_path.clone() else {
+        return build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some("failed to resolve OpenCode bridge path".to_string()),
+        );
+    };
+
+    let content = match render_opencode_integration(&bridge_path) {
+        Ok(content) => content,
+        Err(error) => {
+            return build_install_failure_status(
+                OPENCODE_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                error,
+            );
+        }
+    };
+
+    if let Err(error) = ensure_parent_dir(&bridge_path)
+        .and_then(|_| write_provider_integration_file(&config_path, &content))
+    {
+        return build_install_failure_status(
+            OPENCODE_PROVIDER,
+            Some(config_path),
+            diagnostics,
+            error,
+        );
+    }
+
+    detect_opencode_integration_status()
+}
+
+fn recheck_provider_integration_status(
+    provider: &str,
+    copilot_root: Option<&str>,
+) -> Result<ProviderIntegrationStatus, String> {
+    match provider {
+        COPILOT_PROVIDER => Ok(detect_copilot_integration_status(copilot_root)),
+        OPENCODE_PROVIDER => Ok(detect_opencode_integration_status()),
+        _ => Err(format!("unsupported provider: {provider}")),
+    }
+}
+
+fn install_or_update_provider_integration(
+    provider: &str,
+    copilot_root: Option<&str>,
+) -> Result<ProviderIntegrationStatus, String> {
+    match provider {
+        COPILOT_PROVIDER => Ok(install_or_update_copilot_integration(copilot_root)),
+        OPENCODE_PROVIDER => Ok(install_or_update_opencode_integration()),
+        _ => Err(format!("unsupported provider: {provider}")),
+    }
+}
+
+fn parse_opencode_integration_metadata(
+    content: &str,
+) -> Result<Option<ManagedProviderIntegrationMetadata>, String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(raw_json) = trimmed.strip_prefix(OPENCODE_PLUGIN_METADATA_PREFIX) {
+            return serde_json::from_str::<ManagedProviderIntegrationMetadata>(raw_json.trim())
+                .map(Some)
+                .map_err(|error| {
+                    format!("failed to parse OpenCode integration metadata: {error}")
+                });
+        }
+    }
+
+    Ok(None)
+}
+
+fn detect_copilot_integration_status(copilot_root: Option<&str>) -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(COPILOT_PROVIDER);
+    let copilot_root = match resolve_copilot_root(copilot_root) {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                Some(error),
+            );
+        }
+    };
+    let config_path = resolve_copilot_integration_path(&copilot_root);
+
+    if let Err(error) = validate_integration_target(&config_path) {
+        return build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some(error),
+        );
+    }
+
+    let Some(expected_bridge_path) = diagnostics.bridge_path.clone() else {
+        return build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some("failed to resolve Copilot bridge path".to_string()),
+        );
+    };
+
+    if !config_path.exists() {
+        return build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::Missing,
+            Some(config_path),
+            diagnostics,
+            None,
+        );
+    }
+
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let error_message = format!(
+                "failed to read Copilot integration file {}: {error}",
+                config_path.display()
+            );
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::Error,
+                Some(config_path),
+                diagnostics,
+                Some(error_message),
+            );
+        }
+    };
+
+    let parsed = match serde_json::from_str::<CopilotIntegrationConfig>(&content) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let error_message = format!(
+                "failed to parse Copilot integration file {}: {error}",
+                config_path.display()
+            );
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::Error,
+                Some(config_path),
+                diagnostics,
+                Some(error_message),
+            );
+        }
+    };
+
+    let Some(metadata) = parsed.session_hub else {
+        return build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::Outdated,
+            Some(config_path),
+            diagnostics,
+            Some("missing SessionHub integration metadata".to_string()),
+        );
+    };
+
+    match validate_managed_metadata(&metadata, COPILOT_PROVIDER, &expected_bridge_path) {
+        Ok(()) => build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::Installed,
+            Some(config_path),
+            diagnostics,
+            None,
+        ),
+        Err(error) => build_provider_integration_status(
+            COPILOT_PROVIDER,
+            ProviderIntegrationState::Outdated,
+            Some(config_path),
+            diagnostics,
+            Some(error),
+        ),
+    }
+}
+
+fn detect_opencode_integration_status() -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(OPENCODE_PROVIDER);
+    let config_path = match resolve_opencode_integration_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                Some(error),
+            );
+        }
+    };
+
+    if let Err(error) = validate_integration_target(&config_path) {
+        return build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some(error),
+        );
+    }
+
+    let Some(expected_bridge_path) = diagnostics.bridge_path.clone() else {
+        return build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::ManualRequired,
+            Some(config_path),
+            diagnostics,
+            Some("failed to resolve OpenCode bridge path".to_string()),
+        );
+    };
+
+    if !config_path.exists() {
+        return build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::Missing,
+            Some(config_path),
+            diagnostics,
+            None,
+        );
+    }
+
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let error_message = format!(
+                "failed to read OpenCode integration file {}: {error}",
+                config_path.display()
+            );
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::Error,
+                Some(config_path),
+                diagnostics,
+                Some(error_message),
+            );
+        }
+    };
+
+    let metadata = match parse_opencode_integration_metadata(&content) {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::Outdated,
+                Some(config_path),
+                diagnostics,
+                Some("missing SessionHub integration metadata".to_string()),
+            );
+        }
+        Err(error) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::Error,
+                Some(config_path),
+                diagnostics,
+                Some(error),
+            );
+        }
+    };
+
+    match validate_managed_metadata(&metadata, OPENCODE_PROVIDER, &expected_bridge_path) {
+        Ok(()) => build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::Installed,
+            Some(config_path),
+            diagnostics,
+            None,
+        ),
+        Err(error) => build_provider_integration_status(
+            OPENCODE_PROVIDER,
+            ProviderIntegrationState::Outdated,
+            Some(config_path),
+            diagnostics,
+            Some(error),
+        ),
     }
 }
 
@@ -409,8 +1468,18 @@ impl AppSettings {
             show_archived: false,
             pinned_projects: Vec::new(),
             enabled_providers: default_enabled_providers(),
+            provider_integrations: Vec::new(),
         })
     }
+}
+
+fn collect_provider_integration_statuses(
+    copilot_root: Option<&str>,
+) -> Vec<ProviderIntegrationStatus> {
+    vec![
+        detect_copilot_integration_status(copilot_root),
+        detect_opencode_integration_status(),
+    ]
 }
 
 fn settings_file_path() -> Result<PathBuf, String> {
@@ -468,14 +1537,25 @@ fn open_db_connection() -> Result<Connection, String> {
 fn create_sessions_watcher(
     app: &tauri::AppHandle,
     root: &Path,
+    refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
 ) -> Result<RecommendedWatcher, String> {
     let app_handle = app.clone();
+    let watch_root = root.to_path_buf();
+    let session_roots = vec![
+        watch_root.join("session-state"),
+        watch_root.join("session-state-archive"),
+    ];
+    let snapshot_state = Arc::new(Mutex::new(build_copilot_watch_snapshot(&watch_root)));
     let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
     // 標記 debounce thread 是否已在執行，避免高頻事件時重複 spawn
     let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
-        if result.is_ok() {
+        if let Ok(event) = result {
+            if !is_relevant_copilot_event(&event, &session_roots) {
+                return;
+            }
+
             // 更新最後事件時間戳
             if let Ok(mut ts) = last_event.lock() {
                 *ts = Instant::now();
@@ -493,6 +1573,9 @@ fn create_sessions_watcher(
             let le = Arc::clone(&last_event);
             let handle = app_handle.clone();
             let running = Arc::clone(&debounce_running);
+            let refreshes = Arc::clone(&refresh_state);
+            let watched_root = watch_root.clone();
+            let tracked_snapshot = Arc::clone(&snapshot_state);
             thread::spawn(move || {
                 loop {
                     thread::sleep(Duration::from_millis(COPILOT_DEBOUNCE_MS));
@@ -500,7 +1583,16 @@ fn create_sessions_watcher(
                     if elapsed >= Duration::from_millis(COPILOT_DEBOUNCE_MS) {
                         // 穩定後 emit 並結束 thread
                         running.store(false, Ordering::SeqCst);
-                        let _ = handle.emit("copilot-sessions-updated", ());
+                        match should_emit_copilot_refresh(&watched_root, &tracked_snapshot) {
+                            Ok(true) => {
+                                let _ =
+                                    emit_provider_refresh(&handle, &refreshes, COPILOT_PROVIDER);
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                eprintln!("failed to verify copilot watcher refresh: {error}");
+                            }
+                        }
                         break;
                     }
                     // 尚未穩定（有新事件更新了 last_event），繼續等待
@@ -531,6 +1623,7 @@ fn create_sessions_watcher(
 fn create_opencode_watcher(
     app: &tauri::AppHandle,
     opencode_root: &Path,
+    refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
 ) -> Result<RecommendedWatcher, String> {
     let wal_path = opencode_root.join("opencode.db-wal");
     let db_path = opencode_root.join("opencode.db");
@@ -544,12 +1637,18 @@ fn create_opencode_watcher(
     }
 
     let app_handle = app.clone();
+    let watch_root = opencode_root.to_path_buf();
+    let snapshot_state = Arc::new(Mutex::new(build_opencode_watch_snapshot(&watch_root)));
     let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
     // 標記 debounce thread 是否已在執行，避免高頻事件時重複 spawn
     let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
-        if result.is_ok() {
+        if let Ok(event) = result {
+            if !is_relevant_opencode_event(&event, &watch_root) {
+                return;
+            }
+
             // 更新最後事件時間戳
             if let Ok(mut ts) = last_event.lock() {
                 *ts = Instant::now();
@@ -567,6 +1666,9 @@ fn create_opencode_watcher(
             let le = Arc::clone(&last_event);
             let handle = app_handle.clone();
             let running = Arc::clone(&debounce_running);
+            let refreshes = Arc::clone(&refresh_state);
+            let watched_root = watch_root.clone();
+            let tracked_snapshot = Arc::clone(&snapshot_state);
             thread::spawn(move || {
                 loop {
                     thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
@@ -574,7 +1676,16 @@ fn create_opencode_watcher(
                     if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
                         // 穩定後 emit 並結束 thread
                         running.store(false, Ordering::SeqCst);
-                        let _ = handle.emit("opencode-sessions-updated", ());
+                        match should_emit_opencode_refresh(&watched_root, &tracked_snapshot) {
+                            Ok(true) => {
+                                let _ =
+                                    emit_provider_refresh(&handle, &refreshes, OPENCODE_PROVIDER);
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                eprintln!("failed to verify opencode watcher refresh: {error}");
+                            }
+                        }
                         break;
                     }
                     // 尚未穩定（有新事件更新了 last_event），繼續等待
@@ -584,10 +1695,119 @@ fn create_opencode_watcher(
     })
     .map_err(|error| format!("failed to create opencode watcher: {error}"))?;
 
-    // 監聽整個 opencode 目錄（包含 .db、.db-wal、.db-shm）
     watcher
         .watch(opencode_root, RecursiveMode::NonRecursive)
         .map_err(|error| format!("failed to watch {}: {error}", opencode_root.display()))?;
+    if db_path.exists() {
+        watcher
+            .watch(&db_path, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", db_path.display()))?;
+    }
+    if wal_path.exists() {
+        watcher
+            .watch(&wal_path, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", wal_path.display()))?;
+    }
+
+    Ok(watcher)
+}
+
+fn create_provider_bridge_watcher(
+    app: &tauri::AppHandle,
+    providers: Vec<String>,
+    refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
+    last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
+) -> Result<RecommendedWatcher, String> {
+    let bridge_dir = provider_bridge_dir()?;
+    fs::create_dir_all(&bridge_dir).map_err(|error| {
+        format!(
+            "failed to create provider bridge directory {}: {error}",
+            bridge_dir.display()
+        )
+    })?;
+
+    let app_handle = app.clone();
+    let provider_bridge_paths = providers.iter().try_fold(
+        HashMap::new(),
+        |mut acc: HashMap<String, PathBuf>, provider| -> Result<HashMap<String, PathBuf>, String> {
+            acc.insert(provider.clone(), resolve_provider_bridge_path(provider)?);
+            Ok(acc)
+        },
+    )?;
+    let watched_bridge_paths = provider_bridge_paths.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let pending_providers: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+
+    let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if let Ok(event) = result {
+            let changed_providers = matched_bridge_providers(&event, &watched_bridge_paths);
+            if changed_providers.is_empty() {
+                return;
+            }
+
+            if let Ok(mut tracked_providers) = pending_providers.lock() {
+                tracked_providers.extend(changed_providers);
+            }
+
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            let refreshes = Arc::clone(&refresh_state);
+            let tracked_records = Arc::clone(&last_bridge_records);
+            let watched_providers = providers.clone();
+            let pending = Arc::clone(&pending_providers);
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    let providers_to_process = pending
+                        .lock()
+                        .map(|mut tracked| {
+                            let providers = tracked.iter().cloned().collect::<Vec<_>>();
+                            tracked.clear();
+                            providers
+                        })
+                        .unwrap_or_else(|_| watched_providers.clone());
+                    for provider in &providers_to_process {
+                        if let Err(error) = process_provider_bridge_event(
+                            &handle,
+                            &refreshes,
+                            &tracked_records,
+                            provider,
+                        ) {
+                            eprintln!("failed to process {provider} bridge event: {error}");
+                        }
+                    }
+                    break;
+                }
+            });
+        }
+    })
+    .map_err(|error| format!("failed to create provider bridge watcher: {error}"))?;
+
+    watcher
+        .watch(&bridge_dir, RecursiveMode::NonRecursive)
+        .map_err(|error| format!("failed to watch {}: {error}", bridge_dir.display()))?;
+    for bridge_path in provider_bridge_paths.values() {
+        if bridge_path.exists() {
+            watcher
+                .watch(bridge_path, RecursiveMode::NonRecursive)
+                .map_err(|error| format!("failed to watch {}: {error}", bridge_path.display()))?;
+        }
+    }
 
     Ok(watcher)
 }
@@ -599,10 +1819,50 @@ fn restart_session_watcher_internal(
     opencode_root: Option<&str>,
     enabled_providers: &[String],
 ) -> Result<(), String> {
+    let copilot_bridge_active = enabled_providers.iter().any(|p| p == COPILOT_PROVIDER)
+        && matches!(
+            detect_copilot_integration_status(copilot_root).status,
+            ProviderIntegrationState::Installed
+        );
+    let opencode_bridge_active = enabled_providers.iter().any(|p| p == OPENCODE_PROVIDER)
+        && matches!(
+            detect_opencode_integration_status().status,
+            ProviderIntegrationState::Installed
+        );
+
+    let mut bridge_providers = Vec::new();
+    if copilot_bridge_active {
+        bridge_providers.push(COPILOT_PROVIDER.to_string());
+    }
+    if opencode_bridge_active {
+        bridge_providers.push(OPENCODE_PROVIDER.to_string());
+    }
+
+    if bridge_providers.is_empty() {
+        let mut provider_bridge = watcher_state
+            .provider_bridge
+            .lock()
+            .map_err(|_| "failed to lock provider bridge watcher state".to_string())?;
+        *provider_bridge = None;
+    } else {
+        let watcher = create_provider_bridge_watcher(
+            app,
+            bridge_providers,
+            Arc::clone(&watcher_state.last_provider_refresh),
+            Arc::clone(&watcher_state.last_bridge_records),
+        )?;
+        let mut provider_bridge = watcher_state
+            .provider_bridge
+            .lock()
+            .map_err(|_| "failed to lock provider bridge watcher state".to_string())?;
+        *provider_bridge = Some(watcher);
+    }
+
     // Copilot watcher
-    if enabled_providers.iter().any(|p| p == "copilot") {
+    if enabled_providers.iter().any(|p| p == COPILOT_PROVIDER) && !copilot_bridge_active {
         let root = resolve_copilot_root(copilot_root)?;
-        match create_sessions_watcher(app, &root) {
+        match create_sessions_watcher(app, &root, Arc::clone(&watcher_state.last_provider_refresh))
+        {
             Ok(watcher) => {
                 let mut session_watcher = watcher_state
                     .sessions
@@ -624,9 +1884,13 @@ fn restart_session_watcher_internal(
     }
 
     // OpenCode watcher
-    if enabled_providers.iter().any(|p| p == "opencode") {
+    if enabled_providers.iter().any(|p| p == OPENCODE_PROVIDER) && !opencode_bridge_active {
         if let Ok(oc_root) = resolve_opencode_root(opencode_root) {
-            match create_opencode_watcher(app, &oc_root) {
+            match create_opencode_watcher(
+                app,
+                &oc_root,
+                Arc::clone(&watcher_state.last_provider_refresh),
+            ) {
                 Ok(watcher) => {
                     let mut oc_watcher = watcher_state
                         .opencode
@@ -1969,14 +3233,13 @@ fn get_opencode_max_cursor(opencode_root: &Path) -> Result<i64, String> {
     Ok(cursor)
 }
 
-#[tauri::command]
-fn get_sessions(
+fn get_sessions_internal(
     root_dir: Option<String>,
     opencode_root: Option<String>,
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
-    scan_cache: State<'_, ScanCache>,
+    scan_cache: &ScanCache,
 ) -> Result<Vec<SessionInfo>, String> {
     let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
@@ -2099,6 +3362,25 @@ fn get_sessions(
     Ok(all_sessions)
 }
 
+#[tauri::command]
+fn get_sessions(
+    root_dir: Option<String>,
+    opencode_root: Option<String>,
+    show_archived: Option<bool>,
+    enabled_providers: Option<Vec<String>>,
+    force_full: Option<bool>,
+    scan_cache: State<'_, ScanCache>,
+) -> Result<Vec<SessionInfo>, String> {
+    get_sessions_internal(
+        root_dir,
+        opencode_root,
+        show_archived,
+        enabled_providers,
+        force_full,
+        scan_cache.inner(),
+    )
+}
+
 fn get_settings_internal() -> Result<AppSettings, String> {
     let mut settings = load_settings_internal()?;
     // 若 opencode_root 為空（舊版 settings.json 無此欄位），補填預設值供前端顯示
@@ -2107,6 +3389,8 @@ fn get_settings_internal() -> Result<AppSettings, String> {
             settings.opencode_root = default_root.to_string_lossy().to_string();
         }
     }
+    settings.provider_integrations =
+        collect_provider_integration_statuses(Some(settings.copilot_root.as_str()));
     Ok(settings)
 }
 
@@ -2118,6 +3402,82 @@ fn get_settings() -> Result<AppSettings, String> {
 #[tauri::command]
 fn save_settings(settings: AppSettings) -> Result<(), String> {
     save_settings_internal(&settings)
+}
+
+fn restart_provider_watchers_after_integration_change(
+    app: &tauri::AppHandle,
+    watcher_state: &WatcherState,
+    copilot_root_override: Option<&str>,
+) -> Result<(), String> {
+    let settings = get_settings_internal().unwrap_or_else(|_| AppSettings {
+        copilot_root: copilot_root_override.unwrap_or_default().to_string(),
+        opencode_root: default_opencode_root()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        terminal_path: None,
+        external_editor_path: None,
+        show_archived: false,
+        pinned_projects: Vec::new(),
+        enabled_providers: default_enabled_providers(),
+        provider_integrations: Vec::new(),
+    });
+
+    let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());
+    restart_session_watcher_internal(
+        app,
+        watcher_state,
+        Some(copilot_root),
+        Some(settings.opencode_root.as_str()),
+        &settings.enabled_providers,
+    )
+}
+
+#[tauri::command]
+fn install_provider_integration(
+    app: tauri::AppHandle,
+    watcher_state: State<'_, WatcherState>,
+    provider: String,
+    copilot_root: Option<String>,
+) -> Result<ProviderIntegrationStatus, String> {
+    let status = install_or_update_provider_integration(&provider, copilot_root.as_deref())?;
+    restart_provider_watchers_after_integration_change(
+        &app,
+        &watcher_state,
+        copilot_root.as_deref(),
+    )?;
+    Ok(status)
+}
+
+#[tauri::command]
+fn update_provider_integration(
+    app: tauri::AppHandle,
+    watcher_state: State<'_, WatcherState>,
+    provider: String,
+    copilot_root: Option<String>,
+) -> Result<ProviderIntegrationStatus, String> {
+    let status = install_or_update_provider_integration(&provider, copilot_root.as_deref())?;
+    restart_provider_watchers_after_integration_change(
+        &app,
+        &watcher_state,
+        copilot_root.as_deref(),
+    )?;
+    Ok(status)
+}
+
+#[tauri::command]
+fn recheck_provider_integration(
+    app: tauri::AppHandle,
+    watcher_state: State<'_, WatcherState>,
+    provider: String,
+    copilot_root: Option<String>,
+) -> Result<ProviderIntegrationStatus, String> {
+    let status = recheck_provider_integration_status(&provider, copilot_root.as_deref())?;
+    restart_provider_watchers_after_integration_change(
+        &app,
+        &watcher_state,
+        copilot_root.as_deref(),
+    )?;
+    Ok(status)
 }
 
 #[tauri::command]
@@ -2698,6 +4058,9 @@ pub fn run() {
             load_session_cache,
             get_settings,
             save_settings,
+            install_provider_integration,
+            update_provider_integration,
+            recheck_provider_integration,
             detect_terminal,
             detect_vscode,
             restart_session_watcher,
@@ -2727,6 +4090,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {
@@ -2736,6 +4100,35 @@ mod tests {
         let result = callback();
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        }
+        result
+    }
+
+    fn with_env_var<T>(key: &str, value: &Path, callback: impl FnOnce() -> T) -> T {
+        let previous: Option<OsString> = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        let result = callback();
+        unsafe {
+            match previous {
+                Some(previous) => env::set_var(key, previous),
+                None => env::remove_var(key),
+            }
+        }
+        result
+    }
+
+    fn without_env_var<T>(key: &str, callback: impl FnOnce() -> T) -> T {
+        let previous: Option<OsString> = env::var_os(key);
+        unsafe {
+            env::remove_var(key);
+        }
+        let result = callback();
+        unsafe {
+            if let Some(previous) = previous {
+                env::set_var(key, previous);
+            }
         }
         result
     }
@@ -2751,6 +4144,122 @@ mod tests {
             .expect("time went backwards")
             .as_nanos();
         std::env::temp_dir().join(format!("session-hub-{name}-{suffix}"))
+    }
+
+    fn bridge_record_json(
+        provider: &str,
+        event_type: &str,
+        timestamp: &str,
+        error: Option<&str>,
+    ) -> String {
+        serde_json::to_string(&ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: provider.to_string(),
+            event_type: event_type.to_string(),
+            timestamp: timestamp.to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: Some("D:\\repo".to_string()),
+            source_path: None,
+            title: Some("Test".to_string()),
+            error: error.map(|value| value.to_string()),
+        })
+        .expect("serialize bridge record")
+    }
+
+    #[test]
+    fn provider_refresh_dedup_suppresses_duplicate_refreshes_within_window() {
+        let refresh_state = Arc::new(Mutex::new(HashMap::new()));
+        let now = Instant::now();
+
+        assert!(
+            should_emit_provider_refresh_at(&refresh_state, COPILOT_PROVIDER, now)
+                .expect("first refresh should emit")
+        );
+        assert!(!should_emit_provider_refresh_at(
+            &refresh_state,
+            COPILOT_PROVIDER,
+            now + Duration::from_millis(PROVIDER_REFRESH_DEDUP_MS - 1)
+        )
+        .expect("duplicate refresh should dedupe"));
+        assert!(should_emit_provider_refresh_at(
+            &refresh_state,
+            COPILOT_PROVIDER,
+            now + Duration::from_millis(PROVIDER_REFRESH_DEDUP_MS + 1)
+        )
+        .expect("refresh after window should emit"));
+    }
+
+    #[test]
+    fn opencode_refresh_snapshot_skips_unchanged_state_and_emits_after_change() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let oc_dir = unique_test_dir("oc-refresh-snapshot");
+        fs::create_dir_all(&oc_dir).expect("create opencode dir");
+
+        let snapshot_state = Arc::new(Mutex::new(build_opencode_watch_snapshot(&oc_dir)));
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot should not emit"));
+
+        create_opencode_db(&oc_dir, &[("oc-refresh", "Refresh", 1000, 2000, None)]);
+
+        assert!(should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("db change should emit once"));
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot after refresh should not emit"));
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup opencode dir");
+    }
+
+    #[test]
+    fn register_provider_bridge_record_skips_duplicate_last_record() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "session.updated".to_string(),
+            timestamp: "2026-04-01T09:00:00Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: Some("D:\\repo".to_string()),
+            source_path: None,
+            title: Some("Demo".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first record should register")
+        );
+        assert!(
+            !register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("duplicate record should skip")
+        );
+    }
+
+    #[test]
+    fn register_provider_bridge_record_treats_error_change_as_distinct() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let mut record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "session.updated".to_string(),
+            timestamp: "2026-04-01T09:00:00Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: Some("D:\\repo".to_string()),
+            source_path: None,
+            title: Some("Demo".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first record should register")
+        );
+
+        record.error = Some("refresh failed".to_string());
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("record with different error should not be deduplicated")
+        );
     }
 
     #[test]
@@ -3305,12 +4814,9 @@ mod tests {
     // scan_opencode_incremental_internal
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// 建立最小的 opencode.db，包含指定 session 資料
-    fn create_opencode_db(dir: &Path, sessions: &[(&str, &str, i64, i64, Option<i64>)]) {
-        // sessions 欄位：(id, title, time_created, time_updated, time_archived)
+    fn create_full_opencode_db(dir: &Path) {
         let db_path = dir.join("opencode.db");
         let conn = Connection::open(&db_path).expect("create opencode.db");
-
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS project (
                 id TEXT PRIMARY KEY,
@@ -3329,6 +4835,14 @@ mod tests {
              );",
         )
         .expect("create tables");
+    }
+
+    /// 建立最小的 opencode.db，包含指定 session 資料
+    fn create_opencode_db(dir: &Path, sessions: &[(&str, &str, i64, i64, Option<i64>)]) {
+        // sessions 欄位：(id, title, time_created, time_updated, time_archived)
+        create_full_opencode_db(dir);
+        let db_path = dir.join("opencode.db");
+        let conn = Connection::open(&db_path).expect("reopen opencode.db");
 
         for (id, title, time_created, time_updated, time_archived) in sessions {
             conn.execute(
@@ -3338,6 +4852,387 @@ mod tests {
             )
             .expect("insert session");
         }
+    }
+
+    #[test]
+    fn scan_opencode_sessions_reads_sqlite_rows_and_maps_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-full-scan");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+        create_full_opencode_db(&oc_dir);
+
+        let db_path = oc_dir.join("opencode.db");
+        let oc_conn = Connection::open(&db_path).expect("open opencode db");
+        oc_conn
+            .execute(
+                "INSERT INTO project (id, worktree) VALUES (?1, ?2)",
+                params!["project-001", "D:\\repo\\demo"],
+            )
+            .expect("insert project");
+        oc_conn
+            .execute(
+                "INSERT INTO session (
+                    id, title, time_created, time_updated, time_archived, project_id,
+                    summary_additions, summary_deletions, summary_files
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    "oc-session-001",
+                    "OpenCode Title",
+                    1_710_000_000_000_i64,
+                    1_710_000_300_000_i64,
+                    Option::<i64>::None,
+                    "project-001",
+                    12_i64,
+                    3_i64,
+                    5_i64
+                ],
+            )
+            .expect("insert session");
+
+        let metadata_conn = Connection::open_in_memory().expect("open metadata db");
+        init_db(&metadata_conn).expect("init metadata db");
+        upsert_session_meta_internal(
+            &metadata_conn,
+            "oc-session-001",
+            Some("同步備註".to_string()),
+            vec!["research".to_string(), "multi-platform".to_string()],
+        )
+        .expect("insert metadata");
+
+        let sessions =
+            scan_opencode_sessions_internal(&oc_dir, false, &metadata_conn).expect("scan sessions");
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.id, "oc-session-001");
+        assert_eq!(session.provider, OPENCODE_PROVIDER);
+        assert_eq!(session.cwd.as_deref(), Some("D:\\repo\\demo"));
+        assert_eq!(session.summary.as_deref(), Some("OpenCode Title"));
+        assert_eq!(session.summary_count, Some(20));
+        assert_eq!(session.created_at.as_deref(), Some("2024-03-09T16:00:00Z"));
+        assert_eq!(session.updated_at.as_deref(), Some("2024-03-09T16:05:00Z"));
+        assert_eq!(
+            session.session_dir,
+            oc_dir.join("storage")
+                .join("message")
+                .join("oc-session-001")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(session.notes.as_deref(), Some("同步備註"));
+        assert_eq!(
+            session.tags,
+            vec!["research".to_string(), "multi-platform".to_string()]
+        );
+        assert!(!session.is_archived);
+        assert!(!session.parse_error);
+
+        drop(oc_conn);
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+    }
+
+    #[test]
+    fn scan_opencode_sessions_returns_empty_when_db_missing() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-missing-db");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        let metadata_conn = Connection::open_in_memory().expect("open metadata db");
+        init_db(&metadata_conn).expect("init metadata db");
+
+        let sessions =
+            scan_opencode_sessions_internal(&oc_dir, false, &metadata_conn).expect("scan sessions");
+
+        assert!(sessions.is_empty(), "missing opencode db should be ignored");
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+    }
+
+    #[test]
+    fn get_sessions_filters_by_enabled_providers() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("providers-appdata");
+        let copilot_root = unique_test_dir("providers-copilot");
+        let opencode_root = unique_test_dir("providers-opencode");
+        let copilot_session_dir = copilot_root.join("session-state").join("cp-session-001");
+
+        fs::create_dir_all(&copilot_session_dir).expect("create copilot session dir");
+        fs::create_dir_all(&opencode_root).expect("create opencode dir");
+        fs::write(
+            copilot_session_dir.join("workspace.yaml"),
+            concat!(
+                "id: cp-session-001\n",
+                "cwd: D:\\repo\\copilot\n",
+                "summary: Copilot Session\n",
+                "updated_at: 2025-01-02T00:00:00Z\n"
+            ),
+        )
+        .expect("write workspace yaml");
+
+        create_full_opencode_db(&opencode_root);
+        let oc_conn = Connection::open(opencode_root.join("opencode.db")).expect("open opencode db");
+        oc_conn
+            .execute(
+                "INSERT INTO session (
+                    id, title, time_created, time_updated, time_archived, project_id,
+                    summary_additions, summary_deletions, summary_files
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    "oc-session-001",
+                    "OpenCode Session",
+                    1_735_689_600_000_i64,
+                    1_735_693_200_000_i64,
+                    Option::<i64>::None,
+                    Option::<String>::None,
+                    1_i64,
+                    1_i64,
+                    1_i64
+                ],
+            )
+            .expect("insert opencode session");
+
+        let scan_cache = ScanCache::default();
+
+        with_appdata(&appdata_dir, || {
+            let copilot_only = get_sessions_internal(
+                Some(copilot_root.to_string_lossy().to_string()),
+                Some(opencode_root.to_string_lossy().to_string()),
+                Some(false),
+                Some(vec![COPILOT_PROVIDER.to_string()]),
+                Some(true),
+                &scan_cache,
+            )
+            .expect("scan copilot only");
+            assert_eq!(copilot_only.len(), 1);
+            assert_eq!(copilot_only[0].provider, COPILOT_PROVIDER);
+
+            let opencode_only = get_sessions_internal(
+                Some(copilot_root.to_string_lossy().to_string()),
+                Some(opencode_root.to_string_lossy().to_string()),
+                Some(false),
+                Some(vec![OPENCODE_PROVIDER.to_string()]),
+                Some(true),
+                &scan_cache,
+            )
+            .expect("scan opencode only");
+            assert_eq!(opencode_only.len(), 1);
+            assert_eq!(opencode_only[0].provider, OPENCODE_PROVIDER);
+
+            let all_providers = get_sessions_internal(
+                Some(copilot_root.to_string_lossy().to_string()),
+                Some(opencode_root.to_string_lossy().to_string()),
+                Some(false),
+                Some(vec![
+                    COPILOT_PROVIDER.to_string(),
+                    OPENCODE_PROVIDER.to_string(),
+                ]),
+                Some(true),
+                &scan_cache,
+            )
+            .expect("scan all providers");
+            assert_eq!(all_providers.len(), 2);
+            assert!(all_providers.iter().any(|session| session.provider == COPILOT_PROVIDER));
+            assert!(all_providers.iter().any(|session| session.provider == OPENCODE_PROVIDER));
+        });
+
+        drop(oc_conn);
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+        fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
+        fs::remove_dir_all(&opencode_root).expect("cleanup opencode root");
+    }
+
+    #[test]
+    fn scan_sisyphus_reads_project_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("sisyphus-project");
+        let sisyphus_dir = project_dir.join(".sisyphus");
+        fs::create_dir_all(sisyphus_dir.join("plans")).expect("create plans dir");
+        fs::create_dir_all(sisyphus_dir.join("notepads").join("alpha")).expect("create alpha notepad");
+        fs::create_dir_all(sisyphus_dir.join("notepads").join("beta")).expect("create beta notepad");
+        fs::create_dir_all(sisyphus_dir.join("evidence")).expect("create evidence dir");
+        fs::create_dir_all(sisyphus_dir.join("drafts")).expect("create drafts dir");
+
+        fs::write(
+            sisyphus_dir.join("boulder.json"),
+            r#"{
+                "activePlan": "plans/alpha.md",
+                "planName": "Alpha Plan",
+                "agent": "copilot",
+                "sessionIds": ["session-001", "session-002"],
+                "startedAt": "2026-04-01T09:00:00Z"
+            }"#,
+        )
+        .expect("write boulder.json");
+        fs::write(
+            sisyphus_dir.join("plans").join("alpha.md"),
+            "# Alpha Title\n\n## TL;DR\n第一行摘要\n第二行摘要\n\n## Details\n內容\n",
+        )
+        .expect("write alpha plan");
+        fs::write(
+            sisyphus_dir.join("plans").join("beta.md"),
+            "# Beta Title\n\n一般內容\n",
+        )
+        .expect("write beta plan");
+        fs::write(
+            sisyphus_dir.join("notepads").join("alpha").join("issues.md"),
+            "- issue",
+        )
+        .expect("write alpha issues");
+        fs::write(
+            sisyphus_dir.join("notepads").join("alpha").join("learnings.md"),
+            "- learning",
+        )
+        .expect("write alpha learnings");
+        fs::write(
+            sisyphus_dir.join("notepads").join("beta").join("issues.md"),
+            "- beta issue",
+        )
+        .expect("write beta issues");
+        fs::write(sisyphus_dir.join("evidence").join("b.txt"), "b").expect("write evidence b");
+        fs::write(sisyphus_dir.join("evidence").join("a.txt"), "a").expect("write evidence a");
+        fs::write(sisyphus_dir.join("drafts").join("draft-b.md"), "# Draft B")
+            .expect("write draft b");
+        fs::write(sisyphus_dir.join("drafts").join("draft-a.md"), "# Draft A")
+            .expect("write draft a");
+
+        let data = scan_sisyphus_internal(&project_dir);
+
+        assert_eq!(data.active_plan.as_ref().and_then(|plan| plan.plan_name.as_deref()), Some("Alpha Plan"));
+        assert_eq!(data.active_plan.as_ref().and_then(|plan| plan.agent.as_deref()), Some("copilot"));
+        assert_eq!(
+            data.active_plan
+                .as_ref()
+                .map(|plan| plan.session_ids.clone())
+                .unwrap_or_default(),
+            vec!["session-001".to_string(), "session-002".to_string()]
+        );
+        assert_eq!(data.plans.len(), 2);
+        assert_eq!(data.plans[0].name, "alpha");
+        assert_eq!(data.plans[0].title.as_deref(), Some("Alpha Title"));
+        assert_eq!(data.plans[0].tldr.as_deref(), Some("第一行摘要\n第二行摘要"));
+        assert!(data.plans[0].is_active);
+        assert_eq!(data.plans[1].name, "beta");
+        assert!(!data.plans[1].is_active);
+        assert_eq!(data.notepads.len(), 2);
+        assert_eq!(data.notepads[0].name, "alpha");
+        assert!(data.notepads[0].has_issues);
+        assert!(data.notepads[0].has_learnings);
+        assert_eq!(data.notepads[1].name, "beta");
+        assert!(data.notepads[1].has_issues);
+        assert!(!data.notepads[1].has_learnings);
+        assert_eq!(data.evidence_files, vec!["a.txt".to_string(), "b.txt".to_string()]);
+        assert_eq!(
+            data.draft_files,
+            vec!["draft-a.md".to_string(), "draft-b.md".to_string()]
+        );
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
+    fn scan_openspec_reads_project_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-project");
+        let openspec_dir = project_dir.join("openspec");
+        fs::create_dir_all(openspec_dir.join("changes").join("feature-b").join("specs").join("auth"))
+            .expect("create feature-b specs dir");
+        fs::create_dir_all(openspec_dir.join("changes").join("archive").join("legacy-a"))
+            .expect("create archive dir");
+        fs::create_dir_all(openspec_dir.join("specs").join("api"))
+            .expect("create api spec dir");
+        fs::create_dir_all(openspec_dir.join("specs").join("workflow"))
+            .expect("create workflow spec dir");
+
+        fs::write(openspec_dir.join("config.yaml"), "schema: v2\n").expect("write config");
+        fs::write(
+            openspec_dir.join("changes").join("feature-b").join("proposal.md"),
+            "# Proposal",
+        )
+        .expect("write proposal");
+        fs::write(
+            openspec_dir.join("changes").join("feature-b").join("tasks.md"),
+            "- [ ] task",
+        )
+        .expect("write tasks");
+        fs::write(
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("specs")
+                .join("auth")
+                .join("spec.md"),
+            "# Auth Spec",
+        )
+        .expect("write change spec");
+        fs::write(
+            openspec_dir.join("changes").join("archive").join("legacy-a").join("design.md"),
+            "# Design",
+        )
+        .expect("write archive design");
+        fs::write(
+            openspec_dir.join("specs").join("api").join("spec.md"),
+            "# API Spec",
+        )
+        .expect("write api spec");
+
+        let data = scan_openspec_internal(&project_dir);
+
+        assert_eq!(data.schema.as_deref(), Some("v2"));
+        assert_eq!(data.active_changes.len(), 1);
+        assert_eq!(data.active_changes[0].name, "feature-b");
+        assert!(data.active_changes[0].has_proposal);
+        assert!(!data.active_changes[0].has_design);
+        assert!(data.active_changes[0].has_tasks);
+        assert_eq!(data.active_changes[0].specs_count, 1);
+        assert_eq!(data.archived_changes.len(), 1);
+        assert_eq!(data.archived_changes[0].name, "legacy-a");
+        assert!(!data.archived_changes[0].has_proposal);
+        assert!(data.archived_changes[0].has_design);
+        assert!(!data.archived_changes[0].has_tasks);
+        assert_eq!(data.specs.len(), 2);
+        assert_eq!(data.specs[0].name, "api");
+        assert_eq!(
+            data.specs[0].path,
+            openspec_dir
+                .join("specs")
+                .join("api")
+                .join("spec.md")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(data.specs[1].name, "workflow");
+        assert_eq!(
+            data.specs[1].path,
+            openspec_dir
+                .join("specs")
+                .join("workflow")
+                .to_string_lossy()
+                .to_string()
+        );
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
+    fn scan_project_metadata_returns_empty_structures_when_dirs_missing() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("project-empty-metadata");
+        fs::create_dir_all(&project_dir).expect("create project dir");
+
+        let sisyphus_data = scan_sisyphus_internal(&project_dir);
+        assert!(sisyphus_data.active_plan.is_none());
+        assert!(sisyphus_data.plans.is_empty());
+        assert!(sisyphus_data.notepads.is_empty());
+        assert!(sisyphus_data.evidence_files.is_empty());
+        assert!(sisyphus_data.draft_files.is_empty());
+
+        let openspec_data = scan_openspec_internal(&project_dir);
+        assert!(openspec_data.schema.is_none());
+        assert!(openspec_data.active_changes.is_empty());
+        assert!(openspec_data.archived_changes.is_empty());
+        assert!(openspec_data.specs.is_empty());
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
     }
 
     #[test]
@@ -3612,6 +5507,310 @@ mod tests {
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn provider_bridge_paths_use_appdata_override() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("provider-bridge-appdata");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let copilot_path =
+                resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
+            let opencode_path =
+                resolve_provider_bridge_path(OPENCODE_PROVIDER).expect("resolve opencode bridge");
+
+            assert_eq!(
+                copilot_path,
+                appdata_dir
+                    .join("SessionHub")
+                    .join("provider-bridge")
+                    .join("copilot.jsonl")
+            );
+            assert_eq!(
+                opencode_path,
+                appdata_dir
+                    .join("SessionHub")
+                    .join("provider-bridge")
+                    .join("opencode.jsonl")
+            );
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_copilot_integration_status_reads_installed_state_and_last_error() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("copilot-provider-appdata");
+        let copilot_root = unique_test_dir("copilot-provider-root");
+        let config_path = resolve_copilot_integration_path(&copilot_root);
+
+        fs::create_dir_all(config_path.parent().expect("config parent")).expect("create hooks dir");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            let bridge_path =
+                resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
+            ensure_parent_dir(&bridge_path).expect("create bridge dir");
+            fs::write(
+                &bridge_path,
+                format!(
+                    "{}\n",
+                    bridge_record_json(
+                        COPILOT_PROVIDER,
+                        "session.error",
+                        "2026-04-01T12:00:00Z",
+                        Some("hook failed")
+                    )
+                ),
+            )
+            .expect("write bridge record");
+
+            let integration = serde_json::json!({
+                "version": 1,
+                "sessionHub": {
+                    "provider": COPILOT_PROVIDER,
+                    "bridgePath": bridge_path.to_string_lossy().to_string(),
+                    "integrationVersion": PROVIDER_INTEGRATION_VERSION
+                },
+                "hooks": {
+                    "sessionEnd": []
+                }
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&integration).expect("serialize integration"),
+            )
+            .expect("write copilot integration");
+
+            let root_string = copilot_root.to_string_lossy().to_string();
+            detect_copilot_integration_status(Some(root_string.as_str()))
+        });
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(
+            status.last_event_at.as_deref(),
+            Some("2026-04-01T12:00:00Z")
+        );
+        assert_eq!(status.last_error.as_deref(), Some("hook failed"));
+        assert_eq!(
+            status.config_path.as_deref(),
+            Some(config_path.to_string_lossy().as_ref())
+        );
+
+        fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_copilot_integration_status_marks_outdated_when_version_mismatches() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("copilot-provider-outdated-appdata");
+        let copilot_root = unique_test_dir("copilot-provider-outdated-root");
+        let config_path = resolve_copilot_integration_path(&copilot_root);
+
+        fs::create_dir_all(config_path.parent().expect("config parent")).expect("create hooks dir");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            let bridge_path =
+                resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
+            let integration = serde_json::json!({
+                "version": 1,
+                "sessionHub": {
+                    "provider": COPILOT_PROVIDER,
+                    "bridgePath": bridge_path.to_string_lossy().to_string(),
+                    "integrationVersion": PROVIDER_INTEGRATION_VERSION - 1
+                },
+                "hooks": {
+                    "sessionEnd": []
+                }
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&integration).expect("serialize integration"),
+            )
+            .expect("write copilot integration");
+
+            let root_string = copilot_root.to_string_lossy().to_string();
+            detect_copilot_integration_status(Some(root_string.as_str()))
+        });
+
+        assert_eq!(status.status, ProviderIntegrationState::Outdated);
+        assert!(status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("outdated")));
+
+        fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn install_copilot_integration_writes_managed_hook_file() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("copilot-provider-install-appdata");
+        let copilot_root = unique_test_dir("copilot-provider-install-root");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&copilot_root).expect("create copilot root");
+
+        let status = with_appdata(&appdata_dir, || {
+            let root_string = copilot_root.to_string_lossy().to_string();
+            install_or_update_copilot_integration(Some(root_string.as_str()))
+        });
+        let config_path = resolve_copilot_integration_path(&copilot_root);
+        let content = fs::read_to_string(&config_path).expect("read copilot hook file");
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert!(content.contains("\"sessionHub\""));
+        assert!(content.contains("\"sessionEnd\""));
+        assert!(content.contains("AppendAllText"));
+
+        fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_opencode_integration_status_reads_installed_state_from_plugin_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("opencode-provider-appdata");
+        let user_profile = unique_test_dir("opencode-provider-user");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&user_profile).expect("create user profile dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            with_env_var("USERPROFILE", &user_profile, || {
+                let config_path =
+                    resolve_opencode_integration_path().expect("resolve opencode integration path");
+                fs::create_dir_all(config_path.parent().expect("plugin parent"))
+                    .expect("create plugin dir");
+
+                let bridge_path =
+                    resolve_provider_bridge_path(OPENCODE_PROVIDER).expect("resolve bridge path");
+                ensure_parent_dir(&bridge_path).expect("create bridge dir");
+                fs::write(
+                    &bridge_path,
+                    format!(
+                        "{}\n",
+                        bridge_record_json(
+                            OPENCODE_PROVIDER,
+                            "session.updated",
+                            "2026-04-02T08:30:00Z",
+                            None
+                        )
+                    ),
+                )
+                .expect("write bridge record");
+
+                let metadata = serde_json::json!({
+                    "provider": OPENCODE_PROVIDER,
+                    "bridgePath": bridge_path.to_string_lossy().to_string(),
+                    "integrationVersion": PROVIDER_INTEGRATION_VERSION
+                });
+                fs::write(
+                    &config_path,
+                    format!(
+                        "{OPENCODE_PLUGIN_METADATA_PREFIX}{}\nexport const SessionHubBridge = () => ({{}});\n",
+                        serde_json::to_string(&metadata).expect("serialize metadata")
+                    ),
+                )
+                .expect("write plugin file");
+
+                detect_opencode_integration_status()
+            })
+        });
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(
+            status.last_event_at.as_deref(),
+            Some("2026-04-02T08:30:00Z")
+        );
+        assert!(status.last_error.is_none());
+        assert!(status
+            .config_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(OPENCODE_PLUGIN_FILE_NAME)));
+
+        fs::remove_dir_all(&user_profile).expect("cleanup user profile");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_opencode_integration_status_marks_missing_and_manual_required() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("opencode-provider-missing-appdata");
+        let user_profile = unique_test_dir("opencode-provider-missing-user");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&user_profile).expect("create user profile dir");
+
+        let missing_status = with_appdata(&appdata_dir, || {
+            with_env_var("USERPROFILE", &user_profile, || {
+                let config_path =
+                    resolve_opencode_integration_path().expect("resolve opencode integration path");
+                fs::create_dir_all(config_path.parent().expect("plugin parent"))
+                    .expect("create plugin dir");
+                detect_opencode_integration_status()
+            })
+        });
+
+        assert_eq!(missing_status.status, ProviderIntegrationState::Missing);
+        assert!(missing_status.last_error.is_none());
+        assert!(missing_status
+            .config_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(OPENCODE_PLUGIN_FILE_NAME)));
+
+        let manual_required_status = with_appdata(&appdata_dir, || {
+            without_env_var("USERPROFILE", detect_opencode_integration_status)
+        });
+
+        assert_eq!(
+            manual_required_status.status,
+            ProviderIntegrationState::ManualRequired
+        );
+        assert!(manual_required_status.config_path.is_none());
+        assert!(manual_required_status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("USERPROFILE")));
+
+        fs::remove_dir_all(&user_profile).expect("cleanup user profile");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn install_opencode_integration_writes_managed_plugin_file() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("opencode-provider-install-appdata");
+        let user_profile = unique_test_dir("opencode-provider-install-user");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&user_profile).expect("create user profile dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            with_env_var(
+                "USERPROFILE",
+                &user_profile,
+                install_or_update_opencode_integration,
+            )
+        });
+        let config_path = with_env_var("USERPROFILE", &user_profile, || {
+            resolve_opencode_integration_path().expect("resolve OpenCode plugin path")
+        });
+        let content = fs::read_to_string(&config_path).expect("read OpenCode plugin file");
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert!(content.contains(OPENCODE_PLUGIN_METADATA_PREFIX));
+        assert!(content.contains("\"session.updated\""));
+        assert!(content.contains("appendFile"));
+
+        fs::remove_dir_all(&user_profile).expect("cleanup user profile");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
     }
 }

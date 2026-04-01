@@ -19,6 +19,9 @@ type SubTabState = { openPlanKeys: string[]; activeSubTab: string };
 type Props = {
   project: ProjectGroup;
   showArchived: boolean;
+  hideEmptySessions: boolean;
+  onHideEmptySessionsChange: (value: boolean) => void;
+  totalEmptySessions: number;
   onToggleArchived: (value: boolean) => void;
   onOpenTerminal: (session: SessionInfo) => void;
   onCopyCommand: (session: SessionInfo) => void;
@@ -103,6 +106,9 @@ function filterAndSortSessions(
 export function ProjectView({
   project,
   showArchived,
+  hideEmptySessions,
+  onHideEmptySessionsChange,
+  totalEmptySessions,
   onToggleArchived,
   onOpenTerminal,
   onCopyCommand,
@@ -137,7 +143,6 @@ export function ProjectView({
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [hideEmpty, setHideEmpty] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
 
   const setActiveSubTab = (next: string) => {
@@ -174,19 +179,36 @@ export function ProjectView({
     [project.sessions],
   );
 
-  const emptySessions = useMemo(
-    () => project.sessions.filter((s) => !s.hasEvents),
-    [project.sessions],
-  );
-
   const filteredSessions = useMemo(
-    () => filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, hideEmpty, selectedProviders),
-    [project.sessions, searchTerm, sortKey, selectedTags, hideEmpty, selectedProviders],
+    () =>
+      filterAndSortSessions(
+        project.sessions,
+        searchTerm,
+        sortKey,
+        selectedTags,
+        hideEmptySessions,
+        selectedProviders,
+      ),
+    [project.sessions, searchTerm, sortKey, selectedTags, hideEmptySessions, selectedProviders],
   );
 
   const hiddenCount = useMemo(() => {
-    const withoutHide = filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, false, selectedProviders);
-    const withHide = filterAndSortSessions(project.sessions, searchTerm, sortKey, selectedTags, true, selectedProviders);
+    const withoutHide = filterAndSortSessions(
+      project.sessions,
+      searchTerm,
+      sortKey,
+      selectedTags,
+      false,
+      selectedProviders,
+    );
+    const withHide = filterAndSortSessions(
+      project.sessions,
+      searchTerm,
+      sortKey,
+      selectedTags,
+      true,
+      selectedProviders,
+    );
     return withoutHide.length - withHide.length;
   }, [project.sessions, searchTerm, sortKey, selectedTags, selectedProviders]);
 
@@ -285,12 +307,12 @@ export function ProjectView({
               <label className="checkbox-group compact-checkbox">
                 <input
                   type="checkbox"
-                  checked={hideEmpty}
-                  onChange={(event) => setHideEmpty(event.currentTarget.checked)}
+                  checked={hideEmptySessions}
+                  onChange={(event) => onHideEmptySessionsChange(event.currentTarget.checked)}
                 />
                 <span>
                   {t("session.filter.hideEmpty")}
-                  {hideEmpty && hiddenCount > 0 ? (
+                  {hideEmptySessions && hiddenCount > 0 ? (
                     <span className="hidden-count-hint">
                       {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
                     </span>
@@ -341,14 +363,14 @@ export function ProjectView({
                 </button>
 
                 <button
-                  type="button"
-                  className="icon-button icon-button--danger"
-                  title={t("session.actions.deleteEmpty")}
-                  aria-label={t("session.actions.deleteEmpty")}
-                  disabled={emptySessions.length === 0}
-                  onClick={onDeleteEmptySessions}
-                >
-                  <DeleteIcon size={16} />
+                   type="button"
+                   className="icon-button icon-button--danger"
+                   title={t("session.actions.deleteEmpty")}
+                   aria-label={t("session.actions.deleteEmpty")}
+                   disabled={totalEmptySessions === 0}
+                   onClick={onDeleteEmptySessions}
+                 >
+                   <DeleteIcon size={16} />
                 </button>
               </div>
             </div>
