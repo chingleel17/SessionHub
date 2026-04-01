@@ -30,6 +30,12 @@ export function SessionStatsPanel({ stats }: Props) {
         <strong>{formatCompactNumber(averageTokens)}</strong>
         <span>{t("stats.detail.avgTokens")}</span>
       </div>
+      {stats.inputTokens > 0 ? (
+        <div className="stats-panel-row">
+          <strong>{formatCompactNumber(stats.inputTokens)}</strong>
+          <span>{t("stats.detail.inputTokens")}</span>
+        </div>
+      ) : null}
       <div className="stats-panel-row stats-panel-row-block">
         <strong>{t("stats.detail.models")}</strong>
         <span>{stats.modelsUsed.length > 0 ? stats.modelsUsed.join(", ") : t("stats.noData")}</span>

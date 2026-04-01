@@ -12,6 +12,13 @@ function formatCompactNumber(value: number) {
   return String(value);
 }
 
+function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h${m}m`;
+}
+
 export function SessionStatsBadge({ stats, isLoading }: Props) {
   const { t } = useI18n();
 
@@ -27,7 +34,7 @@ export function SessionStatsBadge({ stats, isLoading }: Props) {
     <div className="stats-badge-row">
       <span className="stats-badge">{formatCompactNumber(stats.interactionCount)} {t("stats.turns")}</span>
       <span className="stats-badge">{formatCompactNumber(stats.outputTokens)} {t("stats.tokens")}</span>
-      <span className="stats-badge">{formatCompactNumber(stats.durationMinutes)} {t("stats.duration")}</span>
+      <span className="stats-badge">{formatDuration(stats.durationMinutes)}</span>
       {stats.isLive ? <span className="stats-badge">LIVE</span> : null}
     </div>
   );

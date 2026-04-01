@@ -27,6 +27,7 @@ export type AppSettings = {
 
 export type SessionStats = {
     outputTokens: number;
+    inputTokens: number;
     interactionCount: number;
     toolCallCount: number;
     durationMinutes: number;

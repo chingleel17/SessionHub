@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: 固定 Dashboard 分頁
 系統 SHALL 在分頁列最左側顯示固定的 Dashboard 分頁，不可關閉。

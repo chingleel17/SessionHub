@@ -34,7 +34,7 @@ fn default_provider() -> String {
     "copilot".to_string()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionInfo {
     id: String,
@@ -84,6 +84,7 @@ struct SessionMeta {
 #[serde(rename_all = "camelCase")]
 struct SessionStats {
     output_tokens: u64,
+    input_tokens: u64,
     interaction_count: u32,
     tool_call_count: u32,
     duration_minutes: u64,
@@ -97,6 +98,7 @@ impl Default for SessionStats {
     fn default() -> Self {
         Self {
             output_tokens: 0,
+            input_tokens: 0,
             interaction_count: 0,
             tool_call_count: 0,
             duration_minutes: 0,
@@ -369,14 +371,19 @@ fn scan_opencode_sessions_internal(
         });
 
         sessions.push(SessionInfo {
-            id,
+            id: id.clone(),
             provider: "opencode".to_string(),
             cwd: worktree,
             summary,
             summary_count,
             created_at,
             updated_at,
-            session_dir: String::new(),
+            session_dir: opencode_root
+                .join("storage")
+                .join("message")
+                .join(&id)
+                .to_string_lossy()
+                .to_string(),
             parse_error: false,
             is_archived,
             notes: meta.notes,
@@ -412,6 +419,34 @@ fn settings_file_path() -> Result<PathBuf, String> {
 
 fn metadata_db_path() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join("metadata.db"))
+}
+
+fn session_cache_path() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join("session_cache.json"))
+}
+
+fn save_session_cache(sessions: &[SessionInfo]) -> Result<(), String> {
+    let cache_path = session_cache_path()?;
+    ensure_parent_dir(&cache_path)?;
+    let content = serde_json::to_string(sessions)
+        .map_err(|error| format!("failed to serialize session cache: {error}"))?;
+    fs::write(&cache_path, content)
+        .map_err(|error| format!("failed to write session cache: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_session_cache() -> Vec<SessionInfo> {
+    let Ok(cache_path) = session_cache_path() else {
+        return Vec::new();
+    };
+    if !cache_path.exists() {
+        return Vec::new();
+    }
+    let Ok(content) = fs::read_to_string(&cache_path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<SessionInfo>>(&content).unwrap_or_default()
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -682,6 +717,17 @@ fn init_db(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("failed to initialize session stats db: {error}"))?;
 
+    // Migration: 新增 input_tokens 欄位（舊資料庫相容）
+    if let Err(error) = connection.execute(
+        "ALTER TABLE session_stats ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        let error_message = error.to_string();
+        if !error_message.contains("duplicate column name") {
+            eprintln!("Warning: failed to add input_tokens column: {error}");
+        }
+    }
+
     Ok(())
 }
 
@@ -693,7 +739,7 @@ fn get_session_stats_cache(
         .prepare(
             "
             SELECT events_mtime, output_tokens, interaction_count, tool_call_count,
-                   duration_minutes, models_used, reasoning_count, tool_breakdown
+                   duration_minutes, models_used, reasoning_count, tool_breakdown, input_tokens
             FROM session_stats
             WHERE session_id = ?1
             ",
@@ -732,6 +778,9 @@ fn get_session_stats_cache(
                     output_tokens: row
                         .get(1)
                         .map_err(|error| format!("failed to read output_tokens column: {error}"))?,
+                    input_tokens: row
+                        .get(8)
+                        .map_err(|error| format!("failed to read input_tokens column: {error}"))?,
                     interaction_count: row.get(2).map_err(|error| {
                         format!("failed to read interaction_count column: {error}")
                     })?,
@@ -769,13 +818,14 @@ fn upsert_session_stats_cache(
         .execute(
             "
             INSERT INTO session_stats (
-                session_id, events_mtime, output_tokens, interaction_count, tool_call_count,
-                duration_minutes, models_used, reasoning_count, tool_breakdown
+                session_id, events_mtime, output_tokens, input_tokens, interaction_count,
+                tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(session_id) DO UPDATE SET
                 events_mtime = excluded.events_mtime,
                 output_tokens = excluded.output_tokens,
+                input_tokens = excluded.input_tokens,
                 interaction_count = excluded.interaction_count,
                 tool_call_count = excluded.tool_call_count,
                 duration_minutes = excluded.duration_minutes,
@@ -787,6 +837,7 @@ fn upsert_session_stats_cache(
                 session_id,
                 events_mtime,
                 stats.output_tokens,
+                stats.input_tokens,
                 stats.interaction_count,
                 stats.tool_call_count,
                 stats.duration_minutes,
@@ -949,12 +1000,233 @@ fn parse_session_stats_internal(session_dir: &Path) -> Result<SessionStats, Stri
     Ok(stats)
 }
 
+// ── OpenCode JSON Storage 解析 ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct OpencodeTokens {
+    #[serde(default)]
+    input: Option<u64>,
+    #[serde(default)]
+    output: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpencodeMessageTime {
+    #[serde(default)]
+    created: Option<i64>,
+    #[serde(default)]
+    completed: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpencodeMessage {
+    id: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    time: Option<OpencodeMessageTime>,
+    #[serde(default)]
+    tokens: Option<OpencodeTokens>,
+    #[serde(default)]
+    model_id: Option<String>,
+}
+
+/// 判斷 session_dir 是否為 OpenCode session（目錄名以 ses_ 開頭）
+fn is_opencode_session_dir(session_dir: &Path) -> bool {
+    session_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("ses_"))
+        .unwrap_or(false)
+}
+
+/// 判斷 OpenCode message 目錄是否為活躍狀態（最近 5 分鐘內有修改）
+fn is_opencode_session_live(message_dir: &Path) -> bool {
+    let mtime = dir_mtime_secs(message_dir);
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    now - mtime < 300
+}
+
+/// 解析單一 msg_*.json 檔案為 OpencodeMessage
+fn parse_opencode_message_json(path: &Path) -> Option<OpencodeMessage> {
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<OpencodeMessage>(&content).ok()
+}
+
+/// 掃描 storage/message/{sessionID}/ 目錄，回傳所有 OpencodeMessage
+fn scan_opencode_message_dir(message_dir: &Path) -> Vec<OpencodeMessage> {
+    if !message_dir.exists() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(message_dir) else {
+        return Vec::new();
+    };
+    let mut messages = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if let Some(msg) = parse_opencode_message_json(&path) {
+                messages.push(msg);
+            }
+        }
+    }
+    messages
+}
+
+/// 掃描 storage/part/{messageID}/ 目錄，回傳 type=tool 的工具名稱清單
+fn scan_opencode_parts_for_message(storage_root: &Path, message_id: &str) -> Vec<String> {
+    let part_dir = storage_root.join("part").join(message_id);
+    if !part_dir.exists() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(&part_dir) else {
+        return Vec::new();
+    };
+    let mut tools = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) == Some("tool") {
+            let tool_name = value
+                .pointer("/state/tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            tools.push(tool_name);
+        }
+    }
+    tools
+}
+
+/// 計算 OpenCode session 的統計資料
+/// message_dir: storage/message/{sessionID}/
+fn calculate_opencode_session_stats(message_dir: &Path) -> Result<SessionStats, String> {
+    let storage_root = message_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or_else(|| "cannot determine storage root from message_dir".to_string())?;
+
+    let messages = scan_opencode_message_dir(message_dir);
+    if messages.is_empty() {
+        return Ok(SessionStats::default());
+    }
+
+    let mut stats = SessionStats::default();
+    let mut models_used = BTreeSet::new();
+    let mut min_time: Option<i64> = None;
+    let mut max_time: Option<i64> = None;
+
+    for msg in &messages {
+        // 追蹤時間範圍
+        if let Some(time) = &msg.time {
+            let t = time.completed.or(time.created);
+            if let Some(t) = t {
+                min_time = Some(min_time.map_or(t, |m: i64| m.min(t)));
+                max_time = Some(max_time.map_or(t, |m: i64| m.max(t)));
+            }
+        }
+
+        match msg.role.as_str() {
+            "user" => {
+                stats.interaction_count += 1;
+            }
+            "assistant" => {
+                if let Some(tokens) = &msg.tokens {
+                    stats.output_tokens += tokens.output.unwrap_or(0);
+                    stats.input_tokens += tokens.input.unwrap_or(0);
+                    if tokens.reasoning.unwrap_or(0) > 0 {
+                        stats.reasoning_count += 1;
+                    }
+                }
+                if let Some(model) = msg.model_id.as_deref().filter(|m| !m.is_empty()) {
+                    models_used.insert(model.to_string());
+                }
+                // 掃描 part 目錄取得工具呼叫
+                let tool_names = scan_opencode_parts_for_message(storage_root, &msg.id);
+                for tool_name in tool_names {
+                    stats.tool_call_count += 1;
+                    *stats.tool_breakdown.entry(tool_name).or_insert(0) += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    stats.models_used = models_used.into_iter().collect();
+
+    if let (Some(min_t), Some(max_t)) = (min_time, max_time) {
+        let diff_ms = max_t - min_t;
+        if diff_ms > 0 {
+            stats.duration_minutes = (diff_ms as u64) / 60_000;
+        }
+    }
+
+    Ok(stats)
+}
+
+/// OpenCode stats 的快取讀取、計算、寫入入口
+fn get_opencode_session_stats_internal(
+    connection: &Connection,
+    message_dir: &Path,
+    session_id: &str,
+) -> Result<SessionStats, String> {
+    if !message_dir.exists() {
+        return Ok(SessionStats::default());
+    }
+
+    let is_live = is_opencode_session_live(message_dir);
+    let dir_mtime = dir_mtime_secs(message_dir);
+
+    if !is_live {
+        if let Some((cached_mtime, mut cached_stats)) =
+            get_session_stats_cache(connection, session_id)?
+        {
+            if cached_mtime == dir_mtime {
+                cached_stats.is_live = false;
+                return Ok(cached_stats);
+            }
+        }
+    }
+
+    let mut stats = calculate_opencode_session_stats(message_dir)?;
+    stats.is_live = is_live;
+
+    if !stats.is_live {
+        upsert_session_stats_cache(connection, session_id, dir_mtime, &stats)?;
+    }
+
+    Ok(stats)
+}
+
+// ── End OpenCode JSON Storage 解析 ───────────────────────────────────────────
+
 fn get_session_stats_internal(
     connection: &Connection,
     session_dir: &str,
 ) -> Result<SessionStats, String> {
     let session_path = PathBuf::from(session_dir);
     let session_id = session_id_from_dir(&session_path);
+
+    // OpenCode session：session_dir 為 storage/message/{ses_xxx}，目錄名以 ses_ 開頭
+    if is_opencode_session_dir(&session_path) {
+        return get_opencode_session_stats_internal(connection, &session_path, &session_id);
+    }
+
+    // Copilot session：原有邏輯
     let events_path = session_path.join("events.jsonl");
     let is_live = is_live_session(&session_path)?;
 
@@ -1818,6 +2090,12 @@ fn get_sessions(
     }
 
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    // 掃描完成後儲存快取（失敗不影響主流程）
+    if let Err(error) = save_session_cache(&all_sessions) {
+        eprintln!("session cache save error (ignored): {error}");
+    }
+
     Ok(all_sessions)
 }
 
@@ -2417,6 +2695,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
+            load_session_cache,
             get_settings,
             save_settings,
             detect_terminal,

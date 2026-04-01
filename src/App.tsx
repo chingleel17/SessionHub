@@ -20,18 +20,27 @@ import { Sidebar } from "./components/Sidebar";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function getProjectKey(session: SessionInfo, uncategorizedLabel: string) {
-  return session.cwd?.trim() || uncategorizedLabel;
+function normalizePath(path: string): string {
+  // Windows 路徑大小寫不敏感，正規化為小寫用於分組比對
+  return path.toLowerCase();
+}
+
+function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
+  const raw = session.cwd?.trim();
+  if (!raw) return uncategorizedLabel;
+  return normalizePath(raw);
 }
 
 function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string, locale: string): ProjectGroup[] {
-  const groupMap = new Map<string, SessionInfo[]>();
+  const groupMap = new Map<string, { displayPath: string; sessions: SessionInfo[] }>();
 
   for (const session of sessions) {
     const key = getProjectKey(session, uncategorizedLabel);
-    const bucket = groupMap.get(key) ?? [];
-    bucket.push(session);
-    groupMap.set(key, bucket);
+    const displayPath = session.cwd?.trim() || uncategorizedLabel;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, { displayPath, sessions: [] });
+    }
+    groupMap.get(key)!.sessions.push(session);
   }
 
   const getTitle = (pathLabel: string) => {
@@ -41,10 +50,10 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string,
   };
 
   return Array.from(groupMap.entries())
-    .map(([pathLabel, groupedSessions]) => ({
-      key: pathLabel,
-      title: getTitle(pathLabel),
-      pathLabel,
+    .map(([key, { displayPath, sessions: groupedSessions }]) => ({
+      key,
+      title: getTitle(displayPath),
+      pathLabel: displayPath,
       sessions: groupedSessions.sort((a, b) =>
         (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
       ),
@@ -110,6 +119,14 @@ function App() {
     queryFn: () => invoke<AppSettings>("get_settings"),
   });
 
+  // 啟動時立即讀取上次快取，避免白屏等待
+  const cachedSessionsQuery = useQuery({
+    queryKey: ["sessions_cache"],
+    queryFn: () => invoke<SessionInfo[]>("load_session_cache"),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
   const sessionsQuery = useQuery({
     queryKey: [
       "sessions",
@@ -120,6 +137,7 @@ function App() {
       forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
+    placeholderData: cachedSessionsQuery.data,
     queryFn: () =>
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
@@ -157,7 +175,7 @@ function App() {
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
       });
-      setPinnedProjects(settingsQuery.data.pinnedProjects ?? []);
+      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
   }, [settingsQuery.data]);
 
@@ -410,18 +428,36 @@ function App() {
     return invoke<string>("read_plan_content", { filePath });
   };
 
-  const dashboardTotals = useMemo(
-    () => Object.values(sessionStatsMap).reduce(
-      (acc, stats) => {
+  const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
+
+  const filteredDashboardTotals = useMemo(() => {
+    const now = new Date();
+    let periodStart: Date;
+    if (dashboardPeriod === "week") {
+      // 週一 00:00:00（ISO week）
+      periodStart = new Date(now);
+      periodStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      periodStart.setHours(0, 0, 0, 0);
+    } else {
+      // 當月 1 日 00:00:00
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    const periodStartTime = periodStart.getTime();
+
+    return (sessionsQuery.data ?? []).reduce(
+      (acc, session) => {
+        if (!session.updatedAt) return acc;
+        const updatedAtTime = Date.parse(session.updatedAt);
+        if (Number.isNaN(updatedAtTime) || updatedAtTime < periodStartTime) return acc;
+        const stats = sessionStatsMap[session.id];
         if (!stats) return acc;
         acc.totalOutputTokens += stats.outputTokens;
         acc.totalInteractions += stats.interactionCount;
         return acc;
       },
       { totalOutputTokens: 0, totalInteractions: 0 },
-    ),
-    [sessionStatsMap],
-  );
+    );
+  }, [dashboardPeriod, sessionsQuery.data, sessionStatsMap]);
 
   const planPreviewHtml = useMemo(
     () =>
@@ -624,6 +660,7 @@ function App() {
         isSidebarCollapsed={isSidebarCollapsed}
         realtimeStatus={realtimeStatus}
         lastRealtimeSyncAt={lastRealtimeSyncAt}
+        sessionsIsFetching={sessionsQuery.isFetching}
         pinnedProjects={pinnedProjects}
         projectGroups={groupedProjects}
         onNavigate={(view) => setActiveView(view)}
@@ -644,9 +681,11 @@ function App() {
                     : activeProject?.title ?? ""}
               </h2>
               <p className="workspace-subtitle">
-                {activeView === "settings"
-                  ? t("settings.subtitle")
-                  : activeProject?.pathLabel ?? ""}
+                {activeView === "dashboard"
+                  ? t("dashboard.subtitle")
+                  : activeView === "settings"
+                    ? t("settings.subtitle")
+                    : activeProject?.pathLabel ?? ""}
               </p>
             </div>
           </header>
@@ -703,12 +742,15 @@ function App() {
           {activeView === "dashboard" ? (
             <DashboardView
               sessionsIsLoading={sessionsQuery.isLoading}
+              sessionsIsFetching={sessionsQuery.isFetching}
               sessionsIsError={sessionsQuery.isError}
               sessionsError={sessionsQuery.error}
               groupedProjects={groupedProjects}
               recentSessions={recentSessions}
-              totalOutputTokens={dashboardTotals.totalOutputTokens}
-              totalInteractions={dashboardTotals.totalInteractions}
+              dashboardPeriod={dashboardPeriod}
+              onPeriodChange={setDashboardPeriod}
+              filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
+              filteredTotalInteractions={filteredDashboardTotals.totalInteractions}
               onOpenProject={openProjectTab}
               onOpenRecentSession={(session) =>
                 openProjectTab(getProjectKey(session, uncategorizedLabel))

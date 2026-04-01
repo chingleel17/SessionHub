@@ -3,15 +3,35 @@ import type { ProjectGroup, SessionInfo } from "../types";
 
 type Props = {
   sessionsIsLoading: boolean;
+  sessionsIsFetching: boolean;
   sessionsIsError: boolean;
   sessionsError: unknown;
   groupedProjects: ProjectGroup[];
   recentSessions: SessionInfo[];
-  totalOutputTokens: number;
-  totalInteractions: number;
+  dashboardPeriod: "week" | "month";
+  onPeriodChange: (period: "week" | "month") => void;
+  filteredTotalOutputTokens: number;
+  filteredTotalInteractions: number;
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
 };
+
+const RECENT_TITLE_MAX_LEN = 80;
+const PROJECT_LAST_SESSION_MAX_LEN = 60;
+
+function truncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+}
+
+function getSessionTitle(session: SessionInfo) {
+  return session.summary?.trim() || session.id;
+}
+
+function getProjectShortName(cwd?: string | null): string | null {
+  if (!cwd) return null;
+  const parts = cwd.replace(/\//g, "\\").split("\\").filter(Boolean);
+  return parts[parts.length - 1] ?? null;
+}
 
 function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
@@ -19,81 +39,82 @@ function formatCompactNumber(value: number) {
   return String(value);
 }
 
-function getSessionTitle(session: SessionInfo) {
-  return session.summary?.trim() || session.id;
-}
-
 export function DashboardView({
   sessionsIsLoading,
+  sessionsIsFetching,
   sessionsIsError,
   sessionsError,
   groupedProjects,
   recentSessions,
-  totalOutputTokens,
-  totalInteractions,
+  dashboardPeriod,
+  onPeriodChange,
+  filteredTotalOutputTokens,
+  filteredTotalInteractions,
   onOpenProject,
   onOpenRecentSession,
 }: Props) {
   const { t } = useI18n();
 
-  const loadingStatsValue = sessionsIsLoading
-    ? "..."
-    : groupedProjects.reduce((sum, p) => sum + p.sessions.length, 0);
+  const totalSessionCount = groupedProjects.reduce((sum, p) => sum + p.sessions.length, 0);
   const activeProjectCount = groupedProjects.length;
   const allSessions = groupedProjects.flatMap((p) => p.sessions);
   const archivedCount = allSessions.filter((s) => s.isArchived).length;
   const parseErrorCount = allSessions.filter((s) => s.parseError).length;
 
-  const providerCounts: Record<string, number> = {};
-  for (const session of allSessions) {
-    const key = session.provider ?? "copilot";
-    providerCounts[key] = (providerCounts[key] ?? 0) + 1;
-  }
-  const providerEntries = Object.entries(providerCounts).sort(
-    ([, a], [, b]) => b - a,
-  );
-  const hasMultipleProviders = providerEntries.length > 1;
+  const loading = sessionsIsLoading;
+  const fetching = sessionsIsFetching;
 
   return (
     <section className="dashboard-layout">
-      <section className="stats-grid">
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.totalSessions")}</span>
-          <strong>{loadingStatsValue}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.activeProjects")}</span>
-          <strong>{sessionsIsLoading ? "..." : activeProjectCount}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.archivedSessions")}</span>
-          <strong>{sessionsIsLoading ? "..." : archivedCount}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.parseErrors")}</span>
-          <strong>{sessionsIsLoading ? "..." : parseErrorCount}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.totalTokens")}</span>
-          <strong>{sessionsIsLoading ? "..." : formatCompactNumber(totalOutputTokens)}</strong>
-        </article>
-        <article className="stat-card">
-          <span className="stat-label">{t("dashboard.stats.totalInteractions")}</span>
-          <strong>{sessionsIsLoading ? "..." : formatCompactNumber(totalInteractions)}</strong>
-        </article>
-        {hasMultipleProviders ? (
-          <article className="stat-card">
-            <span className="stat-label">{t("dashboard.stats.providerDistribution")}</span>
-            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {providerEntries.map(([provider, count]) => (
-                <span key={provider} className={`provider-tag provider-tag--${provider}`}>
-                  {provider === "copilot" ? "Copilot" : provider === "opencode" ? "OpenCode" : provider}: {count}
-                </span>
-              ))}
-            </div>
-          </article>
-        ) : null}
-      </section>
+      <div className="stat-bar">
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">🗂</span>
+          <strong className="stat-bar-value">{loading ? "..." : formatCompactNumber(totalSessionCount)}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.totalSessions")}</span>
+        </div>
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">📁</span>
+          <strong className="stat-bar-value">{loading ? "..." : activeProjectCount}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.activeProjects")}</span>
+        </div>
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">📦</span>
+          <strong className="stat-bar-value">{loading ? "..." : archivedCount}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.archivedSessions")}</span>
+        </div>
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">⚠</span>
+          <strong className="stat-bar-value">{loading ? "..." : parseErrorCount}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.parseErrors")}</span>
+        </div>
+        <div className="stat-bar-separator" />
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">🪙</span>
+          <strong className="stat-bar-value">{loading ? "..." : formatCompactNumber(filteredTotalOutputTokens)}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.totalTokens")}</span>
+        </div>
+        <div className="stat-bar-item">
+          <span className="stat-bar-icon">💬</span>
+          <strong className="stat-bar-value">{loading ? "..." : formatCompactNumber(filteredTotalInteractions)}</strong>
+          <span className="stat-bar-label">{t("dashboard.stats.totalInteractions")}</span>
+        </div>
+        <div className="period-toggle">
+          <button
+            type="button"
+            className={`period-toggle-btn${dashboardPeriod === "week" ? " active" : ""}`}
+            onClick={() => onPeriodChange("week")}
+          >
+            {t("dashboard.stats.period.week")}
+          </button>
+          <button
+            type="button"
+            className={`period-toggle-btn${dashboardPeriod === "month" ? " active" : ""}`}
+            onClick={() => onPeriodChange("month")}
+          >
+            {t("dashboard.stats.period.month")}
+          </button>
+        </div>
+        </div>
 
       {sessionsIsError ? (
         <article className="info-card status-card status-card-error">
@@ -114,47 +135,68 @@ export function DashboardView({
           </div>
 
           <div className="project-list">
-            {groupedProjects.map((project) => (
-              <button
-                key={project.key}
-                type="button"
-                className="project-item"
-                onClick={() => onOpenProject(project.key)}
-              >
-                <div>
-                  <strong>{project.title}</strong>
-                  <p>{project.pathLabel}</p>
-                </div>
+            {groupedProjects.map((project) => {
+              const lastSession = project.sessions[0];
+              const lastSessionTitle = lastSession?.summary?.trim() || null;
+              return (
+                <button
+                  key={project.key}
+                  type="button"
+                  className="project-item"
+                  onClick={() => onOpenProject(project.key)}
+                >
+                  <div className="project-item-info">
+                    <strong>{project.title}</strong>
+                    <p>{project.pathLabel}</p>
+                    {lastSessionTitle ? (
+                      <p className="project-last-session-title">
+                        {truncate(lastSessionTitle, PROJECT_LAST_SESSION_MAX_LEN)}
+                      </p>
+                    ) : null}
+                  </div>
 
-                <div className="project-meta">
-                  <span>
-                    {project.sessions.length} {t("dashboard.projects.sessionCountSuffix")}
-                  </span>
-                  <span>{project.updatedAtLabel}</span>
-                </div>
-              </button>
-            ))}
+                  <div className="project-meta">
+                    <span>
+                      {project.sessions.length} {t("dashboard.projects.sessionCountSuffix")}
+                    </span>
+                    <span>{project.updatedAtLabel}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </article>
 
         <article className="info-card">
           <div className="section-heading">
             <h3>{t("dashboard.recent.title")}</h3>
-            <span>{t("dashboard.recent.subtitle")}</span>
+            <span className="recent-subtitle-row">
+              <span>{fetching ? t("dashboard.status.scanning") : t("dashboard.recent.subtitle")}</span>
+            </span>
           </div>
 
           <ul className="feature-list feature-list-tight">
-            {recentSessions.map((session) => (
-              <li key={session.id}>
-                <button
-                  type="button"
-                  className="inline-link"
-                  onClick={() => onOpenRecentSession(session)}
-                >
-                  {getSessionTitle(session)}
-                </button>
-              </li>
-            ))}
+            {recentSessions.map((session) => {
+              const fullTitle = getSessionTitle(session);
+              const projectName = getProjectShortName(session.cwd);
+              return (
+                <li key={session.id}>
+                  <div className="recent-session-item">
+                    <button
+                      type="button"
+                      className="inline-link"
+                      title={fullTitle}
+                      onClick={() => onOpenRecentSession(session)}
+                    >
+                      {truncate(fullTitle, RECENT_TITLE_MAX_LEN)}
+                    </button>
+                    {projectName ? (
+                      <span className="recent-session-project">{projectName}</span>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </article>
       </section>

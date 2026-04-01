@@ -241,6 +241,7 @@ textarea {
   justify-content: space-between;
   gap: 16px;
   padding: 20px 20px 0;
+  min-height: 82px;
 }
 
 .workspace-content {
@@ -261,6 +262,11 @@ textarea {
   margin: 0;
   color: var(--color-text-secondary);
   line-height: 1.6;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 500px;
 }
 
 .topbar-actions {
@@ -495,6 +501,88 @@ textarea {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.stat-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 0 12px;
+  min-height: 64px;
+  max-height: 72px;
+  overflow-x: auto;
+}
+
+.stat-bar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 14px;
+  flex: 1;
+  min-width: 64px;
+  text-align: center;
+}
+
+.stat-bar-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.stat-bar-value {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--color-text-primary);
+}
+
+.stat-bar-label {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.stat-bar-separator {
+  width: 1px;
+  height: 32px;
+  background: var(--color-border);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+.period-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+
+.period-toggle-btn {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.period-toggle-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.period-toggle-btn.active {
+  background: var(--color-accent);
+  color: var(--color-on-accent, #fff);
+  border-color: var(--color-accent);
+}
+
 .stats-grid-project {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -517,7 +605,7 @@ textarea {
 .content-grid {
   display: grid;
   gap: 24px;
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
 }
 
 .settings-layout {
@@ -893,6 +981,7 @@ textarea {
   background: transparent;
   color: var(--color-action-primary);
   cursor: pointer;
+  text-align: left;
 }
 
 .feature-list-tight {
@@ -981,6 +1070,7 @@ textarea {
   background: var(--color-surface-panel);
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .project-item strong {
@@ -993,6 +1083,24 @@ textarea {
   margin: 0;
   color: var(--color-text-secondary);
   line-height: 1.6;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-last-session-title {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
 }
 
 .project-meta {
@@ -1001,12 +1109,47 @@ textarea {
   color: var(--color-text-secondary);
   font-size: 13px;
   text-align: right;
+  flex-shrink: 0;
 }
 
 .feature-list {
   margin: 0;
   padding-left: 18px;
   color: var(--color-text-secondary);
+}
+
+.recent-session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.recent-session-item .inline-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.recent-session-project {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-surface-hover, rgba(0,0,0,0.05));
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.recent-subtitle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .sidebar-collapsed .sidebar {
@@ -1021,10 +1164,14 @@ textarea {
 .sidebar-collapsed .sidebar-brand-copy,
 .sidebar-collapsed .sidebar-panel,
 .sidebar-collapsed .sidebar-footer-button,
-.sidebar-collapsed .sidebar-version,
 .sidebar-collapsed .sidebar-realtime-label,
 .sidebar-collapsed .sidebar-link span:not(.sidebar-link-icon) {
   display: none;
+}
+
+.sidebar-collapsed .sidebar-version {
+  text-align: center;
+  font-size: 0.7rem;
 }
 
 .sidebar-collapsed .sidebar-menu {

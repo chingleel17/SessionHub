@@ -11,6 +11,7 @@ type Props = {
   isSidebarCollapsed: boolean;
   realtimeStatus: RealtimeStatus;
   lastRealtimeSyncAt: string | null;
+  sessionsIsFetching: boolean;
   pinnedProjects: string[];
   projectGroups: ProjectGroup[];
   onNavigate: (view: string) => void;
@@ -27,6 +28,7 @@ export function Sidebar({
   isSidebarCollapsed,
   realtimeStatus,
   lastRealtimeSyncAt,
+  sessionsIsFetching,
   pinnedProjects,
   projectGroups,
   onNavigate,
@@ -42,11 +44,13 @@ export function Sidebar({
   const langBtnRef = useRef<HTMLButtonElement>(null);
 
   const realtimeLabel =
-    realtimeStatus === "error"
-      ? t("dashboard.status.realtimeError")
-      : realtimeStatus === "active"
-        ? t("dashboard.status.realtimeActive")
-        : t("dashboard.status.realtimeConnecting");
+    sessionsIsFetching
+      ? t("dashboard.status.scanning")
+      : realtimeStatus === "error"
+        ? t("dashboard.status.realtimeError")
+        : realtimeStatus === "active"
+          ? t("dashboard.status.realtimeActive")
+          : t("dashboard.status.realtimeConnecting");
 
   const togglePopover = (name: "language") => {
     const btnRef = langBtnRef;
@@ -253,7 +257,13 @@ export function Sidebar({
         ) : null}
 
         <div className="sidebar-version">
-          <strong>v{packageJson.version}</strong>
+          {isSidebarCollapsed ? (
+            <strong title={`v${packageJson.version}`}>
+              v{packageJson.version.split(".").slice(0, 2).join(".")}
+            </strong>
+          ) : (
+            <strong>v{packageJson.version}</strong>
+          )}
         </div>
 
         <div className="sidebar-realtime-row">
