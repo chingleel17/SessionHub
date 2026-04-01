@@ -94,6 +94,7 @@ function App() {
     "connecting",
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
+  const [forceFull, setForceFull] = useState(false);
 
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
@@ -116,6 +117,7 @@ function App() {
       settingsQuery.data?.opencodeRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
+      forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
     queryFn: () =>
@@ -124,6 +126,11 @@ function App() {
         opencodeRoot: settingsQuery.data?.opencodeRoot,
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
+        forceFull,
+      }).then((result) => {
+        // 全掃完成後重置 forceFull flag
+        if (forceFull) setForceFull(false);
+        return result;
       }),
   });
 
@@ -184,15 +191,18 @@ function App() {
   useEffect(() => {
     let mounted = true;
 
+    const onSessionsRefresh = async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      if (mounted) {
+        setRealtimeStatus("active");
+        setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
+        showToast(t("toast.sessionsUpdated"));
+      }
+    };
+
     const setup = async () => {
-      const unlistenSessions = await listen("sessions-updated", async () => {
-        await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-        if (mounted) {
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
-          showToast(t("toast.sessionsUpdated"));
-        }
-      });
+      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
+      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
 
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
         if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
@@ -203,7 +213,7 @@ function App() {
         }
       });
 
-      return () => { unlistenSessions(); unlistenPlan(); };
+      return () => { unlistenCopilot(); unlistenOpencode(); unlistenPlan(); };
     };
 
     let cleanup: (() => void) | undefined;
@@ -243,6 +253,7 @@ function App() {
       invoke("archive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionArchived"));
+      setForceFull(true);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -252,6 +263,7 @@ function App() {
       invoke("unarchive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionUnarchived"));
+      setForceFull(true);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -261,6 +273,7 @@ function App() {
       invoke("delete_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionDeleted"));
+      setForceFull(true);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -313,6 +326,7 @@ function App() {
       invoke<number>("delete_empty_sessions", { rootDir: settingsQuery.data?.copilotRoot }),
     onSuccess: async (count) => {
       showToast(t("toast.emptySessionsDeleted").replace("{count}", String(count)));
+      setForceFull(true);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });

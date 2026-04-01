@@ -1,11 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -32,7 +34,7 @@ fn default_provider() -> String {
     "copilot".to_string()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionInfo {
     id: String,
@@ -164,6 +166,32 @@ struct WatcherState {
     sessions: Mutex<Option<RecommendedWatcher>>,
     plan: Mutex<Option<RecommendedWatcher>>,
     opencode: Mutex<Option<RecommendedWatcher>>,
+}
+
+/// Copilot watcher 防抖時間（毫秒）
+const COPILOT_DEBOUNCE_MS: u64 = 800;
+/// OpenCode WAL watcher 防抖時間（毫秒）
+const OPENCODE_DEBOUNCE_MS: u64 = 500;
+/// 觸發全掃描的閾值（秒），超過此值自動執行全掃
+const FULL_SCAN_THRESHOLD_SECS: u64 = 1800;
+
+/// 單一 provider 的記憶體快取
+struct ProviderCache {
+    /// 上次掃描的結果
+    sessions: Vec<SessionInfo>,
+    /// Copilot 專用：session_id → 目錄最後修改時間（Unix 秒）
+    session_mtimes: HashMap<String, i64>,
+    /// 上次全掃描的時間點
+    last_full_scan_at: Instant,
+    /// OpenCode 專用：上次全掃描時見到的最大 time_updated 值
+    last_cursor: i64,
+}
+
+/// 兩個 provider 各自持有的掃描快取
+#[derive(Default)]
+struct ScanCache {
+    copilot: Mutex<Option<ProviderCache>>,
+    opencode: Mutex<Option<ProviderCache>>,
 }
 
 fn default_copilot_root() -> Result<PathBuf, String> {
@@ -407,9 +435,42 @@ fn create_sessions_watcher(
     root: &Path,
 ) -> Result<RecommendedWatcher, String> {
     let app_handle = app.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    // 標記 debounce thread 是否已在執行，避免高頻事件時重複 spawn
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
     let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
         if result.is_ok() {
-            let _ = app_handle.emit("sessions-updated", ());
+            // 更新最後事件時間戳
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+
+            // 若 debounce thread 已在跑，只更新時間即可，不再 spawn
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+
+            // spawn 唯一一個 debounce thread
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            thread::spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(COPILOT_DEBOUNCE_MS));
+                    let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                    if elapsed >= Duration::from_millis(COPILOT_DEBOUNCE_MS) {
+                        // 穩定後 emit 並結束 thread
+                        running.store(false, Ordering::SeqCst);
+                        let _ = handle.emit("copilot-sessions-updated", ());
+                        break;
+                    }
+                    // 尚未穩定（有新事件更新了 last_event），繼續等待
+                }
+            });
         }
     })
     .map_err(|error| format!("failed to create session watcher: {error}"))?;
@@ -448,9 +509,42 @@ fn create_opencode_watcher(
     }
 
     let app_handle = app.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    // 標記 debounce thread 是否已在執行，避免高頻事件時重複 spawn
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
     let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
         if result.is_ok() {
-            let _ = app_handle.emit("sessions-updated", ());
+            // 更新最後事件時間戳
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+
+            // 若 debounce thread 已在跑，只更新時間即可，不再 spawn
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+
+            // spawn 唯一一個 debounce thread
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            thread::spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
+                    let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                    if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
+                        // 穩定後 emit 並結束 thread
+                        running.store(false, Ordering::SeqCst);
+                        let _ = handle.emit("opencode-sessions-updated", ());
+                        break;
+                    }
+                    // 尚未穩定（有新事件更新了 last_event），繼續等待
+                }
+            });
         }
     })
     .map_err(|error| format!("failed to create opencode watcher: {error}"))?;
@@ -1062,48 +1156,232 @@ fn scan_session_dir(
     Ok(sessions)
 }
 
-fn scan_sessions(
-    copilot_root: &Path,
-    opencode_root: Option<&Path>,
-    show_archived: bool,
-    enabled_providers: &[String],
-) -> Result<Vec<SessionInfo>, String> {
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
+/// 判斷是否需要執行全掃描
+fn should_full_scan(cache: &Option<ProviderCache>, force_full: bool) -> bool {
+    if force_full {
+        return true;
+    }
+    match cache {
+        None => true,
+        Some(c) => c.last_full_scan_at.elapsed().as_secs() > FULL_SCAN_THRESHOLD_SECS,
+    }
+}
 
-    let mut sessions = Vec::new();
+/// 取得目錄的最後修改時間（Unix 秒），失敗時回傳 0
+fn dir_mtime_secs(path: &Path) -> i64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
-    // Copilot sessions
-    if enabled_providers.iter().any(|p| p == "copilot") {
-        let mut copilot_sessions =
-            scan_session_dir(&copilot_root.join("session-state"), false, &connection)?;
-
-        if show_archived {
-            copilot_sessions.extend(scan_session_dir(
-                &copilot_root.join("session-state-archive"),
-                true,
-                &connection,
-            )?);
-        }
-
-        sessions.extend(copilot_sessions);
+/// Copilot 增量掃描：只重新解析 mtime 有變化或新增的 session 目錄
+fn scan_copilot_incremental_internal(
+    session_state_dir: &Path,
+    is_archived: bool,
+    connection: &Connection,
+    cache: &mut ProviderCache,
+) -> Result<(), String> {
+    if !session_state_dir.exists() {
+        // 目錄消失則清空對應快取
+        cache.sessions.retain(|s| s.is_archived != is_archived);
+        return Ok(());
     }
 
-    // OpenCode sessions
-    if enabled_providers.iter().any(|p| p == "opencode") {
-        if let Some(oc_root) = opencode_root {
-            match scan_opencode_sessions_internal(oc_root, show_archived, &connection) {
-                Ok(oc_sessions) => sessions.extend(oc_sessions),
-                Err(error) => {
-                    eprintln!("opencode provider error (ignored): {error}");
-                }
+    let entries = fs::read_dir(session_state_dir)
+        .map_err(|error| format!("failed to read {}: {error}", session_state_dir.display()))?;
+
+    let mut current_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read session entry: {error}"))?;
+        let session_dir = entry.path();
+
+        if !session_dir.is_dir() {
+            continue;
+        }
+
+        let workspace_path = session_dir.join("workspace.yaml");
+        if !workspace_path.exists() {
+            continue;
+        }
+
+        let session_id = session_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        current_ids.insert(session_id.clone());
+
+        let current_mtime = dir_mtime_secs(&session_dir);
+        let cached_mtime = cache.session_mtimes.get(&session_id).copied().unwrap_or(-1);
+
+        if current_mtime != cached_mtime {
+            // mtime 有變化或新增：重新解析
+            let meta = read_session_meta(connection, &session_id)?;
+            let info = parse_workspace_file(&session_dir, &workspace_path, is_archived, meta);
+            // 更新 sessions 快取（replace or push）
+            if let Some(pos) = cache.sessions.iter().position(|s| s.id == session_id) {
+                cache.sessions[pos] = info;
+            } else {
+                cache.sessions.push(info);
+            }
+            cache.session_mtimes.insert(session_id, current_mtime);
+        }
+    }
+
+    // 移除已消失的 session（只處理對應 is_archived 的 bucket）
+    cache.sessions.retain(|s| {
+        if s.is_archived != is_archived {
+            return true; // 不同 bucket，保留
+        }
+        current_ids.contains(&s.id)
+    });
+    cache
+        .session_mtimes
+        .retain(|id, _| current_ids.contains(id.as_str()));
+
+    Ok(())
+}
+
+/// OpenCode 增量掃描：只查詢 time_updated > last_cursor 的 session
+fn scan_opencode_incremental_internal(
+    opencode_root: &Path,
+    show_archived: bool,
+    metadata_conn: &Connection,
+    cache: &mut ProviderCache,
+) -> Result<(), String> {
+    let oc_conn = match open_opencode_db_readonly(opencode_root) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("opencode incremental scan: {error}");
+            return Ok(());
+        }
+    };
+
+    let query = if show_archived {
+        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
+                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
+         FROM session s \
+         LEFT JOIN project p ON s.project_id = p.id \
+         WHERE s.time_updated > ?1 \
+         ORDER BY s.time_updated ASC"
+    } else {
+        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
+                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
+         FROM session s \
+         LEFT JOIN project p ON s.project_id = p.id \
+         WHERE s.time_updated > ?1 AND s.time_archived IS NULL \
+         ORDER BY s.time_updated ASC"
+    };
+
+    let mut statement = oc_conn
+        .prepare(query)
+        .map_err(|error| format!("opencode incremental query prepare error: {error}"))?;
+
+    let rows = statement
+        .query_map([cache.last_cursor], |row| {
+            let id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let time_created: Option<i64> = row.get(2)?;
+            let time_updated: Option<i64> = row.get(3)?;
+            let time_archived: Option<i64> = row.get(4)?;
+            let worktree: Option<String> = row.get(5)?;
+            let summary_additions: Option<i64> = row.get(6)?;
+            let summary_deletions: Option<i64> = row.get(7)?;
+            let summary_files: Option<i64> = row.get(8)?;
+            Ok((
+                id,
+                title,
+                time_created,
+                time_updated,
+                time_archived,
+                worktree,
+                summary_additions,
+                summary_deletions,
+                summary_files,
+            ))
+        })
+        .map_err(|error| format!("opencode incremental query error: {error}"))?;
+
+    let mut new_cursor = cache.last_cursor;
+
+    for row_result in rows {
+        let (
+            id,
+            title,
+            time_created,
+            time_updated,
+            time_archived,
+            worktree,
+            summary_additions,
+            summary_deletions,
+            summary_files,
+        ) = match row_result {
+            Ok(data) => data,
+            Err(error) => {
+                eprintln!("opencode incremental: failed to read row: {error}");
+                continue;
+            }
+        };
+
+        let is_archived = time_archived.is_some();
+        let created_at = time_created.and_then(unix_ms_to_iso8601);
+        let updated_at = time_updated.and_then(unix_ms_to_iso8601);
+
+        let summary = title;
+        let summary_count = {
+            let total = summary_additions.unwrap_or(0)
+                + summary_deletions.unwrap_or(0)
+                + summary_files.unwrap_or(0);
+            if total > 0 {
+                Some(total as u32)
+            } else {
+                None
+            }
+        };
+
+        let meta = read_session_meta(metadata_conn, &id).unwrap_or(SessionMeta {
+            notes: None,
+            tags: Vec::new(),
+        });
+
+        let info = SessionInfo {
+            id: id.clone(),
+            provider: "opencode".to_string(),
+            cwd: worktree,
+            summary,
+            summary_count,
+            created_at,
+            updated_at,
+            session_dir: String::new(),
+            parse_error: false,
+            is_archived,
+            notes: meta.notes,
+            tags: meta.tags,
+            has_plan: false,
+            has_events: false,
+        };
+
+        // upsert by session_id
+        if let Some(pos) = cache.sessions.iter().position(|s| s.id == id) {
+            cache.sessions[pos] = info;
+        } else {
+            cache.sessions.push(info);
+        }
+
+        // 更新 cursor 為見到的最大 time_updated
+        if let Some(ts) = time_updated {
+            if ts > new_cursor {
+                new_cursor = ts;
             }
         }
     }
 
-    sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-
-    Ok(sessions)
+    cache.last_cursor = new_cursor;
+    Ok(())
 }
 
 fn detect_terminal_path() -> Result<Option<String>, String> {
@@ -1406,23 +1684,141 @@ fn open_plan_external_internal(session_dir: &str, editor_cmd: Option<&str>) -> R
     Ok(())
 }
 
+/// 從 OpenCode DB 取得最大 time_updated 值，用於全掃描後設置 last_cursor
+fn get_opencode_max_cursor(opencode_root: &Path) -> Result<i64, String> {
+    let oc_conn = open_opencode_db_readonly(opencode_root)?;
+    let cursor: i64 = oc_conn
+        .query_row(
+            "SELECT COALESCE(MAX(time_updated), 0) FROM session",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to get max cursor: {e}"))?;
+    Ok(cursor)
+}
+
 #[tauri::command]
 fn get_sessions(
     root_dir: Option<String>,
     opencode_root: Option<String>,
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
+    force_full: Option<bool>,
+    scan_cache: State<'_, ScanCache>,
 ) -> Result<Vec<SessionInfo>, String> {
     let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
+    let show_archived = show_archived.unwrap_or(false);
+    let force = force_full.unwrap_or(false);
 
-    scan_sessions(
-        &resolved_copilot,
-        resolved_opencode.as_deref(),
-        show_archived.unwrap_or(false),
-        &providers,
-    )
+    let connection = open_db_connection()?;
+    init_db(&connection)?;
+
+    let mut all_sessions: Vec<SessionInfo> = Vec::new();
+
+    // ── Copilot provider ──────────────────────────────────────────────────────
+    if providers.iter().any(|p| p == "copilot") {
+        let mut copilot_guard = scan_cache
+            .copilot
+            .lock()
+            .map_err(|_| "failed to lock copilot scan cache".to_string())?;
+
+        if should_full_scan(&copilot_guard, force) {
+            // 全掃描
+            let mut sessions =
+                scan_session_dir(&resolved_copilot.join("session-state"), false, &connection)?;
+            if show_archived {
+                sessions.extend(scan_session_dir(
+                    &resolved_copilot.join("session-state-archive"),
+                    true,
+                    &connection,
+                )?);
+            }
+
+            // 建立 mtime 索引
+            let mut mtimes = HashMap::new();
+            for session in &sessions {
+                let dir = PathBuf::from(&session.session_dir);
+                mtimes.insert(session.id.clone(), dir_mtime_secs(&dir));
+            }
+
+            *copilot_guard = Some(ProviderCache {
+                sessions: sessions.clone(),
+                session_mtimes: mtimes,
+                last_full_scan_at: Instant::now(),
+                last_cursor: 0,
+            });
+
+            all_sessions.extend(sessions);
+        } else {
+            // 增量掃描
+            let cache = copilot_guard
+                .as_mut()
+                .expect("cache is Some after should_full_scan check");
+            scan_copilot_incremental_internal(
+                &resolved_copilot.join("session-state"),
+                false,
+                &connection,
+                cache,
+            )?;
+            if show_archived {
+                scan_copilot_incremental_internal(
+                    &resolved_copilot.join("session-state-archive"),
+                    true,
+                    &connection,
+                    cache,
+                )?;
+            }
+            all_sessions.extend(cache.sessions.iter().cloned());
+        }
+    }
+
+    // ── OpenCode provider ─────────────────────────────────────────────────────
+    if providers.iter().any(|p| p == "opencode") {
+        if let Some(oc_root) = &resolved_opencode {
+            let mut oc_guard = scan_cache
+                .opencode
+                .lock()
+                .map_err(|_| "failed to lock opencode scan cache".to_string())?;
+
+            if should_full_scan(&oc_guard, force) {
+                // 全掃描
+                match scan_opencode_sessions_internal(oc_root, show_archived, &connection) {
+                    Ok(sessions) => {
+                        // 計算 last_cursor（最大 time_updated）
+                        // OpenCode 的 time_updated 是毫秒 timestamp，從 ISO8601 反推不方便，
+                        // 直接查 DB 取最大值
+                        let max_cursor = get_opencode_max_cursor(oc_root).unwrap_or(0);
+                        *oc_guard = Some(ProviderCache {
+                            sessions: sessions.clone(),
+                            session_mtimes: HashMap::new(),
+                            last_full_scan_at: Instant::now(),
+                            last_cursor: max_cursor,
+                        });
+                        all_sessions.extend(sessions);
+                    }
+                    Err(error) => {
+                        eprintln!("opencode provider error (ignored): {error}");
+                    }
+                }
+            } else {
+                // 增量掃描
+                let cache = oc_guard
+                    .as_mut()
+                    .expect("cache is Some after should_full_scan check");
+                if let Err(e) =
+                    scan_opencode_incremental_internal(oc_root, show_archived, &connection, cache)
+                {
+                    eprintln!("opencode incremental scan error (ignored): {e}");
+                }
+                all_sessions.extend(cache.sessions.iter().cloned());
+            }
+        }
+    }
+
+    all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(all_sessions)
 }
 
 fn get_settings_internal() -> Result<AppSettings, String> {
@@ -2004,6 +2400,7 @@ fn read_plan_content(file_path: String) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(WatcherState::default())
+        .manage(ScanCache::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -2092,16 +2489,14 @@ mod tests {
         .expect("failed to write workspace yaml");
         fs::write(session_dir.join("plan.md"), "# Plan").expect("failed to write plan");
 
-        unsafe {
-            env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
-        }
-
-        let sessions = scan_sessions(&root_dir, None, false, &default_enabled_providers())
-            .expect("scan should succeed");
-
-        unsafe {
-            env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
-        }
+        // 在 with_appdata 閉包內開啟 DB，閉包結束後 connection 自動 drop，
+        // 確保 SQLite 檔案在 remove_dir_all 前已被釋放
+        let sessions = with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+            scan_session_dir(&root_dir.join("session-state"), false, &connection)
+                .expect("scan should succeed")
+        });
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "session-001");
@@ -2318,6 +2713,626 @@ mod tests {
         assert_eq!(stats.reasoning_count, 0);
 
         fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // should_full_scan
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn should_full_scan_returns_true_when_cache_is_none() {
+        // 快取為 None（首次啟動）→ 必須執行全掃
+        assert!(should_full_scan(&None, false));
+    }
+
+    #[test]
+    fn should_full_scan_returns_true_when_force_full_is_set() {
+        // force_full = true，無論快取狀態都必須全掃
+        let cache = Some(ProviderCache {
+            sessions: Vec::new(),
+            session_mtimes: HashMap::new(),
+            last_full_scan_at: Instant::now(),
+            last_cursor: 0,
+        });
+        assert!(should_full_scan(&cache, true));
+    }
+
+    #[test]
+    fn should_full_scan_returns_false_when_cache_is_fresh() {
+        // 快取剛建立（elapsed ≈ 0），不需全掃
+        let cache = Some(ProviderCache {
+            sessions: Vec::new(),
+            session_mtimes: HashMap::new(),
+            last_full_scan_at: Instant::now(),
+            last_cursor: 0,
+        });
+        assert!(!should_full_scan(&cache, false));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // dir_mtime_secs
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dir_mtime_secs_returns_zero_for_missing_path() {
+        let missing = std::env::temp_dir().join("session-hub-nonexistent-dir-xyz");
+        assert_eq!(dir_mtime_secs(&missing), 0);
+    }
+
+    #[test]
+    fn dir_mtime_secs_returns_positive_for_existing_dir() {
+        let dir = unique_test_dir("mtime");
+        fs::create_dir_all(&dir).expect("create dir");
+
+        let mtime = dir_mtime_secs(&dir);
+        assert!(mtime > 0, "mtime should be a positive unix timestamp");
+
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // scan_copilot_incremental_internal
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// 建立最小測試用 ProviderCache（空快取）
+    fn empty_copilot_cache() -> ProviderCache {
+        ProviderCache {
+            sessions: Vec::new(),
+            session_mtimes: HashMap::new(),
+            last_full_scan_at: Instant::now(),
+            last_cursor: 0,
+        }
+    }
+
+    #[test]
+    fn incremental_copilot_picks_up_new_session() {
+        // 對一個空快取執行增量掃描，應偵測到新建的 session 目錄
+        let _guard = test_lock().lock().expect("lock");
+        let root_dir = unique_test_dir("inc-new");
+        let appdata_dir = unique_test_dir("appdata");
+        let session_dir = root_dir.join("session-state").join("session-inc-001");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        fs::write(
+            session_dir.join("workspace.yaml"),
+            "id: session-inc-001\ncwd: D:\\repo\\demo\nsummary: Inc Test\nsummary_count: 1\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-02T00:00:00Z\n",
+        )
+        .expect("write workspace.yaml");
+
+        let sessions = with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
+            let mut cache = empty_copilot_cache();
+            scan_copilot_incremental_internal(
+                &root_dir.join("session-state"),
+                false,
+                &conn,
+                &mut cache,
+            )
+            .expect("incremental scan");
+            cache.sessions
+        });
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "session-inc-001");
+        assert_eq!(sessions[0].summary.as_deref(), Some("Inc Test"));
+        assert!(!sessions[0].is_archived);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_copilot_skips_unchanged_session() {
+        // mtime 未變化的 session 不應重新解析（快取命中）
+        let _guard = test_lock().lock().expect("lock");
+        let root_dir = unique_test_dir("inc-skip");
+        let appdata_dir = unique_test_dir("appdata");
+        let session_dir = root_dir.join("session-state").join("session-skip-001");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        fs::write(
+            session_dir.join("workspace.yaml"),
+            "id: session-skip-001\ncwd: D:\\repo\nsummary: Original\nsummary_count: 1\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n",
+        )
+        .expect("write workspace.yaml");
+
+        with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
+
+            // 第一次掃描：讀入快取並記錄 mtime
+            let mut cache = empty_copilot_cache();
+            scan_copilot_incremental_internal(
+                &root_dir.join("session-state"),
+                false,
+                &conn,
+                &mut cache,
+            )
+            .expect("first scan");
+            assert_eq!(cache.sessions.len(), 1);
+
+            // 手動竄改快取中的 summary，模擬「已有舊資料」
+            cache.sessions[0].summary = Some("Cached Value".to_string());
+
+            // 第二次掃描：mtime 未變，不應覆蓋快取內容
+            scan_copilot_incremental_internal(
+                &root_dir.join("session-state"),
+                false,
+                &conn,
+                &mut cache,
+            )
+            .expect("second scan");
+
+            // 快取命中，summary 仍是手動設定的值
+            assert_eq!(cache.sessions[0].summary.as_deref(), Some("Cached Value"));
+        });
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_copilot_removes_deleted_session() {
+        // 目錄被刪除後，再次增量掃描應從快取中移除對應 session
+        let _guard = test_lock().lock().expect("lock");
+        let root_dir = unique_test_dir("inc-del");
+        let appdata_dir = unique_test_dir("appdata");
+        let session_state = root_dir.join("session-state");
+        let session_dir = session_state.join("session-del-001");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        fs::write(
+            session_dir.join("workspace.yaml"),
+            "id: session-del-001\ncwd: D:\\repo\nsummary: To Delete\nsummary_count: 1\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n",
+        )
+        .expect("write workspace.yaml");
+
+        with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+
+            // 第一次掃描：快取 1 個 session
+            scan_copilot_incremental_internal(&session_state, false, &conn, &mut cache)
+                .expect("first scan");
+            assert_eq!(cache.sessions.len(), 1);
+
+            // 刪除目錄
+            fs::remove_dir_all(&session_dir).expect("remove session dir");
+
+            // 第二次掃描：session 應從快取消失
+            scan_copilot_incremental_internal(&session_state, false, &conn, &mut cache)
+                .expect("second scan");
+            assert!(
+                cache.sessions.is_empty(),
+                "deleted session should be removed from cache"
+            );
+            assert!(
+                cache.session_mtimes.is_empty(),
+                "mtime entry should be removed"
+            );
+        });
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_copilot_clears_cache_when_dir_missing() {
+        // session-state 目錄本身不存在時，對應 bucket 的快取應被清空
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("appdata");
+        let missing_dir = unique_test_dir("inc-missing").join("session-state");
+
+        // 預先塞入一筆假資料到快取
+        let mut cache = empty_copilot_cache();
+        cache.sessions.push(SessionInfo {
+            id: "ghost-session".to_string(),
+            provider: "copilot".to_string(),
+            cwd: None,
+            summary: None,
+            summary_count: None,
+            created_at: None,
+            updated_at: None,
+            session_dir: String::new(),
+            parse_error: false,
+            is_archived: false,
+            notes: None,
+            tags: Vec::new(),
+            has_plan: false,
+            has_events: false,
+        });
+
+        with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
+
+            scan_copilot_incremental_internal(&missing_dir, false, &conn, &mut cache)
+                .expect("scan on missing dir");
+
+            assert!(
+                cache.sessions.is_empty(),
+                "cache should be cleared when dir is missing"
+            );
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_copilot_preserves_other_bucket_on_dir_missing() {
+        // session-state 消失時，只清除 is_archived=false 的 bucket，
+        // is_archived=true 的 session 應保留
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("appdata");
+        let missing_dir = unique_test_dir("inc-bucket").join("session-state");
+
+        let mut cache = empty_copilot_cache();
+        // 塞入 active session（is_archived=false）
+        cache.sessions.push(SessionInfo {
+            id: "active-session".to_string(),
+            provider: "copilot".to_string(),
+            cwd: None,
+            summary: None,
+            summary_count: None,
+            created_at: None,
+            updated_at: None,
+            session_dir: String::new(),
+            parse_error: false,
+            is_archived: false,
+            notes: None,
+            tags: Vec::new(),
+            has_plan: false,
+            has_events: false,
+        });
+        // 塞入 archived session（is_archived=true）
+        cache.sessions.push(SessionInfo {
+            id: "archived-session".to_string(),
+            provider: "copilot".to_string(),
+            cwd: None,
+            summary: None,
+            summary_count: None,
+            created_at: None,
+            updated_at: None,
+            session_dir: String::new(),
+            parse_error: false,
+            is_archived: true,
+            notes: None,
+            tags: Vec::new(),
+            has_plan: false,
+            has_events: false,
+        });
+
+        with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
+
+            // 掃描 is_archived=false 的目錄（不存在）→ 只清除 active bucket
+            scan_copilot_incremental_internal(&missing_dir, false, &conn, &mut cache)
+                .expect("scan");
+
+            assert_eq!(
+                cache.sessions.len(),
+                1,
+                "only archived session should remain"
+            );
+            assert_eq!(cache.sessions[0].id, "archived-session");
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // scan_opencode_incremental_internal
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// 建立最小的 opencode.db，包含指定 session 資料
+    fn create_opencode_db(dir: &Path, sessions: &[(&str, &str, i64, i64, Option<i64>)]) {
+        // sessions 欄位：(id, title, time_created, time_updated, time_archived)
+        let db_path = dir.join("opencode.db");
+        let conn = Connection::open(&db_path).expect("create opencode.db");
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project (
+                id TEXT PRIMARY KEY,
+                worktree TEXT
+             );
+             CREATE TABLE IF NOT EXISTS session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                time_archived INTEGER,
+                project_id TEXT,
+                summary_additions INTEGER,
+                summary_deletions INTEGER,
+                summary_files INTEGER
+             );",
+        )
+        .expect("create tables");
+
+        for (id, title, time_created, time_updated, time_archived) in sessions {
+            conn.execute(
+                "INSERT INTO session (id, title, time_created, time_updated, time_archived)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, title, time_created, time_updated, time_archived],
+            )
+            .expect("insert session");
+        }
+    }
+
+    #[test]
+    fn incremental_opencode_picks_up_new_session() {
+        // cursor = 0 時應掃到所有 session
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-new");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(&oc_dir, &[("oc-session-001", "OC Title", 1000, 2000, None)]);
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache(); // cursor = 0
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("incremental scan");
+
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "oc-session-001");
+            assert_eq!(cache.sessions[0].provider, "opencode");
+            assert_eq!(cache.sessions[0].summary.as_deref(), Some("OC Title"));
+            assert_eq!(
+                cache.last_cursor, 2000,
+                "cursor should advance to max time_updated"
+            );
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_cursor_advances_after_scan() {
+        // 掃描後 cursor 應更新為最大 time_updated
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-cursor");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(
+            &oc_dir,
+            &[
+                ("oc-a", "A", 1000, 3000, None),
+                ("oc-b", "B", 1000, 5000, None),
+                ("oc-c", "C", 1000, 4000, None),
+            ],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("scan");
+
+            assert_eq!(cache.sessions.len(), 3);
+            assert_eq!(cache.last_cursor, 5000, "cursor should be max time_updated");
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_skips_sessions_before_cursor() {
+        // cursor 設為 3000，time_updated <= 3000 的 session 不應被撈到
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-skip");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(
+            &oc_dir,
+            &[
+                ("oc-old", "Old", 1000, 2000, None),
+                ("oc-new", "New", 1000, 5000, None),
+            ],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = ProviderCache {
+                sessions: Vec::new(),
+                session_mtimes: HashMap::new(),
+                last_full_scan_at: Instant::now(),
+                last_cursor: 3000, // 只掃 time_updated > 3000
+            };
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("scan");
+
+            assert_eq!(
+                cache.sessions.len(),
+                1,
+                "only new session should be picked up"
+            );
+            assert_eq!(cache.sessions[0].id, "oc-new");
+            assert_eq!(cache.last_cursor, 5000);
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_upserts_existing_session() {
+        // cursor 推進後，若同一 session time_updated 再次超過 cursor 應 upsert 而非 duplicate
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-upsert");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(&oc_dir, &[("oc-x", "Title v1", 1000, 2000, None)]);
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+
+            // 第一次掃描
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("first scan");
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.last_cursor, 2000);
+
+            // 手動更新 DB 模擬 session 被修改（time_updated 推進）
+            let db_path = oc_dir.join("opencode.db");
+            let oc_conn = Connection::open(&db_path).expect("reopen db");
+            oc_conn
+                .execute(
+                    "UPDATE session SET title = 'Title v2', time_updated = 4000 WHERE id = 'oc-x'",
+                    [],
+                )
+                .expect("update session");
+
+            // 第二次增量掃描：只撈 time_updated > 2000
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("second scan");
+
+            assert_eq!(cache.sessions.len(), 1, "should upsert, not duplicate");
+            assert_eq!(
+                cache.sessions[0].summary.as_deref(),
+                Some("Title v2"),
+                "summary should be updated"
+            );
+            assert_eq!(cache.last_cursor, 4000);
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_excludes_archived_when_show_archived_false() {
+        // show_archived=false 時，已封存的 session 不應出現在結果中
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-arch");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(
+            &oc_dir,
+            &[
+                ("oc-active", "Active", 1000, 2000, None),
+                ("oc-archived", "Archived", 1000, 3000, Some(9000)),
+            ],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("scan");
+
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "oc-active");
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_includes_archived_when_show_archived_true() {
+        // show_archived=true 時，封存 session 也應出現
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-arch-all");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(
+            &oc_dir,
+            &[
+                ("oc-active", "Active", 1000, 2000, None),
+                ("oc-archived", "Archived", 1000, 3000, Some(9000)),
+            ],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, true, &metadata_conn, &mut cache)
+                .expect("scan");
+
+            assert_eq!(cache.sessions.len(), 2);
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_noop_when_db_missing() {
+        // opencode.db 不存在時應靜默回傳 Ok，不修改快取
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-no-db");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+        // 故意不建立 opencode.db
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            let result =
+                scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache);
+
+            assert!(result.is_ok(), "should not error when db is missing");
+            assert!(cache.sessions.is_empty(), "cache should remain empty");
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_cursor_unchanged_when_no_new_rows() {
+        // 沒有新 row 時 cursor 不應改變
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-no-new");
+        let appdata_dir = unique_test_dir("appdata");
+        fs::create_dir_all(&oc_dir).expect("create oc dir");
+
+        create_opencode_db(&oc_dir, &[("oc-z", "Z", 1000, 2000, None)]);
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = ProviderCache {
+                sessions: Vec::new(),
+                session_mtimes: HashMap::new(),
+                last_full_scan_at: Instant::now(),
+                last_cursor: 9999, // cursor 已超過所有 time_updated
+            };
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("scan");
+
+            assert!(cache.sessions.is_empty(), "no new sessions");
+            assert_eq!(cache.last_cursor, 9999, "cursor should not change");
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
     }
 }
