@@ -1,13 +1,40 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  App: SessionHub — Windows 桌面應用程式，管理 GitHub Copilot CLI 與 OpenCode 的 AI coding sessions
+  Tech stack: React 19 + TypeScript + Vite (frontend) · Rust + Tauri 2 (backend) · SQLite (rusqlite)
+
+  ## Architecture
+  - All Tauri IPC calls are centralized in `src/App.tsx` (no invoke() in child components)
+  - Child components are pure display components driven by props
+  - `src-tauri/src/lib.rs` is the single Rust backend file (~1700 lines)
+  - SQLite `metadata.db` stores: session_meta (notes/tags), session_stats (stats cache), session_cache (startup cache)
+  - ScanCache is in-memory in AppState: Copilot uses mtime diff, OpenCode uses cursor-based scan
+
+  ## Key Rust Types
+  - SessionInfo: { id, provider, cwd, summary, summary_count, created_at, updated_at, session_dir, parse_error, is_archived, notes, tags, has_plan, has_events }
+  - AppSettings: { copilot_root, opencode_root, terminal_path, external_editor_path, show_archived, pinned_projects, enabled_providers, provider_integrations }
+  - SessionStats: { output_tokens, input_tokens, interaction_count, tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown, is_live }
+  - ScanCache: { copilot: Mutex<Option<ProviderCache>>, opencode: Mutex<Option<ProviderCache>> }
+
+  ## Conventions
+  - Rust structs use #[serde(rename_all = "camelCase")] → TypeScript uses camelCase
+  - All Rust commands return Result<T, String>; frontend catches and calls showToast
+  - CSS: plain BEM-like class names (no Tailwind/CSS Modules)
+  - Translations: all text via t("key"), no hardcoded Chinese in JSX
+  - activeView routing: "dashboard" | "settings" | {projectKey}; plan editors are sub-tabs inside ProjectView
+
+  ## Provider Data Sources
+  - Copilot sessions: ~/.copilot/session-state/<session-id>/workspace.yaml
+  - OpenCode sessions: <opencodeRoot>/session/<projectID>/ses_*.json
+  - OpenCode stats: <opencodeRoot>/message/<sessionID>/msg_*.json + part/<messageID>/prt_*.json
+  - App data: %APPDATA%\SessionHub\ (settings.json, metadata.db)
+
+  ## Session Stats Cache (SQLite)
+  - session_stats table: keyed by session_id, invalidated by events.jsonl mtime (Copilot) or message mtime (OpenCode)
+  - sessions_cache table: session list cache replacing session_cache.json
+  - scan_state table: per-provider last_full_scan_at, last_cursor
+  - session_mtimes table: per-session mtime for incremental scan
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
