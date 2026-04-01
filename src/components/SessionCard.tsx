@@ -34,6 +34,17 @@ function getSessionTitle(session: SessionInfo) {
   return session.summary?.trim() || session.id;
 }
 
+function getProviderLabel(provider: string): string {
+  switch (provider) {
+    case "copilot":
+      return "Copilot";
+    case "opencode":
+      return "OpenCode";
+    default:
+      return provider;
+  }
+}
+
 export function SessionCard({
   session,
   onOpenTerminal,
@@ -59,6 +70,9 @@ export function SessionCard({
         </div>
 
         <div className="session-chip-row">
+          <span className={`provider-tag provider-tag--${session.provider}`}>
+            {getProviderLabel(session.provider)}
+          </span>
           {session.isArchived ? (
             <span className="session-chip muted-chip">{t("session.archived")}</span>
           ) : null}

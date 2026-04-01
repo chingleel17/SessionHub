@@ -44,6 +44,16 @@ export function DashboardView({
   const archivedCount = allSessions.filter((s) => s.isArchived).length;
   const parseErrorCount = allSessions.filter((s) => s.parseError).length;
 
+  const providerCounts: Record<string, number> = {};
+  for (const session of allSessions) {
+    const key = session.provider ?? "copilot";
+    providerCounts[key] = (providerCounts[key] ?? 0) + 1;
+  }
+  const providerEntries = Object.entries(providerCounts).sort(
+    ([, a], [, b]) => b - a,
+  );
+  const hasMultipleProviders = providerEntries.length > 1;
+
   return (
     <section className="dashboard-layout">
       <section className="stats-grid">
@@ -71,6 +81,18 @@ export function DashboardView({
           <span className="stat-label">{t("dashboard.stats.totalInteractions")}</span>
           <strong>{sessionsIsLoading ? "..." : formatCompactNumber(totalInteractions)}</strong>
         </article>
+        {hasMultipleProviders ? (
+          <article className="stat-card">
+            <span className="stat-label">{t("dashboard.stats.providerDistribution")}</span>
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {providerEntries.map(([provider, count]) => (
+                <span key={provider} className={`provider-tag provider-tag--${provider}`}>
+                  {provider === "copilot" ? "Copilot" : provider === "opencode" ? "OpenCode" : provider}: {count}
+                </span>
+              ))}
+            </div>
+          </article>
+        ) : null}
       </section>
 
       {sessionsIsError ? (

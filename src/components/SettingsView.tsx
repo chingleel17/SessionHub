@@ -5,7 +5,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -49,6 +49,57 @@ export function SettingsView({
               </button>
             </div>
           </label>
+
+          <label className="field-group">
+            <span>{t("settings.fields.opencodeRoot")}</span>
+            <div className="field-with-action">
+              <input
+                value={settingsForm.opencodeRoot}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, opencodeRoot: event.currentTarget.value })
+                }
+              />
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onBrowseDirectory("opencodeRoot")}
+              >
+                {t("settings.actions.browseDirectory")}
+              </button>
+            </div>
+          </label>
+
+          <div className="field-group">
+            <span>{t("settings.fields.enabledProviders")}</span>
+            <div className="checkbox-list">
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.enabledProviders.includes("copilot")}
+                  onChange={(event) => {
+                    const next = event.currentTarget.checked
+                      ? [...settingsForm.enabledProviders, "copilot"]
+                      : settingsForm.enabledProviders.filter((p) => p !== "copilot");
+                    onFormChange({ ...settingsForm, enabledProviders: next });
+                  }}
+                />
+                <span>{t("settings.fields.providerCopilot")}</span>
+              </label>
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.enabledProviders.includes("opencode")}
+                  onChange={(event) => {
+                    const next = event.currentTarget.checked
+                      ? [...settingsForm.enabledProviders, "opencode"]
+                      : settingsForm.enabledProviders.filter((p) => p !== "opencode");
+                    onFormChange({ ...settingsForm, enabledProviders: next });
+                  }}
+                />
+                <span>{t("settings.fields.providerOpencode")}</span>
+              </label>
+            </div>
+          </div>
 
           <label className="field-group">
             <span>{t("settings.fields.terminalPath")}</span>

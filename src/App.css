@@ -765,6 +765,27 @@ textarea {
   color: var(--color-error-chip-text);
 }
 
+.provider-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.provider-tag--copilot {
+  background: var(--color-provider-copilot-bg);
+  color: var(--color-provider-copilot-text);
+}
+
+.provider-tag--opencode {
+  background: var(--color-provider-opencode-bg);
+  color: var(--color-provider-opencode-text);
+}
+
 .session-notes {
   margin: 0;
   color: var(--color-text-secondary);
@@ -1365,4 +1386,148 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ========================
+   Sub-tab bar (ProjectView)
+   ======================== */
+
+.sub-tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-subtle);
+  width: fit-content;
+}
+
+.sub-tab-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sub-tab-item:hover {
+  color: var(--color-text-primary);
+}
+
+.sub-tab-item--active {
+  background: var(--color-surface-panel);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-subtle);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* ========================
+   Plans & Specs View
+   ======================== */
+
+.plans-specs-layout {
+  display: grid;
+  gap: 20px;
+}
+
+.plans-specs-section {
+  padding: 20px 24px;
+  background: var(--color-surface-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-panel);
+}
+
+.plans-specs-section h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+
+.plans-specs-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text-primary);
+  transition: background 0.15s;
+}
+
+.plans-specs-item:hover {
+  background: var(--color-surface-input);
+}
+
+.plans-specs-item-active {
+  border-color: var(--color-action-primary-subtle-border);
+  background: var(--color-action-primary-subtle-bg);
+}
+
+.plans-specs-item-meta {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.plans-specs-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plans-specs-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.plans-specs-preview {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  background: var(--color-surface-input);
+  overflow: auto;
+  max-height: 400px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.collapsible-header:hover {
+  color: var(--color-text-primary);
+}
+
+.collapsible-arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.collapsible-arrow--open {
+  transform: rotate(90deg);
 }

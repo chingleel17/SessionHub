@@ -7,7 +7,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
-import type { AppSettings, ConfirmDialogState, EditDialogState, ProjectGroup, SessionInfo, SessionStats } from "./types";
+import type { AppSettings, ConfirmDialogState, EditDialogState, OpenSpecData, ProjectGroup, SessionInfo, SessionStats, SisyphusData } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -83,9 +83,11 @@ function App() {
 
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
+    opencodeRoot: "",
     terminalPath: "",
     externalEditorPath: "",
     showArchived: false,
+    enabledProviders: ["copilot", "opencode"],
   });
 
   const settingsQuery = useQuery({
@@ -97,13 +99,17 @@ function App() {
     queryKey: [
       "sessions",
       settingsQuery.data?.copilotRoot ?? "",
+      settingsQuery.data?.opencodeRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
+      settingsQuery.data?.enabledProviders ?? [],
     ],
     enabled: Boolean(settingsQuery.data),
     queryFn: () =>
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
+        opencodeRoot: settingsQuery.data?.opencodeRoot,
         showArchived: settingsQuery.data?.showArchived,
+        enabledProviders: settingsQuery.data?.enabledProviders,
       }),
   });
 
@@ -124,10 +130,12 @@ function App() {
     if (settingsQuery.data) {
       setSettingsForm({
         copilotRoot: settingsQuery.data.copilotRoot,
+        opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
         terminalPath: settingsQuery.data.terminalPath ?? "",
         externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
         showArchived: settingsQuery.data.showArchived,
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
+        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
       });
       setPinnedProjects(settingsQuery.data.pinnedProjects ?? []);
     }
@@ -141,7 +149,11 @@ function App() {
 
   useEffect(() => {
     if (!settingsQuery.data) return undefined;
-    void invoke("restart_session_watcher", { copilotRoot: settingsQuery.data.copilotRoot })
+    void invoke("restart_session_watcher", {
+      copilotRoot: settingsQuery.data.copilotRoot,
+      opencodeRoot: settingsQuery.data.opencodeRoot,
+      enabledProviders: settingsQuery.data.enabledProviders,
+    })
       .then(() => setRealtimeStatus("active"))
       .catch(() => setRealtimeStatus("error"));
     return undefined;
@@ -201,7 +213,11 @@ function App() {
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       try {
-        await invoke("restart_session_watcher", { copilotRoot: settingsForm.copilotRoot.trim() });
+        await invoke("restart_session_watcher", {
+          copilotRoot: settingsForm.copilotRoot.trim(),
+          opencodeRoot: settingsForm.opencodeRoot.trim(),
+          enabledProviders: settingsForm.enabledProviders,
+        });
         setRealtimeStatus("active");
       } catch {
         setRealtimeStatus("error");
@@ -295,10 +311,12 @@ function App() {
     setPinnedProjects(next);
     const settings: AppSettings = {
       copilotRoot: settingsForm.copilotRoot.trim(),
+      opencodeRoot: settingsForm.opencodeRoot.trim(),
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: settingsForm.showArchived,
       pinnedProjects: next,
+      enabledProviders: settingsForm.enabledProviders,
     };
     await invoke("save_settings", { settings });
     await queryClient.invalidateQueries({ queryKey: ["settings"] });
@@ -347,6 +365,24 @@ function App() {
     [sessionStatsQueries, sessionsQuery.data],
   );
 
+  const sisyphusQuery = useQuery({
+    queryKey: ["project_plans", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel),
+    queryFn: () => invoke<SisyphusData>("get_project_plans", { projectDir: activeProject?.pathLabel }),
+    staleTime: 30_000,
+  });
+
+  const openspecQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel),
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel }),
+    staleTime: 30_000,
+  });
+
+  const handleReadFileContent = async (filePath: string): Promise<string> => {
+    return invoke<string>("read_plan_content", { filePath });
+  };
+
   const dashboardTotals = useMemo(
     () => Object.values(sessionStatsMap).reduce(
       (acc, stats) => {
@@ -386,13 +422,23 @@ function App() {
   const handleSaveSettings = async () => {
     const next: AppSettings = {
       copilotRoot: settingsForm.copilotRoot.trim(),
+      opencodeRoot: settingsForm.opencodeRoot.trim(),
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: settingsForm.showArchived,
       pinnedProjects,
+      enabledProviders: settingsForm.enabledProviders,
     };
 
-    if (!next.copilotRoot) {
+    const requiresCopilotRoot = next.enabledProviders.includes("copilot");
+    const requiresOpencodeRoot = next.enabledProviders.includes("opencode");
+
+    if (requiresCopilotRoot && !next.copilotRoot) {
+      showToast(t("toast.settingsRootRequired"));
+      return;
+    }
+
+    if (requiresOpencodeRoot && !next.opencodeRoot) {
       showToast(t("toast.settingsRootRequired"));
       return;
     }
@@ -408,7 +454,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -421,10 +467,12 @@ function App() {
   const handleToggleArchived = async (nextValue: boolean) => {
     const next: AppSettings = {
       copilotRoot: settingsForm.copilotRoot.trim(),
+      opencodeRoot: settingsForm.opencodeRoot.trim(),
       terminalPath: settingsForm.terminalPath?.trim() || null,
       externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
       showArchived: nextValue,
       pinnedProjects,
+      enabledProviders: settingsForm.enabledProviders,
     };
     setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
     settingsMutation.mutate(next);
@@ -691,6 +739,7 @@ function App() {
 
           {activeProject ? (
             <ProjectView
+              key={activeProject.key}
               project={activeProject}
               showArchived={settingsForm.showArchived}
               onToggleArchived={(v) => void handleToggleArchived(v)}
@@ -711,6 +760,10 @@ function App() {
               onTogglePin={() => void togglePinProject(activeProject.key)}
               sessionStats={sessionStatsMap}
               sessionStatsLoading={sessionStatsLoadingMap}
+              sisyphusData={sisyphusQuery.data}
+              openspecData={openspecQuery.data}
+              plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
+              onReadFileContent={handleReadFileContent}
             />
           ) : null}
 

@@ -14,7 +14,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
@@ -28,10 +28,16 @@ struct WorkspaceYaml {
     updated_at: Option<String>,
 }
 
+fn default_provider() -> String {
+    "copilot".to_string()
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionInfo {
     id: String,
+    #[serde(default = "default_provider")]
+    provider: String,
     cwd: Option<String>,
     summary: Option<String>,
     summary_count: Option<u32>,
@@ -46,15 +52,23 @@ struct SessionInfo {
     has_events: bool,
 }
 
+fn default_enabled_providers() -> Vec<String> {
+    vec!["copilot".to_string(), "opencode".to_string()]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
     copilot_root: String,
+    #[serde(default)]
+    opencode_root: String,
     terminal_path: Option<String>,
     external_editor_path: Option<String>,
     show_archived: bool,
     #[serde(default)]
     pinned_projects: Vec<String>,
+    #[serde(default = "default_enabled_providers")]
+    enabled_providers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,6 +163,7 @@ struct SessionEvent {
 struct WatcherState {
     sessions: Mutex<Option<RecommendedWatcher>>,
     plan: Mutex<Option<RecommendedWatcher>>,
+    opencode: Mutex<Option<RecommendedWatcher>>,
 }
 
 fn default_copilot_root() -> Result<PathBuf, String> {
@@ -156,6 +171,16 @@ fn default_copilot_root() -> Result<PathBuf, String> {
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
 
     Ok(PathBuf::from(user_profile).join(".copilot"))
+}
+
+fn default_opencode_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+
+    Ok(PathBuf::from(user_profile)
+        .join(".local")
+        .join("share")
+        .join("opencode"))
 }
 
 fn default_app_data_dir() -> Result<PathBuf, String> {
@@ -176,6 +201,166 @@ fn resolve_copilot_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
     }
 }
 
+fn resolve_opencode_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
+    match root_dir {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        _ => default_opencode_root(),
+    }
+}
+
+/// 以唯讀模式開啟 OpenCode 的 SQLite 資料庫
+fn open_opencode_db_readonly(opencode_root: &Path) -> Result<Connection, String> {
+    let db_path = opencode_root.join("opencode.db");
+
+    if !db_path.exists() {
+        return Err(format!(
+            "opencode.db does not exist at {}",
+            db_path.display()
+        ));
+    }
+
+    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|error| {
+        format!(
+            "failed to open opencode db at {}: {error}",
+            db_path.display()
+        )
+    })
+}
+
+/// 將 unix timestamp（毫秒）轉換為 ISO 8601 字串
+fn unix_ms_to_iso8601(timestamp_ms: i64) -> Option<String> {
+    let timestamp_secs = timestamp_ms / 1000;
+    let nanos = ((timestamp_ms % 1000) * 1_000_000) as u32;
+
+    chrono::DateTime::from_timestamp(timestamp_secs, nanos)
+        .map(|datetime| datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// 掃描 OpenCode 資料庫中的 session，映射為 Vec<SessionInfo>
+fn scan_opencode_sessions_internal(
+    opencode_root: &Path,
+    show_archived: bool,
+    metadata_conn: &Connection,
+) -> Result<Vec<SessionInfo>, String> {
+    let oc_conn = match open_opencode_db_readonly(opencode_root) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("opencode provider: {error}");
+            return Ok(Vec::new());
+        }
+    };
+
+    let query = if show_archived {
+        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
+                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
+         FROM session s \
+         LEFT JOIN project p ON s.project_id = p.id"
+    } else {
+        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
+                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
+         FROM session s \
+         LEFT JOIN project p ON s.project_id = p.id \
+         WHERE s.time_archived IS NULL"
+    };
+
+    let mut statement = oc_conn.prepare(query).map_err(|error| {
+        eprintln!("opencode provider: failed to prepare query: {error}");
+        format!("opencode db query error: {error}")
+    })?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let time_created: Option<i64> = row.get(2)?;
+            let time_updated: Option<i64> = row.get(3)?;
+            let time_archived: Option<i64> = row.get(4)?;
+            let worktree: Option<String> = row.get(5)?;
+            let summary_additions: Option<i64> = row.get(6)?;
+            let summary_deletions: Option<i64> = row.get(7)?;
+            let summary_files: Option<i64> = row.get(8)?;
+
+            Ok((
+                id,
+                title,
+                time_created,
+                time_updated,
+                time_archived,
+                worktree,
+                summary_additions,
+                summary_deletions,
+                summary_files,
+            ))
+        })
+        .map_err(|error| {
+            eprintln!("opencode provider: failed to query sessions: {error}");
+            format!("opencode db query error: {error}")
+        })?;
+
+    let mut sessions = Vec::new();
+
+    for row_result in rows {
+        let (
+            id,
+            title,
+            time_created,
+            time_updated,
+            time_archived,
+            worktree,
+            summary_additions,
+            summary_deletions,
+            summary_files,
+        ) = match row_result {
+            Ok(data) => data,
+            Err(error) => {
+                eprintln!("opencode provider: failed to read row: {error}");
+                continue;
+            }
+        };
+
+        let is_archived = time_archived.is_some();
+        let created_at = time_created.and_then(unix_ms_to_iso8601);
+        let updated_at = time_updated.and_then(unix_ms_to_iso8601);
+
+        // 建構 summary，包含 additions/deletions/files 統計
+        let summary = title;
+        let summary_count = {
+            let total = summary_additions.unwrap_or(0)
+                + summary_deletions.unwrap_or(0)
+                + summary_files.unwrap_or(0);
+            if total > 0 {
+                Some(total as u32)
+            } else {
+                None
+            }
+        };
+
+        let meta = read_session_meta(metadata_conn, &id).unwrap_or(SessionMeta {
+            notes: None,
+            tags: Vec::new(),
+        });
+
+        sessions.push(SessionInfo {
+            id,
+            provider: "opencode".to_string(),
+            cwd: worktree,
+            summary,
+            summary_count,
+            created_at,
+            updated_at,
+            session_dir: String::new(),
+            parse_error: false,
+            is_archived,
+            notes: meta.notes,
+            tags: meta.tags,
+            has_plan: false,
+            has_events: false,
+        });
+    }
+
+    Ok(sessions)
+}
+
 impl AppSettings {
     fn default() -> Result<Self, String> {
         let terminal_path = detect_terminal_path()?;
@@ -183,10 +368,12 @@ impl AppSettings {
 
         Ok(Self {
             copilot_root: default_copilot_root()?.to_string_lossy().to_string(),
+            opencode_root: default_opencode_root()?.to_string_lossy().to_string(),
             terminal_path,
             external_editor_path,
             show_archived: false,
             pinned_projects: Vec::new(),
+            enabled_providers: default_enabled_providers(),
         })
     }
 }
@@ -244,21 +431,94 @@ fn create_sessions_watcher(
     Ok(watcher)
 }
 
+/// 建立 OpenCode DB 的 WAL 檔案監聽器
+fn create_opencode_watcher(
+    app: &tauri::AppHandle,
+    opencode_root: &Path,
+) -> Result<RecommendedWatcher, String> {
+    let wal_path = opencode_root.join("opencode.db-wal");
+    let db_path = opencode_root.join("opencode.db");
+
+    // WAL 或主 DB 至少一個必須存在
+    if !wal_path.exists() && !db_path.exists() {
+        return Err(format!(
+            "opencode db does not exist at {}",
+            opencode_root.display()
+        ));
+    }
+
+    let app_handle = app.clone();
+    let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if result.is_ok() {
+            let _ = app_handle.emit("sessions-updated", ());
+        }
+    })
+    .map_err(|error| format!("failed to create opencode watcher: {error}"))?;
+
+    // 監聽整個 opencode 目錄（包含 .db、.db-wal、.db-shm）
+    watcher
+        .watch(opencode_root, RecursiveMode::NonRecursive)
+        .map_err(|error| format!("failed to watch {}: {error}", opencode_root.display()))?;
+
+    Ok(watcher)
+}
+
 fn restart_session_watcher_internal(
     app: &tauri::AppHandle,
     watcher_state: &WatcherState,
     copilot_root: Option<&str>,
+    opencode_root: Option<&str>,
+    enabled_providers: &[String],
 ) -> Result<(), String> {
-    let root = resolve_copilot_root(copilot_root)?;
-    let watcher = create_sessions_watcher(app, &root).map_err(|error| {
-        eprintln!("failed to restart session watcher: {error}");
-        error
-    })?;
-    let mut session_watcher = watcher_state
-        .sessions
-        .lock()
-        .map_err(|_| "failed to lock session watcher state".to_string())?;
-    *session_watcher = Some(watcher);
+    // Copilot watcher
+    if enabled_providers.iter().any(|p| p == "copilot") {
+        let root = resolve_copilot_root(copilot_root)?;
+        match create_sessions_watcher(app, &root) {
+            Ok(watcher) => {
+                let mut session_watcher = watcher_state
+                    .sessions
+                    .lock()
+                    .map_err(|_| "failed to lock session watcher state".to_string())?;
+                *session_watcher = Some(watcher);
+            }
+            Err(error) => {
+                eprintln!("failed to start copilot session watcher: {error}");
+            }
+        }
+    } else {
+        // 停用時釋放 watcher
+        let mut session_watcher = watcher_state
+            .sessions
+            .lock()
+            .map_err(|_| "failed to lock session watcher state".to_string())?;
+        *session_watcher = None;
+    }
+
+    // OpenCode watcher
+    if enabled_providers.iter().any(|p| p == "opencode") {
+        if let Ok(oc_root) = resolve_opencode_root(opencode_root) {
+            match create_opencode_watcher(app, &oc_root) {
+                Ok(watcher) => {
+                    let mut oc_watcher = watcher_state
+                        .opencode
+                        .lock()
+                        .map_err(|_| "failed to lock opencode watcher state".to_string())?;
+                    *oc_watcher = Some(watcher);
+                }
+                Err(error) => {
+                    eprintln!("failed to start opencode watcher: {error}");
+                }
+            }
+        }
+    } else {
+        // 停用時釋放 watcher
+        let mut oc_watcher = watcher_state
+            .opencode
+            .lock()
+            .map_err(|_| "failed to lock opencode watcher state".to_string())?;
+        *oc_watcher = None;
+    }
+
     Ok(())
 }
 
@@ -719,6 +979,7 @@ fn parse_workspace_file(
         .unwrap_or(false);
     let fallback_session = || SessionInfo {
         id: fallback_id.clone(),
+        provider: default_provider(),
         cwd: None,
         summary: None,
         summary_count: None,
@@ -737,6 +998,7 @@ fn parse_workspace_file(
         Ok(content) => match serde_yaml::from_str::<WorkspaceYaml>(&content) {
             Ok(workspace) => SessionInfo {
                 id: workspace.id,
+                provider: default_provider(),
                 cwd: workspace.cwd,
                 summary: workspace.summary,
                 summary_count: workspace.summary_count,
@@ -800,18 +1062,43 @@ fn scan_session_dir(
     Ok(sessions)
 }
 
-fn scan_sessions(root_dir: &Path, show_archived: bool) -> Result<Vec<SessionInfo>, String> {
+fn scan_sessions(
+    copilot_root: &Path,
+    opencode_root: Option<&Path>,
+    show_archived: bool,
+    enabled_providers: &[String],
+) -> Result<Vec<SessionInfo>, String> {
     let connection = open_db_connection()?;
     init_db(&connection)?;
 
-    let mut sessions = scan_session_dir(&root_dir.join("session-state"), false, &connection)?;
+    let mut sessions = Vec::new();
 
-    if show_archived {
-        sessions.extend(scan_session_dir(
-            &root_dir.join("session-state-archive"),
-            true,
-            &connection,
-        )?);
+    // Copilot sessions
+    if enabled_providers.iter().any(|p| p == "copilot") {
+        let mut copilot_sessions =
+            scan_session_dir(&copilot_root.join("session-state"), false, &connection)?;
+
+        if show_archived {
+            copilot_sessions.extend(scan_session_dir(
+                &copilot_root.join("session-state-archive"),
+                true,
+                &connection,
+            )?);
+        }
+
+        sessions.extend(copilot_sessions);
+    }
+
+    // OpenCode sessions
+    if enabled_providers.iter().any(|p| p == "opencode") {
+        if let Some(oc_root) = opencode_root {
+            match scan_opencode_sessions_internal(oc_root, show_archived, &connection) {
+                Ok(oc_sessions) => sessions.extend(oc_sessions),
+                Err(error) => {
+                    eprintln!("opencode provider error (ignored): {error}");
+                }
+            }
+        }
     }
 
     sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
@@ -1087,10 +1374,20 @@ fn open_plan_external_internal(session_dir: &str, editor_cmd: Option<&str>) -> R
 #[tauri::command]
 fn get_sessions(
     root_dir: Option<String>,
+    opencode_root: Option<String>,
     show_archived: Option<bool>,
+    enabled_providers: Option<Vec<String>>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
-    scan_sessions(&resolved_root, show_archived.unwrap_or(false))
+    let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
+    let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
+    let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
+
+    scan_sessions(
+        &resolved_copilot,
+        resolved_opencode.as_deref(),
+        show_archived.unwrap_or(false),
+        &providers,
+    )
 }
 
 #[tauri::command]
@@ -1118,8 +1415,17 @@ fn restart_session_watcher(
     app: tauri::AppHandle,
     watcher_state: State<'_, WatcherState>,
     copilot_root: Option<String>,
+    opencode_root: Option<String>,
+    enabled_providers: Option<Vec<String>>,
 ) -> Result<(), String> {
-    restart_session_watcher_internal(&app, &watcher_state, copilot_root.as_deref())
+    let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
+    restart_session_watcher_internal(
+        &app,
+        &watcher_state,
+        copilot_root.as_deref(),
+        opencode_root.as_deref(),
+        &providers,
+    )
 }
 
 #[tauri::command]
@@ -1220,6 +1526,434 @@ fn open_plan_external(session_dir: String, editor_cmd: Option<String>) -> Result
     open_plan_external_internal(&session_dir, editor_cmd.as_deref())
 }
 
+// ========================
+// Sisyphus (.sisyphus) Reader
+// ========================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SisyphusBoulder {
+    active_plan: Option<String>,
+    plan_name: Option<String>,
+    agent: Option<String>,
+    session_ids: Vec<String>,
+    started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SisyphusPlan {
+    name: String,
+    path: String,
+    title: Option<String>,
+    tldr: Option<String>,
+    is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SisyphusNotepad {
+    name: String,
+    has_issues: bool,
+    has_learnings: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SisyphusData {
+    active_plan: Option<SisyphusBoulder>,
+    plans: Vec<SisyphusPlan>,
+    notepads: Vec<SisyphusNotepad>,
+    evidence_files: Vec<String>,
+    draft_files: Vec<String>,
+}
+
+/// 從 Markdown 內容取得第一個 `# heading`
+fn extract_md_heading(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("# ") {
+            let heading = heading.trim();
+            if !heading.is_empty() {
+                return Some(heading.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 從 Markdown 內容取得 `## TL;DR` section 的前幾行
+fn extract_md_tldr(content: &str) -> Option<String> {
+    let mut in_tldr = false;
+    let mut lines: Vec<&str> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if in_tldr {
+            // 遇到下一個 heading 就結束
+            if trimmed.starts_with("## ") || trimmed.starts_with("# ") {
+                break;
+            }
+            if !trimmed.is_empty() {
+                lines.push(trimmed);
+                if lines.len() >= 5 {
+                    break;
+                }
+            }
+        } else if trimmed.starts_with("## TL;DR") || trimmed.starts_with("## tl;dr") {
+            in_tldr = true;
+        }
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+/// 掃描 `.sisyphus/` 目錄，回傳完整 SisyphusData
+fn scan_sisyphus_internal(project_dir: &Path) -> SisyphusData {
+    let sisyphus_dir = project_dir.join(".sisyphus");
+
+    if !sisyphus_dir.is_dir() {
+        return SisyphusData {
+            active_plan: None,
+            plans: Vec::new(),
+            notepads: Vec::new(),
+            evidence_files: Vec::new(),
+            draft_files: Vec::new(),
+        };
+    }
+
+    // 9.3: 解析 boulder.json
+    let boulder = {
+        let boulder_path = sisyphus_dir.join("boulder.json");
+        if boulder_path.is_file() {
+            fs::read_to_string(&boulder_path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<SisyphusBoulder>(&content).ok())
+        } else {
+            None
+        }
+    };
+
+    let active_plan_name = boulder
+        .as_ref()
+        .and_then(|b| b.active_plan.as_deref())
+        .map(|p| {
+            // active_plan 可能是路徑或名稱，取出檔名去除副檔名
+            Path::new(p)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(p)
+                .to_string()
+        });
+
+    // 9.4: 掃描 plans/*.md
+    let plans = {
+        let plans_dir = sisyphus_dir.join("plans");
+        if plans_dir.is_dir() {
+            let mut result = Vec::new();
+            if let Ok(entries) = fs::read_dir(&plans_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                        let name = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        let content = fs::read_to_string(&path).unwrap_or_default();
+                        let title = extract_md_heading(&content);
+                        let tldr = extract_md_tldr(&content);
+                        let is_active = active_plan_name
+                            .as_deref()
+                            .map(|ap| ap == name)
+                            .unwrap_or(false);
+
+                        result.push(SisyphusPlan {
+                            name,
+                            path: path.to_string_lossy().to_string(),
+                            title,
+                            tldr,
+                            is_active,
+                        });
+                    }
+                }
+            }
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            result
+        } else {
+            Vec::new()
+        }
+    };
+
+    // 9.5: 掃描 notepads/*/
+    let notepads = {
+        let notepads_dir = sisyphus_dir.join("notepads");
+        if notepads_dir.is_dir() {
+            let mut result = Vec::new();
+            if let Ok(entries) = fs::read_dir(&notepads_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let name = path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let has_issues = path.join("issues.md").is_file();
+                        let has_learnings = path.join("learnings.md").is_file();
+                        result.push(SisyphusNotepad {
+                            name,
+                            has_issues,
+                            has_learnings,
+                        });
+                    }
+                }
+            }
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            result
+        } else {
+            Vec::new()
+        }
+    };
+
+    // 9.6: 掃描 evidence/*.txt 與 drafts/*.md
+    let evidence_files = list_files_with_ext(&sisyphus_dir.join("evidence"), "txt");
+    let draft_files = list_files_with_ext(&sisyphus_dir.join("drafts"), "md");
+
+    SisyphusData {
+        active_plan: boulder,
+        plans,
+        notepads,
+        evidence_files,
+        draft_files,
+    }
+}
+
+/// 列舉指定目錄下指定副檔名的檔案名稱清單
+fn list_files_with_ext(dir: &Path, ext: &str) -> Vec<String> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    result.push(name.to_string());
+                }
+            }
+        }
+    }
+    result.sort();
+    result
+}
+
+// ========================
+// OpenSpec Reader
+// ========================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenSpecChange {
+    name: String,
+    has_proposal: bool,
+    has_design: bool,
+    has_tasks: bool,
+    specs_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenSpecSpec {
+    name: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenSpecData {
+    schema: Option<String>,
+    active_changes: Vec<OpenSpecChange>,
+    archived_changes: Vec<OpenSpecChange>,
+    specs: Vec<OpenSpecSpec>,
+}
+
+/// 掃描單一 change 目錄，回傳 OpenSpecChange
+fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
+    let name = change_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let has_proposal = change_dir.join("proposal.md").is_file();
+    let has_design = change_dir.join("design.md").is_file();
+    let has_tasks = change_dir.join("tasks.md").is_file();
+
+    let specs_dir = change_dir.join("specs");
+    let specs_count = if specs_dir.is_dir() {
+        fs::read_dir(&specs_dir)
+            .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    OpenSpecChange {
+        name,
+        has_proposal,
+        has_design,
+        has_tasks,
+        specs_count,
+    }
+}
+
+/// 掃描 `openspec/` 目錄，回傳完整 OpenSpecData
+fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
+    let openspec_dir = project_dir.join("openspec");
+
+    if !openspec_dir.is_dir() {
+        return OpenSpecData {
+            schema: None,
+            active_changes: Vec::new(),
+            archived_changes: Vec::new(),
+            specs: Vec::new(),
+        };
+    }
+
+    // 10.3: 解析 config.yaml
+    let schema = {
+        let config_path = openspec_dir.join("config.yaml");
+        if config_path.is_file() {
+            fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
+                .and_then(|value| {
+                    value
+                        .get("schema")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+        } else {
+            None
+        }
+    };
+
+    // 10.4: 掃描 changes/（排除 archive/）
+    let active_changes = {
+        let changes_dir = openspec_dir.join("changes");
+        if changes_dir.is_dir() {
+            let mut result = Vec::new();
+            if let Ok(entries) = fs::read_dir(&changes_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let dir_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                        // 排除 archive 目錄
+                        if dir_name != "archive" {
+                            result.push(scan_openspec_change(&path));
+                        }
+                    }
+                }
+            }
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            result
+        } else {
+            Vec::new()
+        }
+    };
+
+    // 10.5: 掃描 changes/archive/
+    let archived_changes = {
+        let archive_dir = openspec_dir.join("changes").join("archive");
+        if archive_dir.is_dir() {
+            let mut result = Vec::new();
+            if let Ok(entries) = fs::read_dir(&archive_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        result.push(scan_openspec_change(&path));
+                    }
+                }
+            }
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            result
+        } else {
+            Vec::new()
+        }
+    };
+
+    // 10.6: 掃描 specs/
+    let specs = {
+        let specs_dir = openspec_dir.join("specs");
+        if specs_dir.is_dir() {
+            let mut result = Vec::new();
+            if let Ok(entries) = fs::read_dir(&specs_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let name = path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let spec_md_path = path.join("spec.md");
+                        let spec_path = if spec_md_path.is_file() {
+                            spec_md_path.to_string_lossy().to_string()
+                        } else {
+                            path.to_string_lossy().to_string()
+                        };
+                        result.push(OpenSpecSpec {
+                            name,
+                            path: spec_path,
+                        });
+                    }
+                }
+            }
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            result
+        } else {
+            Vec::new()
+        }
+    };
+
+    OpenSpecData {
+        schema,
+        active_changes,
+        archived_changes,
+        specs,
+    }
+}
+
+// ========================
+// Tauri Commands: Plans & Specs
+// ========================
+
+#[tauri::command]
+fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
+    Ok(scan_sisyphus_internal(Path::new(&project_dir)))
+}
+
+#[tauri::command]
+fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
+    Ok(scan_openspec_internal(Path::new(&project_dir)))
+}
+
+#[tauri::command]
+fn read_plan_content(file_path: String) -> Result<String, String> {
+    let path = Path::new(&file_path);
+    if !path.is_file() {
+        return Err(format!("File not found: {}", file_path));
+    }
+    fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1233,6 +1967,8 @@ pub fn run() {
                 app.handle(),
                 &watcher_state,
                 Some(&settings.copilot_root),
+                Some(&settings.opencode_root),
+                &settings.enabled_providers,
             )?;
             Ok(())
         })
@@ -1257,7 +1993,10 @@ pub fn run() {
             write_plan,
             open_plan_external,
             upsert_session_meta,
-            delete_session_meta
+            delete_session_meta,
+            get_project_plans,
+            get_project_specs,
+            read_plan_content
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1311,7 +2050,8 @@ mod tests {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
 
-        let sessions = scan_sessions(&root_dir, false).expect("scan should succeed");
+        let sessions = scan_sessions(&root_dir, None, false, &default_enabled_providers())
+            .expect("scan should succeed");
 
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
@@ -1376,11 +2116,8 @@ mod tests {
         // session without events.jsonl (should be deleted)
         let empty_session = root_dir.join("session-state").join("session-empty");
         fs::create_dir_all(&empty_session).expect("create empty session dir");
-        fs::write(
-            empty_session.join("workspace.yaml"),
-            "id: session-empty\n",
-        )
-        .expect("write workspace.yaml");
+        fs::write(empty_session.join("workspace.yaml"), "id: session-empty\n")
+            .expect("write workspace.yaml");
 
         // session with non-empty events.jsonl (should be kept)
         let active_session = root_dir.join("session-state").join("session-active");
@@ -1404,8 +2141,7 @@ mod tests {
             "id: session-no-count\n",
         )
         .expect("write workspace.yaml");
-        fs::write(no_count_session.join("events.jsonl"), "")
-            .expect("write empty events.jsonl");
+        fs::write(no_count_session.join("events.jsonl"), "").expect("write empty events.jsonl");
 
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);

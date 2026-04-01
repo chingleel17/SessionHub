@@ -43,4 +43,9 @@
 
   --color-shadow-dialog: rgba(0, 0, 0, 0.4);
   --color-dialog-overlay: rgba(0, 0, 0, 0.6);
+
+  --color-provider-copilot-bg: #1a2a4a;
+  --color-provider-copilot-text: #6ea0ff;
+  --color-provider-opencode-bg: #14302a;
+  --color-provider-opencode-text: #4dd88a;
 }
