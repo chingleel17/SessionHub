@@ -19,7 +19,7 @@ import { SessionStatsPanel } from "./SessionStatsPanel";
 type Props = {
   session: SessionInfo;
   onOpenTerminal: (session: SessionInfo) => void;
-  onCopyCommand: (sessionId: string) => void;
+  onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
@@ -127,7 +127,7 @@ export function SessionCard({
           className="icon-button"
           title={t("session.actions.copyCommand")}
           aria-label={t("session.actions.copyCommand")}
-          onClick={() => onCopyCommand(session.id)}
+          onClick={() => onCopyCommand(session)}
         >
           <CopyIcon size={16} />
         </button>

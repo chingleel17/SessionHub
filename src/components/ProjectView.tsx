@@ -9,18 +9,19 @@ import type {
   SortKey,
 } from "../types";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
+import { PlanEditor } from "./PlanEditor";
 import { PlansSpecsView } from "./PlansSpecsView";
 import { ProjectStatsBanner } from "./ProjectStatsBanner";
 import { SessionCard } from "./SessionCard";
 
-type SubTab = "sessions" | "plans-specs";
+type SubTabState = { openPlanKeys: string[]; activeSubTab: string };
 
 type Props = {
   project: ProjectGroup;
   showArchived: boolean;
   onToggleArchived: (value: boolean) => void;
   onOpenTerminal: (session: SessionInfo) => void;
-  onCopyCommand: (sessionId: string) => void;
+  onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
@@ -32,10 +33,23 @@ type Props = {
   onTogglePin: () => void;
   sessionStats: Record<string, SessionStats | undefined>;
   sessionStatsLoading: Record<string, boolean | undefined>;
+  sessionsLoading: boolean;
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
   plansSpecsLoading: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
+  // Plan sub-tab props (IPC handled by App.tsx, state flows through here)
+  activePlanSessionId: string | null;
+  onActivePlanChange: (sessionId: string | null) => void;
+  planDraft: string;
+  planPreviewHtml: string;
+  onPlanDraftChange: (value: string) => void;
+  onSavePlan: () => void;
+  onOpenPlanExternal: (session: SessionInfo) => void;
+  // Controlled sub-tab state (lifted to App.tsx for cross-project persistence)
+  openPlanKeys: string[];
+  activeSubTab: string;
+  onSubTabStateChange: (state: SubTabState) => void;
 };
 
 function filterAndSortSessions(
@@ -103,18 +117,49 @@ export function ProjectView({
   onTogglePin,
   sessionStats,
   sessionStatsLoading,
+  sessionsLoading,
   sisyphusData,
   openspecData,
   plansSpecsLoading,
   onReadFileContent,
+  activePlanSessionId,
+  onActivePlanChange,
+  planDraft,
+  planPreviewHtml,
+  onPlanDraftChange,
+  onSavePlan,
+  onOpenPlanExternal,
+  openPlanKeys,
+  activeSubTab,
+  onSubTabStateChange,
 }: Props) {
   const { t } = useI18n();
-  const [activeSubTab, setActiveSubTab] = useState<SubTab>("sessions");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [hideEmpty, setHideEmpty] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
+
+  const setActiveSubTab = (next: string) => {
+    onSubTabStateChange({ openPlanKeys, activeSubTab: next });
+  };
+
+  const handleOpenPlanSubTab = (session: SessionInfo) => {
+    const planKey = `plan:${session.id}`;
+    const nextKeys = openPlanKeys.includes(planKey) ? openPlanKeys : [...openPlanKeys, planKey];
+    onSubTabStateChange({ openPlanKeys: nextKeys, activeSubTab: planKey });
+    onOpenPlan(session);
+  };
+
+  const handleClosePlanSubTab = (planKey: string) => {
+    const sessionId = planKey.replace("plan:", "");
+    const nextKeys = openPlanKeys.filter((k) => k !== planKey);
+    const nextSubTab = activeSubTab === planKey ? "sessions" : activeSubTab;
+    onSubTabStateChange({ openPlanKeys: nextKeys, activeSubTab: nextSubTab });
+    if (activePlanSessionId === sessionId) {
+      onActivePlanChange(null);
+    }
+  };
 
   const availableProviders = useMemo(
     () => [...new Set(project.sessions.map((s) => s.provider))].sort(),
@@ -163,6 +208,37 @@ export function ProjectView({
         >
           {t("project.subTab.plansSpecs")}
         </button>
+        {openPlanKeys.map((planKey) => {
+          const sessionId = planKey.replace("plan:", "");
+          const session = project.sessions.find((s) => s.id === sessionId);
+          if (!session) return null;
+          const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
+          return (
+            <div
+              key={planKey}
+              className={`sub-tab-item sub-tab-item--closeable ${activeSubTab === planKey ? "sub-tab-item--active" : ""}`}
+            >
+              <button
+                type="button"
+                className="sub-tab-label"
+                onClick={() => {
+                  setActiveSubTab(planKey);
+                  onActivePlanChange(sessionId);
+                }}
+              >
+                {t("plan.tab")} · {tabTitle}
+              </button>
+              <button
+                type="button"
+                className="sub-tab-close"
+                onClick={() => handleClosePlanSubTab(planKey)}
+                aria-label={`${t("tabs.close")} ${tabTitle}`}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {activeSubTab === "sessions" ? (
@@ -306,32 +382,57 @@ export function ProjectView({
           ) : null}
 
           <div className="session-list">
-            {filteredSessions.map((session) => (
-              <SessionCard
-                key={session.id}
-                session={session}
-                onOpenTerminal={onOpenTerminal}
-                onCopyCommand={onCopyCommand}
-                onEditNotes={onEditNotes}
-                onEditTags={onEditTags}
-                onOpenPlan={onOpenPlan}
-                onArchive={onArchive}
-                onUnarchive={onUnarchive}
-                onDelete={onDelete}
-                stats={sessionStats[session.id]}
-                statsLoading={Boolean(sessionStatsLoading[session.id])}
-              />
-            ))}
+            {sessionsLoading ? (
+              <>
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+              </>
+            ) : (
+              filteredSessions.map((session) => (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  onOpenTerminal={onOpenTerminal}
+                  onCopyCommand={onCopyCommand}
+                  onEditNotes={onEditNotes}
+                  onEditTags={onEditTags}
+                  onOpenPlan={handleOpenPlanSubTab}
+                  onArchive={onArchive}
+                  onUnarchive={onUnarchive}
+                  onDelete={onDelete}
+                  stats={sessionStats[session.id]}
+                  statsLoading={Boolean(sessionStatsLoading[session.id])}
+                />
+              ))
+            )}
           </div>
         </>
-      ) : (
+      ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView
           sisyphusData={sisyphusData}
           openspecData={openspecData}
           isLoading={plansSpecsLoading}
           onReadFileContent={onReadFileContent}
         />
-      )}
+      ) : activeSubTab.startsWith("plan:") ? (
+        (() => {
+          const sessionId = activeSubTab.replace("plan:", "");
+          const planSession = project.sessions.find((s) => s.id === sessionId);
+          if (!planSession) return null;
+          return (
+            <PlanEditor
+              session={planSession}
+              planDraft={planDraft}
+              planPreviewHtml={planPreviewHtml}
+              onDraftChange={onPlanDraftChange}
+              onSave={onSavePlan}
+              onOpenExternal={onOpenPlanExternal}
+              onClose={() => handleClosePlanSubTab(activeSubTab)}
+            />
+          );
+        })()
+      ) : null}
     </section>
   );
 }

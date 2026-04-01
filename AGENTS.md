@@ -50,7 +50,7 @@ copilot-session-manager/
 | `get_sessions` | command | lib.rs | 掃描 session-state 目錄，回傳 `Vec<SessionInfo>` |
 | `save_settings` / `get_settings` | commands | lib.rs | 讀寫 `%APPDATA%\SessionHub\settings.json` |
 | `upsert_session_meta` | command | lib.rs | SQLite 備註 + 標籤 upsert |
-| `open_terminal` | command | lib.rs | 以 pwsh/PowerShell 開啟終端 |
+| `open_terminal` | command | lib.rs | 依終端機類型（pwsh/cmd/bash）開啟終端至 session 工作目錄 |
 | `WatcherState` | struct | lib.rs:62 | Mutex 包裝 FS watcher（sessions + plan 各一） |
 | `SessionInfo` | struct | lib.rs:28 | Rust 端序列化；前端對映 `src/types/index.ts` |
 | `App` | component | src/App.tsx:58 | 所有業務邏輯、mutations、event listeners 在此 |
@@ -61,7 +61,7 @@ copilot-session-manager/
 ## CONVENTIONS
 
 - **前後端型別映射**：Rust `#[serde(rename_all = "camelCase")]` → TS `camelCase`。新增欄位兩端都必須同步。
-- **invoke 模式**：所有後端呼叫集中在 `App.tsx`，子元件只接 callback props，不直接 invoke。
+- **activeView 路由**：`"dashboard"` | `"settings"` | `{projectKey}`（Project Tab）。Plan 編輯器不在頂層路由，改為 ProjectView 內的子 Tab，以 session ID 為 key 識別。
 - **React Query key 結構**：`["sessions", copilotRoot, showArchived]`（含參數，settings 更新會 invalidate）。
 - **CSS**：純 CSS class，命名用 BEM-like 如 `tab-item`, `tab-item-project`, `workspace-header`。無 Tailwind/CSS Modules。
 - **翻譯**：全部用 `t("key")` 取得，禁止 hardcode 中文字串在 JSX。

@@ -31,7 +31,7 @@ src/
 - **Query keys**：`["sessions", copilotRoot, showArchived]`、`["plan", sessionDir]`、`["settings"]`
 - **Toast 系統**：`showToast(message)` → `toastMessage` state → 2600ms 後自動消失
 - **Dialog 系統**：`setConfirmDialog({...})` / `setEditDialog({...})` → ConfirmDialog / EditDialog
-- **activeView 路由**：`"dashboard"` | `"settings"` | `{projectKey}` | `"plan:{sessionId}"`
+- **activeView 路由**：`"dashboard"` | `"settings"` | `{projectKey}`。Plan 編輯器**不是**頂層路由，位於 ProjectView 的子 Tab 內，以 session ID 為 key。
 - **planDraft**：plan 編輯的本地暫存，儲存時才寫入後端
 
 ## ANTI-PATTERNS
@@ -39,3 +39,4 @@ src/
 - 子元件不得直接 `invoke()` — 所有 IPC 只在 App.tsx
 - 不得 hardcode 中文文字在 JSX — 必須用 `t("key")`
 - 不得新增全域狀態管理庫（已有 React Query，避免引入 Redux/Zustand）
+- 不得在頂層 Tab 顯示 Plan 編輯器 — Plan 必須是 ProjectView 子 Tab

@@ -1171,10 +1171,25 @@ fn save_settings_internal(settings: &AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+/// 合法終端機可執行檔名稱白名單（不區分大小寫）
+const VALID_TERMINAL_STEMS: &[&str] = &["pwsh", "powershell", "cmd", "bash", "sh"];
+
 fn validate_terminal_path_internal(path: &str) -> bool {
     let candidate = PathBuf::from(path);
 
-    candidate.exists() && candidate.is_file()
+    if !candidate.exists() || !candidate.is_file() {
+        return false;
+    }
+
+    // 確認 file_stem 為合法終端機名稱
+    candidate
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| {
+            let stem_lower = stem.to_lowercase();
+            VALID_TERMINAL_STEMS.contains(&stem_lower.as_str())
+        })
+        .unwrap_or(false)
 }
 
 fn archive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
@@ -1295,14 +1310,34 @@ fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String> {
     Ok(deleted_count)
 }
 
-fn open_terminal_internal(terminal_path: &str, cwd: &str, session_id: &str) -> Result<(), String> {
+fn open_terminal_internal(terminal_path: &str, cwd: &str) -> Result<(), String> {
+    let terminal = PathBuf::from(terminal_path);
+    let stem = terminal
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
     let mut cmd = Command::new(terminal_path);
-    cmd.args([
-        "-NoExit",
-        "-Command",
-        &format!("copilot --resume={}", session_id),
-    ])
-    .current_dir(cwd);
+
+    match stem.as_str() {
+        "cmd" => {
+            cmd.args(["/K", &format!("cd /d \"{}\"", cwd)]);
+        }
+        "bash" | "sh" => {
+            cmd.arg("-i").current_dir(cwd);
+        }
+        // pwsh、powershell 及其他未知終端機皆走 PowerShell 語法
+        _ => {
+            cmd.args(["-NoExit", "-Command", &format!("cd '{}'", cwd)])
+                .current_dir(cwd);
+        }
+    }
+
+    // CMD 和 PowerShell 用 current_dir 以外的方式切換，仍需設定 current_dir 作為 fallback
+    if stem != "bash" && stem != "sh" {
+        cmd.current_dir(cwd);
+    }
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);
@@ -1390,9 +1425,20 @@ fn get_sessions(
     )
 }
 
+fn get_settings_internal() -> Result<AppSettings, String> {
+    let mut settings = load_settings_internal()?;
+    // 若 opencode_root 為空（舊版 settings.json 無此欄位），補填預設值供前端顯示
+    if settings.opencode_root.trim().is_empty() {
+        if let Ok(default_root) = default_opencode_root() {
+            settings.opencode_root = default_root.to_string_lossy().to_string();
+        }
+    }
+    Ok(settings)
+}
+
 #[tauri::command]
 fn get_settings() -> Result<AppSettings, String> {
-    load_settings_internal()
+    get_settings_internal()
 }
 
 #[tauri::command]
@@ -1502,8 +1548,8 @@ fn get_session_stats(session_dir: String) -> Result<SessionStats, String> {
 }
 
 #[tauri::command]
-fn open_terminal(terminal_path: String, cwd: String, session_id: String) -> Result<(), String> {
-    open_terminal_internal(&terminal_path, &cwd, &session_id)
+fn open_terminal(terminal_path: String, cwd: String, _session_id: String) -> Result<(), String> {
+    open_terminal_internal(&terminal_path, &cwd)
 }
 
 #[tauri::command]

@@ -14,7 +14,6 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
 import { PinIcon } from "./components/Icons";
-import { PlanEditor } from "./components/PlanEditor";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -69,6 +68,24 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
 
+  const [activePlanSessionId, setActivePlanSessionId] = useState<string | null>(null);
+  const [planDraft, setPlanDraft] = useState("");
+
+  // Plan sub-tab state per project — preserved across project switches
+  const [projectSubTabStates, setProjectSubTabStates] = useState<
+    Map<string, { openPlanKeys: string[]; activeSubTab: string }>
+  >(new Map());
+
+  const getProjectSubTabState = (projectKey: string) =>
+    projectSubTabStates.get(projectKey) ?? { openPlanKeys: [], activeSubTab: "sessions" };
+
+  const handleSubTabStateChange = (
+    projectKey: string,
+    state: { openPlanKeys: string[]; activeSubTab: string },
+  ) => {
+    setProjectSubTabStates((prev) => new Map(prev).set(projectKey, state));
+  };
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
@@ -77,9 +94,6 @@ function App() {
     "connecting",
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
-
-  const [openPlanKeys, setOpenPlanKeys] = useState<string[]>([]);
-  const [planDraft, setPlanDraft] = useState("");
 
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
@@ -113,11 +127,10 @@ function App() {
       }),
   });
 
-  const activePlanSession = useMemo(() => {
-    if (!activeView.startsWith("plan:")) return null;
-    const sessionId = activeView.replace("plan:", "");
-    return sessionsQuery.data?.find((s) => s.id === sessionId) ?? null;
-  }, [activeView, sessionsQuery.data]);
+  const activePlanSession = useMemo(
+    () => sessionsQuery.data?.find((s) => s.id === activePlanSessionId) ?? null,
+    [activePlanSessionId, sessionsQuery.data],
+  );
 
   const planQuery = useQuery({
     queryKey: ["plan", activePlanSession?.sessionDir ?? ""],
@@ -414,11 +427,6 @@ function App() {
     setActiveView((v) => (v === projectKey ? "dashboard" : v));
   };
 
-  const closePlanTab = (planKey: string) => {
-    setOpenPlanKeys((v) => v.filter((k) => k !== planKey));
-    setActiveView((v) => (v === planKey ? "dashboard" : v));
-  };
-
   const handleSaveSettings = async () => {
     const next: AppSettings = {
       copilotRoot: settingsForm.copilotRoot.trim(),
@@ -536,8 +544,12 @@ function App() {
     });
   };
 
-  const handleCopyCommand = async (sessionId: string) => {
-    await navigator.clipboard.writeText(`copilot --resume=${sessionId}`);
+  const handleCopyCommand = async (session: SessionInfo) => {
+    const command =
+      session.provider === "opencode"
+        ? `opencode session ${session.id}`
+        : `copilot --resume=${session.id}`;
+    await navigator.clipboard.writeText(command);
     showToast(t("toast.commandCopied"));
   };
 
@@ -571,9 +583,7 @@ function App() {
   };
 
   const handleOpenPlan = (session: SessionInfo) => {
-    const planKey = `plan:${session.id}`;
-    setOpenPlanKeys((v) => (v.includes(planKey) ? v : [...v, planKey]));
-    setActiveView(planKey);
+    setActivePlanSessionId(session.id);
   };
 
   const handleSavePlan = () => {
@@ -617,16 +627,12 @@ function App() {
                   ? t("tabs.dashboard")
                   : activeView === "settings"
                     ? t("settings.title")
-                    : activeView.startsWith("plan:") && activePlanSession
-                      ? t("plan.title")
-                      : activeProject?.title ?? ""}
+                    : activeProject?.title ?? ""}
               </h2>
               <p className="workspace-subtitle">
                 {activeView === "settings"
                   ? t("settings.subtitle")
-                  : activeView.startsWith("plan:") && activePlanSession
-                    ? (activePlanSession.summary?.trim() || activePlanSession.id)
-                    : activeProject?.pathLabel ?? ""}
+                  : activeProject?.pathLabel ?? ""}
               </p>
             </div>
           </header>
@@ -673,36 +679,7 @@ function App() {
                   >
                     ×
                   </button>
-                </div>
-              );
-            })}
-
-            {openPlanKeys.map((planKey) => {
-              const sessionId = planKey.replace("plan:", "");
-              const session = sessionsQuery.data?.find((s) => s.id === sessionId);
-              if (!session) return null;
-              const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
-              return (
-                <div
-                  key={planKey}
-                  className={`tab-item tab-item-project ${activeView === planKey ? "active" : ""}`}
-                >
-                  <button
-                    type="button"
-                    className="tab-label"
-                    onClick={() => setActiveView(planKey)}
-                  >
-                    {t("plan.tab")} · {tabTitle}
-                  </button>
-                  <button
-                    type="button"
-                    className="tab-close"
-                    onClick={() => closePlanTab(planKey)}
-                    aria-label={`${t("tabs.close")} ${tabTitle}`}
-                  >
-                    ×
-                  </button>
-                </div>
+                  </div>
               );
             })}
           </section>
@@ -739,12 +716,11 @@ function App() {
 
           {activeProject ? (
             <ProjectView
-              key={activeProject.key}
               project={activeProject}
               showArchived={settingsForm.showArchived}
               onToggleArchived={(v) => void handleToggleArchived(v)}
               onOpenTerminal={(s) => void handleOpenTerminal(s)}
-              onCopyCommand={(id) => void handleCopyCommand(id)}
+              onCopyCommand={(s) => void handleCopyCommand(s)}
               onEditNotes={handleEditNotes}
               onEditTags={handleEditTags}
               onOpenPlan={handleOpenPlan}
@@ -760,22 +736,21 @@ function App() {
               onTogglePin={() => void togglePinProject(activeProject.key)}
               sessionStats={sessionStatsMap}
               sessionStatsLoading={sessionStatsLoadingMap}
+              sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecQuery.data}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               onReadFileContent={handleReadFileContent}
-            />
-          ) : null}
-
-          {activeView.startsWith("plan:") && activePlanSession ? (
-            <PlanEditor
-              session={activePlanSession}
+              activePlanSessionId={activePlanSessionId}
+              onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}
               planPreviewHtml={planPreviewHtml}
-              onDraftChange={setPlanDraft}
-              onSave={handleSavePlan}
-              onOpenExternal={(s) => void handleOpenPlanExternal(s)}
-              onClose={() => closePlanTab(activeView)}
+              onPlanDraftChange={setPlanDraft}
+              onSavePlan={handleSavePlan}
+              onOpenPlanExternal={(s) => void handleOpenPlanExternal(s)}
+              openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
+              activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
+              onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
             />
           ) : null}
         </div>

@@ -657,16 +657,37 @@ textarea {
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  min-height: 400px;
   margin-bottom: 20px;
+}
+
+.plan-editor-layout .field-group {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+.plan-textarea {
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  box-sizing: border-box;
 }
 
 .plan-preview {
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: 8px;
+  height: 100%;
+  min-height: 0;
 }
 
 .plan-preview-markdown {
-  min-height: 280px;
+  height: 100%;
+}
+
+.plan-preview-markdown {
   padding: 14px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
@@ -1426,6 +1447,69 @@ textarea {
   color: var(--color-text-primary);
   border-color: var(--color-border-subtle);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.sub-tab-item--closeable {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+
+.sub-tab-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px 0 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  height: 36px;
+}
+
+.sub-tab-close {
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.sub-tab-close:hover {
+  opacity: 1;
+  background: var(--color-surface-accent);
+}
+
+/* ========================
+   Skeleton loading cards
+   ======================== */
+
+.skeleton-card {
+  height: 80px;
+  border-radius: var(--radius-xl);
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-panel) 25%,
+    var(--color-surface-input) 50%,
+    var(--color-surface-panel) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* ========================
