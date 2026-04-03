@@ -14,43 +14,70 @@ function formatCompactNumber(value: number) {
 export function SessionStatsPanel({ stats }: Props) {
   const { t } = useI18n();
   const toolEntries = Object.entries(stats.toolBreakdown).sort((a, b) => b[1] - a[1]);
-  const averageTokens = stats.interactionCount > 0 ? Math.round(stats.outputTokens / stats.interactionCount) : 0;
 
   return (
     <section className="stats-panel">
-      <div className="stats-panel-row">
-        <strong>{formatCompactNumber(stats.toolCallCount)}</strong>
-        <span>{t("stats.detail.toolCalls")}</span>
-      </div>
-      <div className="stats-panel-row">
-        <strong>{formatCompactNumber(stats.reasoningCount)}</strong>
-        <span>{t("stats.detail.reasoning")}</span>
-      </div>
-      <div className="stats-panel-row">
-        <strong>{formatCompactNumber(averageTokens)}</strong>
-        <span>{t("stats.detail.avgTokens")}</span>
-      </div>
-      {stats.inputTokens > 0 ? (
-        <div className="stats-panel-row">
-          <strong>{formatCompactNumber(stats.inputTokens)}</strong>
-          <span>{t("stats.detail.inputTokens")}</span>
-        </div>
-      ) : null}
-      <div className="stats-panel-row stats-panel-row-block">
-        <strong>{t("stats.detail.models")}</strong>
-        <span>{stats.modelsUsed.length > 0 ? stats.modelsUsed.join(", ") : t("stats.noData")}</span>
-      </div>
-      {stats.isLive ? <div className="stats-panel-live">{t("stats.detail.live")}</div> : null}
-      {toolEntries.length > 0 ? (
-        <div className="stats-tool-table">
-          {toolEntries.map(([toolName, count]) => (
-            <div key={toolName} className="stats-tool-row">
-              <span>{toolName}</span>
-              <strong>{formatCompactNumber(count)}</strong>
+      <div className="stats-panel-grid">
+        <div className="stats-panel-col">
+          <div className="stats-panel-metric">
+            <span className="stats-panel-label">{t("stats.tokens")}</span>
+            <strong>{formatCompactNumber(stats.outputTokens)}</strong>
+          </div>
+          {stats.inputTokens > 0 ? (
+            <div className="stats-panel-metric">
+              <span className="stats-panel-label">{t("stats.detail.inputTokens")}</span>
+              <strong>{formatCompactNumber(stats.inputTokens)}</strong>
             </div>
-          ))}
+          ) : null}
+          <div className="stats-panel-metric">
+            <span className="stats-panel-label">{t("stats.turns")}</span>
+            <strong>{formatCompactNumber(stats.interactionCount)}</strong>
+          </div>
+          <div className="stats-panel-metric">
+            <span className="stats-panel-label">{t("stats.detail.toolCalls")}</span>
+            <strong>{formatCompactNumber(stats.toolCallCount)}</strong>
+          </div>
+          {stats.reasoningCount > 0 ? (
+            <div className="stats-panel-metric">
+              <span className="stats-panel-label">{t("stats.detail.reasoning")}</span>
+              <strong>{formatCompactNumber(stats.reasoningCount)}</strong>
+            </div>
+          ) : null}
+          <div className="stats-panel-metric">
+            <span className="stats-panel-label">{t("stats.duration")}</span>
+            <strong>{formatCompactNumber(stats.durationMinutes)}</strong>
+          </div>
+          {stats.isLive ? (
+            <div className="stats-panel-live-row">
+              <span className="stats-live-dot" />
+              <span>{t("statsLiveIndicator")}</span>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+        <div className="stats-panel-col">
+          <div className="stats-panel-section">
+            <strong>{t("stats.detail.models")}</strong>
+            <span className="stats-panel-text">
+              {stats.modelsUsed.length > 0 ? stats.modelsUsed.join(", ") : t("stats.noData")}
+            </span>
+          </div>
+          <div className="stats-panel-section">
+            <strong>{t("stats.detail.toolCalls")}</strong>
+            {toolEntries.length > 0 ? (
+              <div className="stats-tool-breakdown-scroll">
+                {toolEntries.map(([toolName, count]) => (
+                  <div key={toolName} className="stats-tool-row">
+                    <span>{toolName}</span>
+                    <strong>{formatCompactNumber(count)}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <span className="stats-panel-text">{t("stats.noData")}</span>
+            )}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

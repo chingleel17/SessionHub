@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -16,7 +16,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
@@ -60,6 +60,17 @@ fn default_enabled_providers() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionActivityStatus {
+    session_id: String,
+    /// "idle" | "active" | "waiting" | "done"
+    status: String,
+    /// "thinking" | "tool_call" | "file_op" | "sub_agent" | "working" | "completed"
+    detail: Option<String>,
+    last_activity_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppSettings {
     copilot_root: String,
     #[serde(default)]
@@ -73,6 +84,8 @@ struct AppSettings {
     enabled_providers: Vec<String>,
     #[serde(default)]
     provider_integrations: Vec<ProviderIntegrationStatus>,
+    #[serde(default)]
+    default_launcher: Option<String>,
 }
 
 const PROVIDER_INTEGRATION_VERSION: u32 = 1;
@@ -547,15 +560,16 @@ fn is_relevant_copilot_event(event: &notify::Event, session_roots: &[PathBuf]) -
 }
 
 fn build_opencode_watch_snapshot(opencode_root: &Path) -> OpenCodeWatchSnapshot {
-    let db_path = opencode_root.join("opencode.db");
-    let wal_path = opencode_root.join("opencode.db-wal");
+    // JSON-based: watch storage/session/ directory mtime
+    let session_storage = opencode_root.join("storage").join("session");
+    let message_storage = opencode_root.join("storage").join("message");
 
     OpenCodeWatchSnapshot {
-        db_exists: db_path.exists(),
-        wal_exists: wal_path.exists(),
-        db_mtime_ms: path_mtime_millis(&db_path),
-        wal_mtime_ms: path_mtime_millis(&wal_path),
-        max_cursor: get_opencode_max_cursor(opencode_root).ok(),
+        db_exists: session_storage.exists(),
+        wal_exists: message_storage.exists(),
+        db_mtime_ms: path_mtime_millis(&session_storage),
+        wal_mtime_ms: path_mtime_millis(&message_storage),
+        max_cursor: None,
     }
 }
 
@@ -581,10 +595,13 @@ fn is_relevant_opencode_event(event: &notify::Event, opencode_root: &Path) -> bo
         return false;
     }
 
+    let session_storage = opencode_root.join("storage").join("session");
+    let message_storage = opencode_root.join("storage").join("message");
+
     event.paths.iter().any(|path| {
         path == opencode_root
-            || path_file_name_matches(path, "opencode.db")
-            || path_file_name_matches(path, "opencode.db-wal")
+            || path.starts_with(&session_storage)
+            || path.starts_with(&message_storage)
     })
 }
 
@@ -638,6 +655,35 @@ fn process_provider_bridge_event(
     emit_provider_refresh(app, refresh_state, provider)
 }
 
+/// 將 JSON Value 強制轉換為 Option<String>。
+/// string → Some(string)；array → Some(join by ", ")；null/missing → None。
+/// 其他型別（number/bool）→ Some(to_string())。
+fn coerce_json_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            let joined = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+        other => Some(other.to_string()),
+    }
+}
+
 fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRecord>, String> {
     if !bridge_path.exists() {
         return Ok(None);
@@ -667,14 +713,45 @@ fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRe
         return Ok(None);
     };
 
-    serde_json::from_str::<ProviderBridgeRecord>(&last_line)
-        .map(Some)
-        .map_err(|error| {
-            format!(
-                "failed to parse bridge file {}: {error}",
-                bridge_path.display()
-            )
-        })
+    // 先解析為 generic Value，對所有 Option<String> 欄位做型別容錯（可能為 array）
+    let raw: serde_json::Value = serde_json::from_str(&last_line).map_err(|error| {
+        format!(
+            "failed to parse bridge file {}: {error}",
+            bridge_path.display()
+        )
+    })?;
+
+    let get_str =
+        |key: &str| -> Option<String> { raw.get(key).and_then(|v| coerce_json_string(v)) };
+    let get_req_str = |key: &str| -> Result<String, String> {
+        raw.get(key)
+            .and_then(|v| coerce_json_string(v))
+            .ok_or_else(|| {
+                format!(
+                    "missing required field '{}' in bridge file {}",
+                    key,
+                    bridge_path.display()
+                )
+            })
+    };
+    let get_u32 = |key: &str, default: u32| -> u32 {
+        raw.get(key)
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(default)
+    };
+
+    Ok(Some(ProviderBridgeRecord {
+        version: get_u32("version", default_provider_bridge_version()),
+        provider: get_req_str("provider")?,
+        event_type: get_req_str("eventType")?,
+        timestamp: get_req_str("timestamp")?,
+        session_id: get_str("sessionId"),
+        cwd: get_str("cwd"),
+        source_path: get_str("sourcePath"),
+        title: get_str("title"),
+        error: get_str("error"),
+    }))
 }
 
 fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnostics {
@@ -1297,25 +1374,6 @@ fn detect_opencode_integration_status() -> ProviderIntegrationStatus {
     }
 }
 
-/// 以唯讀模式開啟 OpenCode 的 SQLite 資料庫
-fn open_opencode_db_readonly(opencode_root: &Path) -> Result<Connection, String> {
-    let db_path = opencode_root.join("opencode.db");
-
-    if !db_path.exists() {
-        return Err(format!(
-            "opencode.db does not exist at {}",
-            db_path.display()
-        ));
-    }
-
-    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|error| {
-        format!(
-            "failed to open opencode db at {}: {error}",
-            db_path.display()
-        )
-    })
-}
-
 /// 將 unix timestamp（毫秒）轉換為 ISO 8601 字串
 fn unix_ms_to_iso8601(timestamp_ms: i64) -> Option<String> {
     let timestamp_secs = timestamp_ms / 1000;
@@ -1325,131 +1383,219 @@ fn unix_ms_to_iso8601(timestamp_ms: i64) -> Option<String> {
         .map(|datetime| datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
-/// 掃描 OpenCode 資料庫中的 session，映射為 Vec<SessionInfo>
+// ── OpenCode JSON 儲存格式（session/*.json / project/*.json）────────────────
+
+#[derive(Debug, Deserialize)]
+struct OpencodeProjectJson {
+    id: String,
+    #[serde(default)]
+    worktree: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpencodeSessionJsonTime {
+    #[serde(default)]
+    created: Option<i64>,
+    #[serde(default)]
+    updated: Option<i64>,
+    #[serde(default)]
+    archived: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpencodeSessionJsonSummary {
+    #[serde(default)]
+    additions: Option<i64>,
+    #[serde(default)]
+    deletions: Option<i64>,
+    #[serde(default)]
+    files: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpencodeSessionJson {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    directory: Option<String>,
+    #[serde(default)]
+    time: Option<OpencodeSessionJsonTime>,
+    #[serde(default)]
+    summary: Option<OpencodeSessionJsonSummary>,
+}
+
+/// 讀取 storage/project/*.json，回傳 HashMap<project_id, worktree>
+fn load_opencode_projects(opencode_root: &Path) -> HashMap<String, Option<String>> {
+    let project_dir = opencode_root.join("storage").join("project");
+    let mut map = HashMap::new();
+    let Ok(entries) = fs::read_dir(&project_dir) else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(project) = serde_json::from_str::<OpencodeProjectJson>(&content) else {
+            continue;
+        };
+        map.insert(project.id, project.worktree);
+    }
+    map
+}
+
+/// 掃描 storage/message/，回傳有訊息的 session_id HashSet
+fn build_opencode_events_index(opencode_root: &Path) -> HashSet<String> {
+    let message_dir = opencode_root.join("storage").join("message");
+    let mut set = HashSet::new();
+    let Ok(entries) = fs::read_dir(&message_dir) else {
+        return set;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        // 嘗試讀取該 message 目錄下任一 JSON 取得 sessionID
+        let Ok(files) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for file_entry in files.flatten() {
+            let file_path = file_entry.path();
+            if file_path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&file_path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+                continue;
+            };
+            if let Some(session_id) = value.get("sessionID").and_then(|v| v.as_str()) {
+                set.insert(session_id.to_string());
+            }
+            break; // 每個 message dir 只需讀一個 JSON
+        }
+    }
+    set
+}
+
+/// 掃描 OpenCode JSON 檔案中的 session，映射為 Vec<SessionInfo>
 fn scan_opencode_sessions_internal(
     opencode_root: &Path,
     show_archived: bool,
     metadata_conn: &Connection,
 ) -> Result<Vec<SessionInfo>, String> {
-    let oc_conn = match open_opencode_db_readonly(opencode_root) {
-        Ok(conn) => conn,
-        Err(error) => {
-            eprintln!("opencode provider: {error}");
-            return Ok(Vec::new());
-        }
-    };
+    let storage_root = opencode_root.join("storage");
+    let session_storage = storage_root.join("session");
 
-    let query = if show_archived {
-        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
-                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
-         FROM session s \
-         LEFT JOIN project p ON s.project_id = p.id"
-    } else {
-        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
-                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
-         FROM session s \
-         LEFT JOIN project p ON s.project_id = p.id \
-         WHERE s.time_archived IS NULL"
-    };
+    if !session_storage.exists() {
+        return Ok(Vec::new());
+    }
 
-    let mut statement = oc_conn.prepare(query).map_err(|error| {
-        eprintln!("opencode provider: failed to prepare query: {error}");
-        format!("opencode db query error: {error}")
-    })?;
+    // 讀取所有 project，建立 project_id → worktree 對應
+    let projects = load_opencode_projects(opencode_root);
 
-    let rows = statement
-        .query_map([], |row| {
-            let id: String = row.get(0)?;
-            let title: Option<String> = row.get(1)?;
-            let time_created: Option<i64> = row.get(2)?;
-            let time_updated: Option<i64> = row.get(3)?;
-            let time_archived: Option<i64> = row.get(4)?;
-            let worktree: Option<String> = row.get(5)?;
-            let summary_additions: Option<i64> = row.get(6)?;
-            let summary_deletions: Option<i64> = row.get(7)?;
-            let summary_files: Option<i64> = row.get(8)?;
-
-            Ok((
-                id,
-                title,
-                time_created,
-                time_updated,
-                time_archived,
-                worktree,
-                summary_additions,
-                summary_deletions,
-                summary_files,
-            ))
-        })
-        .map_err(|error| {
-            eprintln!("opencode provider: failed to query sessions: {error}");
-            format!("opencode db query error: {error}")
-        })?;
+    // 掃描 storage/message/ 建立 has_events 索引
+    let events_index = build_opencode_events_index(opencode_root);
 
     let mut sessions = Vec::new();
 
-    for row_result in rows {
-        let (
-            id,
-            title,
-            time_created,
-            time_updated,
-            time_archived,
-            worktree,
-            summary_additions,
-            summary_deletions,
-            summary_files,
-        ) = match row_result {
-            Ok(data) => data,
-            Err(error) => {
-                eprintln!("opencode provider: failed to read row: {error}");
+    // 遍歷 storage/session/{project_id}/*.json
+    let Ok(project_dirs) = fs::read_dir(&session_storage) else {
+        return Ok(Vec::new());
+    };
+
+    for project_entry in project_dirs.flatten() {
+        let project_dir = project_entry.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+
+        let project_id = project_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // worktree 從 project JSON 取，若無則 None
+        let worktree = projects.get(&project_id).and_then(|w| w.clone());
+
+        let Ok(session_files) = fs::read_dir(&project_dir) else {
+            continue;
+        };
+
+        for session_entry in session_files.flatten() {
+            let session_path = session_entry.path();
+            if session_path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-        };
 
-        let is_archived = time_archived.is_some();
-        let created_at = time_created.and_then(unix_ms_to_iso8601);
-        let updated_at = time_updated.and_then(unix_ms_to_iso8601);
+            let Ok(content) = fs::read_to_string(&session_path) else {
+                continue;
+            };
+            let Ok(session) = serde_json::from_str::<OpencodeSessionJson>(&content) else {
+                continue;
+            };
 
-        // 建構 summary，包含 additions/deletions/files 統計
-        let summary = title;
-        let summary_count = {
-            let total = summary_additions.unwrap_or(0)
-                + summary_deletions.unwrap_or(0)
-                + summary_files.unwrap_or(0);
-            if total > 0 {
-                Some(total as u32)
-            } else {
-                None
+            let time = session.time.as_ref();
+            let is_archived = time.and_then(|t| t.archived).is_some();
+
+            if !show_archived && is_archived {
+                continue;
             }
-        };
 
-        let meta = read_session_meta(metadata_conn, &id).unwrap_or(SessionMeta {
-            notes: None,
-            tags: Vec::new(),
-        });
+            let created_at = time.and_then(|t| t.created).and_then(unix_ms_to_iso8601);
+            let updated_at = time.and_then(|t| t.updated).and_then(unix_ms_to_iso8601);
 
-        sessions.push(SessionInfo {
-            id: id.clone(),
-            provider: "opencode".to_string(),
-            cwd: worktree,
-            summary,
-            summary_count,
-            created_at,
-            updated_at,
-            session_dir: opencode_root
-                .join("storage")
-                .join("message")
-                .join(&id)
-                .to_string_lossy()
-                .to_string(),
-            parse_error: false,
-            is_archived,
-            notes: meta.notes,
-            tags: meta.tags,
-            has_plan: false,
-            has_events: false,
-        });
+            let summary_count = session.summary.as_ref().and_then(|s| {
+                let total =
+                    s.additions.unwrap_or(0) + s.deletions.unwrap_or(0) + s.files.unwrap_or(0);
+                if total > 0 {
+                    Some(total as u32)
+                } else {
+                    None
+                }
+            });
+
+            let cwd = session.directory.or(worktree.clone());
+
+            let meta = read_session_meta(metadata_conn, &session.id).unwrap_or(SessionMeta {
+                notes: None,
+                tags: Vec::new(),
+            });
+
+            // session_dir 指向 storage/message/{session_id}（stats 計算用）
+            let message_dir = storage_root.join("message").join(&session.id);
+            let has_events = events_index.contains(&session.id)
+                || message_dir
+                    .read_dir()
+                    .map(|mut e| e.next().is_some())
+                    .unwrap_or(false);
+
+            sessions.push(SessionInfo {
+                id: session.id.clone(),
+                provider: "opencode".to_string(),
+                cwd,
+                summary: session.title,
+                summary_count,
+                created_at,
+                updated_at,
+                session_dir: message_dir.to_string_lossy().to_string(),
+                parse_error: false,
+                is_archived,
+                notes: meta.notes,
+                tags: meta.tags,
+                has_plan: false,
+                has_events,
+            });
+        }
     }
 
     Ok(sessions)
@@ -1469,6 +1615,7 @@ impl AppSettings {
             pinned_projects: Vec::new(),
             enabled_providers: default_enabled_providers(),
             provider_integrations: Vec::new(),
+            default_launcher: None,
         })
     }
 }
@@ -1490,32 +1637,313 @@ fn metadata_db_path() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join("metadata.db"))
 }
 
-fn session_cache_path() -> Result<PathBuf, String> {
+fn legacy_session_cache_path() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join("session_cache.json"))
 }
 
-fn save_session_cache(sessions: &[SessionInfo]) -> Result<(), String> {
-    let cache_path = session_cache_path()?;
-    ensure_parent_dir(&cache_path)?;
-    let content = serde_json::to_string(sessions)
-        .map_err(|error| format!("failed to serialize session cache: {error}"))?;
-    fs::write(&cache_path, content)
-        .map_err(|error| format!("failed to write session cache: {error}"))?;
+fn load_sessions_cache_from_db(
+    connection: &Connection,
+    provider: Option<&str>,
+) -> Result<Vec<SessionInfo>, String> {
+    struct CachedSessionRow {
+        session_id: String,
+        provider: String,
+        cwd: Option<String>,
+        summary: Option<String>,
+        summary_count: Option<u32>,
+        created_at: Option<String>,
+        updated_at: Option<String>,
+        session_dir: String,
+        parse_error: i64,
+        is_archived: i64,
+        has_plan: i64,
+        has_events: i64,
+    }
+
+    let mut sessions = Vec::new();
+    let query = if provider.is_some() {
+        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+                session_dir, parse_error, is_archived, has_plan, has_events \
+         FROM sessions_cache \
+         WHERE provider = ?1"
+    } else {
+        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+                session_dir, parse_error, is_archived, has_plan, has_events \
+         FROM sessions_cache"
+    };
+
+    let mut statement = connection
+        .prepare(query)
+        .map_err(|error| format!("failed to prepare sessions_cache query: {error}"))?;
+
+    let mut cached_rows = Vec::new();
+    if let Some(provider) = provider {
+        let rows = statement
+            .query_map([provider], |row| {
+                Ok(CachedSessionRow {
+                    session_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    cwd: row.get(2)?,
+                    summary: row.get(3)?,
+                    summary_count: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    session_dir: row.get(7)?,
+                    parse_error: row.get(8)?,
+                    is_archived: row.get(9)?,
+                    has_plan: row.get(10)?,
+                    has_events: row.get(11)?,
+                })
+            })
+            .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
+        for row_result in rows {
+            cached_rows.push(
+                row_result
+                    .map_err(|error| format!("failed to read sessions_cache row: {error}"))?,
+            );
+        }
+    } else {
+        let rows = statement
+            .query_map([], |row| {
+                Ok(CachedSessionRow {
+                    session_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    cwd: row.get(2)?,
+                    summary: row.get(3)?,
+                    summary_count: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    session_dir: row.get(7)?,
+                    parse_error: row.get(8)?,
+                    is_archived: row.get(9)?,
+                    has_plan: row.get(10)?,
+                    has_events: row.get(11)?,
+                })
+            })
+            .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
+        for row_result in rows {
+            cached_rows.push(
+                row_result
+                    .map_err(|error| format!("failed to read sessions_cache row: {error}"))?,
+            );
+        }
+    }
+
+    for row in cached_rows {
+        let meta = read_session_meta(connection, &row.session_id).unwrap_or(SessionMeta {
+            notes: None,
+            tags: Vec::new(),
+        });
+
+        sessions.push(SessionInfo {
+            id: row.session_id,
+            provider: row.provider,
+            cwd: row.cwd,
+            summary: row.summary,
+            summary_count: row.summary_count,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            session_dir: row.session_dir,
+            parse_error: row.parse_error != 0,
+            is_archived: row.is_archived != 0,
+            notes: meta.notes,
+            tags: meta.tags,
+            has_plan: row.has_plan != 0,
+            has_events: row.has_events != 0,
+        });
+    }
+
+    Ok(sessions)
+}
+
+fn save_sessions_cache_to_db(
+    connection: &Connection,
+    providers: &[String],
+    sessions: &[SessionInfo],
+) -> Result<(), String> {
+    for provider in providers {
+        connection
+            .execute("DELETE FROM sessions_cache WHERE provider = ?1", [provider])
+            .map_err(|error| format!("failed to clear sessions_cache: {error}"))?;
+    }
+
+    let mut statement = connection
+        .prepare(
+            "
+            INSERT INTO sessions_cache (
+                session_id, provider, cwd, summary, summary_count, created_at, updated_at,
+                session_dir, parse_error, is_archived, has_plan, has_events
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ",
+        )
+        .map_err(|error| format!("failed to prepare sessions_cache insert: {error}"))?;
+
+    for session in sessions {
+        if !providers.iter().any(|p| p == &session.provider) {
+            continue;
+        }
+        statement
+            .execute(params![
+                session.id,
+                session.provider,
+                session.cwd,
+                session.summary,
+                session.summary_count,
+                session.created_at,
+                session.updated_at,
+                session.session_dir,
+                if session.parse_error { 1 } else { 0 },
+                if session.is_archived { 1 } else { 0 },
+                if session.has_plan { 1 } else { 0 },
+                if session.has_events { 1 } else { 0 }
+            ])
+            .map_err(|error| format!("failed to insert sessions_cache row: {error}"))?;
+    }
+
     Ok(())
 }
 
-#[tauri::command]
-fn load_session_cache() -> Vec<SessionInfo> {
-    let Ok(cache_path) = session_cache_path() else {
-        return Vec::new();
-    };
-    if !cache_path.exists() {
-        return Vec::new();
+fn load_scan_state_from_db(connection: &Connection, provider: &str) -> Result<(i64, i64), String> {
+    let mut statement = connection
+        .prepare("SELECT last_full_scan_at, last_cursor FROM scan_state WHERE provider = ?1")
+        .map_err(|error| format!("failed to prepare scan_state query: {error}"))?;
+
+    let mut rows = statement
+        .query(params![provider])
+        .map_err(|error| format!("failed to query scan_state: {error}"))?;
+
+    match rows
+        .next()
+        .map_err(|error| format!("failed to read scan_state row: {error}"))?
+    {
+        Some(row) => {
+            let last_full_scan_at: i64 = row
+                .get(0)
+                .map_err(|error| format!("failed to read scan_state last_full_scan_at: {error}"))?;
+            let last_cursor: i64 = row
+                .get(1)
+                .map_err(|error| format!("failed to read scan_state last_cursor: {error}"))?;
+            Ok((last_full_scan_at, last_cursor))
+        }
+        None => Ok((0, 0)),
     }
-    let Ok(content) = fs::read_to_string(&cache_path) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<SessionInfo>>(&content).unwrap_or_default()
+}
+
+fn save_scan_state_to_db(
+    connection: &Connection,
+    provider: &str,
+    last_full_scan_at: i64,
+    last_cursor: i64,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO scan_state (provider, last_full_scan_at, last_cursor)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(provider) DO UPDATE SET
+                last_full_scan_at = excluded.last_full_scan_at,
+                last_cursor = excluded.last_cursor
+            ",
+            params![provider, last_full_scan_at, last_cursor],
+        )
+        .map_err(|error| format!("failed to upsert scan_state: {error}"))?;
+    Ok(())
+}
+
+fn load_session_mtimes_from_db(
+    connection: &Connection,
+    provider: &str,
+) -> Result<HashMap<String, i64>, String> {
+    let mut statement = connection
+        .prepare("SELECT session_id, mtime FROM session_mtimes WHERE provider = ?1")
+        .map_err(|error| format!("failed to prepare session_mtimes query: {error}"))?;
+
+    let rows = statement
+        .query_map([provider], |row| {
+            let session_id: String = row.get(0)?;
+            let mtime: i64 = row.get(1)?;
+            Ok((session_id, mtime))
+        })
+        .map_err(|error| format!("failed to query session_mtimes: {error}"))?;
+
+    let mut mtimes = HashMap::new();
+    for row_result in rows {
+        let (session_id, mtime) =
+            row_result.map_err(|error| format!("failed to read session_mtimes row: {error}"))?;
+        mtimes.insert(session_id, mtime);
+    }
+
+    Ok(mtimes)
+}
+
+fn save_session_mtimes_to_db(
+    connection: &Connection,
+    provider: &str,
+    mtimes: &HashMap<String, i64>,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM session_mtimes WHERE provider = ?1",
+            params![provider],
+        )
+        .map_err(|error| format!("failed to clear session_mtimes: {error}"))?;
+
+    let mut statement = connection
+        .prepare("INSERT INTO session_mtimes (session_id, provider, mtime) VALUES (?1, ?2, ?3)")
+        .map_err(|error| format!("failed to prepare session_mtimes insert: {error}"))?;
+
+    for (session_id, mtime) in mtimes {
+        statement
+            .execute(params![session_id, provider, mtime])
+            .map_err(|error| format!("failed to insert session_mtimes row: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn instant_from_unix_secs(stored: i64) -> Instant {
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    if stored <= 0 {
+        return Instant::now() - Duration::from_secs(FULL_SCAN_THRESHOLD_SECS + 1);
+    }
+    let stored_secs = stored as u64;
+    if stored_secs >= now_secs {
+        return Instant::now();
+    }
+    let elapsed = now_secs - stored_secs;
+    Instant::now() - Duration::from_secs(elapsed)
+}
+
+fn persist_provider_cache(
+    connection: &Connection,
+    provider: &str,
+    cache: &ProviderCache,
+) -> Result<(), String> {
+    let provider_sessions: Vec<SessionInfo> = cache
+        .sessions
+        .iter()
+        .filter(|session| session.provider == provider)
+        .cloned()
+        .collect();
+    let providers = vec![provider.to_string()];
+    save_sessions_cache_to_db(connection, &providers, &provider_sessions)?;
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let last_full_scan_at = now_secs
+        .saturating_sub(cache.last_full_scan_at.elapsed().as_secs())
+        .try_into()
+        .unwrap_or(0);
+    save_scan_state_to_db(connection, provider, last_full_scan_at, cache.last_cursor)?;
+    save_session_mtimes_to_db(connection, provider, &cache.session_mtimes)?;
+
+    Ok(())
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -1625,14 +2053,14 @@ fn create_opencode_watcher(
     opencode_root: &Path,
     refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
 ) -> Result<RecommendedWatcher, String> {
-    let wal_path = opencode_root.join("opencode.db-wal");
-    let db_path = opencode_root.join("opencode.db");
+    let session_storage = opencode_root.join("storage").join("session");
+    let message_storage = opencode_root.join("storage").join("message");
 
-    // WAL 或主 DB 至少一個必須存在
-    if !wal_path.exists() && !db_path.exists() {
+    // storage/session/ 目錄必須存在
+    if !session_storage.exists() {
         return Err(format!(
-            "opencode db does not exist at {}",
-            opencode_root.display()
+            "opencode session storage does not exist at {}",
+            session_storage.display()
         ));
     }
 
@@ -1640,7 +2068,6 @@ fn create_opencode_watcher(
     let watch_root = opencode_root.to_path_buf();
     let snapshot_state = Arc::new(Mutex::new(build_opencode_watch_snapshot(&watch_root)));
     let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
-    // 標記 debounce thread 是否已在執行，避免高頻事件時重複 spawn
     let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
@@ -1648,47 +2075,36 @@ fn create_opencode_watcher(
             if !is_relevant_opencode_event(&event, &watch_root) {
                 return;
             }
-
-            // 更新最後事件時間戳
             if let Ok(mut ts) = last_event.lock() {
                 *ts = Instant::now();
             }
-
-            // 若 debounce thread 已在跑，只更新時間即可，不再 spawn
             if debounce_running
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
             {
                 return;
             }
-
-            // spawn 唯一一個 debounce thread
             let le = Arc::clone(&last_event);
             let handle = app_handle.clone();
             let running = Arc::clone(&debounce_running);
             let refreshes = Arc::clone(&refresh_state);
             let watched_root = watch_root.clone();
             let tracked_snapshot = Arc::clone(&snapshot_state);
-            thread::spawn(move || {
-                loop {
-                    thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
-                    let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
-                    if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
-                        // 穩定後 emit 並結束 thread
-                        running.store(false, Ordering::SeqCst);
-                        match should_emit_opencode_refresh(&watched_root, &tracked_snapshot) {
-                            Ok(true) => {
-                                let _ =
-                                    emit_provider_refresh(&handle, &refreshes, OPENCODE_PROVIDER);
-                            }
-                            Ok(false) => {}
-                            Err(error) => {
-                                eprintln!("failed to verify opencode watcher refresh: {error}");
-                            }
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    match should_emit_opencode_refresh(&watched_root, &tracked_snapshot) {
+                        Ok(true) => {
+                            let _ = emit_provider_refresh(&handle, &refreshes, OPENCODE_PROVIDER);
                         }
-                        break;
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("failed to verify opencode watcher refresh: {error}");
+                        }
                     }
-                    // 尚未穩定（有新事件更新了 last_event），繼續等待
+                    break;
                 }
             });
         }
@@ -1696,17 +2112,12 @@ fn create_opencode_watcher(
     .map_err(|error| format!("failed to create opencode watcher: {error}"))?;
 
     watcher
-        .watch(opencode_root, RecursiveMode::NonRecursive)
-        .map_err(|error| format!("failed to watch {}: {error}", opencode_root.display()))?;
-    if db_path.exists() {
+        .watch(&session_storage, RecursiveMode::Recursive)
+        .map_err(|error| format!("failed to watch {}: {error}", session_storage.display()))?;
+    if message_storage.exists() {
         watcher
-            .watch(&db_path, RecursiveMode::NonRecursive)
-            .map_err(|error| format!("failed to watch {}: {error}", db_path.display()))?;
-    }
-    if wal_path.exists() {
-        watcher
-            .watch(&wal_path, RecursiveMode::NonRecursive)
-            .map_err(|error| format!("failed to watch {}: {error}", wal_path.display()))?;
+            .watch(&message_storage, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", message_storage.display()))?;
     }
 
     Ok(watcher)
@@ -1789,6 +2200,8 @@ fn create_provider_bridge_watcher(
                             provider,
                         ) {
                             eprintln!("failed to process {provider} bridge event: {error}");
+                            // fallback：即使 bridge 解析失敗，仍觸發 session refresh
+                            let _ = emit_provider_refresh(&handle, &refreshes, provider);
                         }
                     }
                     break;
@@ -1981,6 +2394,55 @@ fn init_db(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("failed to initialize session stats db: {error}"))?;
 
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS sessions_cache (
+                session_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'copilot',
+                cwd TEXT,
+                summary TEXT,
+                summary_count INTEGER,
+                created_at TEXT,
+                updated_at TEXT,
+                session_dir TEXT,
+                parse_error INTEGER NOT NULL DEFAULT 0,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                has_plan INTEGER NOT NULL DEFAULT 0,
+                has_events INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (session_id, provider)
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize sessions cache db: {error}"))?;
+
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS scan_state (
+                provider TEXT NOT NULL PRIMARY KEY,
+                last_full_scan_at INTEGER NOT NULL DEFAULT 0,
+                last_cursor INTEGER NOT NULL DEFAULT 0
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize scan state db: {error}"))?;
+
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS session_mtimes (
+                session_id TEXT NOT NULL PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'copilot',
+                mtime INTEGER NOT NULL DEFAULT 0
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize session mtimes db: {error}"))?;
+
     // Migration: 新增 input_tokens 欄位（舊資料庫相容）
     if let Err(error) = connection.execute(
         "ALTER TABLE session_stats ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
@@ -1992,6 +2454,36 @@ fn init_db(connection: &Connection) -> Result<(), String> {
         }
     }
 
+    if let Err(error) = migrate_legacy_session_cache(connection) {
+        eprintln!("Warning: failed to migrate legacy session cache: {error}");
+    }
+
+    Ok(())
+}
+
+fn migrate_legacy_session_cache(connection: &Connection) -> Result<(), String> {
+    let cache_path = legacy_session_cache_path()?;
+    if !cache_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&cache_path)
+        .map_err(|error| format!("failed to read legacy session cache: {error}"))?;
+    let sessions = serde_json::from_str::<Vec<SessionInfo>>(&content)
+        .map_err(|error| format!("failed to parse legacy session cache: {error}"))?;
+    let providers: Vec<String> = sessions
+        .iter()
+        .map(|session| session.provider.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    if !providers.is_empty() {
+        save_sessions_cache_to_db(connection, &providers, &sessions)?;
+    }
+
+    fs::remove_file(&cache_path)
+        .map_err(|error| format!("failed to remove legacy session cache: {error}"))?;
     Ok(())
 }
 
@@ -2274,6 +2766,23 @@ struct OpencodeTokens {
     output: Option<u64>,
     #[serde(default)]
     reasoning: Option<u64>,
+    // Anthropic-style field names（fallback）
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<u64>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<u64>,
+}
+
+impl OpencodeTokens {
+    fn effective_input(&self) -> u64 {
+        self.input.or(self.input_tokens).unwrap_or(0)
+    }
+    fn effective_output(&self) -> u64 {
+        self.output.or(self.output_tokens).unwrap_or(0)
+    }
+    fn effective_reasoning(&self) -> u64 {
+        self.reasoning.unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2284,27 +2793,84 @@ struct OpencodeMessageTime {
     completed: Option<i64>,
 }
 
+/// metadata.assistant 子物件（modelID、tokens）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpencodeAssistantMeta {
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    tokens: Option<OpencodeTokens>,
+}
+
+/// metadata 子物件
+#[derive(Debug, Deserialize)]
+struct OpencodeMessageMetadata {
+    #[serde(default)]
+    time: Option<OpencodeMessageTime>,
+    #[serde(default)]
+    assistant: Option<OpencodeAssistantMeta>,
+    /// 有些版本的 token 統計直接放在 metadata.usage
+    #[serde(default)]
+    usage: Option<OpencodeTokens>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpencodeMessage {
     id: String,
     #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
     role: String,
     #[serde(default)]
-    time: Option<OpencodeMessageTime>,
-    #[serde(default)]
-    tokens: Option<OpencodeTokens>,
-    #[serde(default)]
-    model_id: Option<String>,
+    metadata: Option<OpencodeMessageMetadata>,
 }
 
-/// 判斷 session_dir 是否為 OpenCode session（目錄名以 ses_ 開頭）
+impl OpencodeMessage {
+    fn time(&self) -> Option<&OpencodeMessageTime> {
+        self.metadata.as_ref()?.time.as_ref()
+    }
+    fn model_id(&self) -> Option<&str> {
+        self.metadata
+            .as_ref()?
+            .assistant
+            .as_ref()?
+            .model_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+    }
+    fn tokens(&self) -> Option<&OpencodeTokens> {
+        // 優先 metadata.assistant.tokens，其次 metadata.usage
+        self.metadata.as_ref().and_then(|m| {
+            m.assistant
+                .as_ref()
+                .and_then(|a| a.tokens.as_ref())
+                .or(m.usage.as_ref())
+        })
+    }
+}
+
+/// 判斷 session_dir 是否為 OpenCode session
+/// - 目錄名以 ses_ 開頭（新版 OpenCode）
+/// - 目錄名為全大寫英數字且長度 26（ULID，舊版 OpenCode）
 fn is_opencode_session_dir(session_dir: &Path) -> bool {
-    session_dir
+    let name = session_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with("ses_"))
-        .unwrap_or(false)
+        .unwrap_or("");
+    if name.starts_with("ses_") {
+        return true;
+    }
+    // ULID：26 個字元，全為大寫英數字（0-9A-Z）
+    if name.len() == 26
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    {
+        return true;
+    }
+    false
 }
 
 /// 判斷 OpenCode message 目錄是否為活躍狀態（最近 5 分鐘內有修改）
@@ -2317,26 +2883,57 @@ fn is_opencode_session_live(message_dir: &Path) -> bool {
     now - mtime < 300
 }
 
-/// 解析單一 msg_*.json 檔案為 OpencodeMessage
+/// 解析單一 message JSON 檔案為 OpencodeMessage
 fn parse_opencode_message_json(path: &Path) -> Option<OpencodeMessage> {
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str::<OpencodeMessage>(&content).ok()
 }
 
-/// 掃描 storage/message/{sessionID}/ 目錄，回傳所有 OpencodeMessage
-fn scan_opencode_message_dir(message_dir: &Path) -> Vec<OpencodeMessage> {
-    if !message_dir.exists() {
-        return Vec::new();
+/// 掃描 storage/message/ 全量，回傳屬於 session_id 的所有訊息
+/// 策略：
+///   1. 若 storage/message/{session_id}/ 目錄存在，直接掃描（舊版 ULID session_id 等同 message_id）
+///   2. 否則掃描全量 storage/message/*/*.json，過濾 sessionID 欄位
+fn scan_opencode_messages_for_session(
+    storage_root: &Path,
+    session_id: &str,
+) -> Vec<OpencodeMessage> {
+    let message_storage = storage_root.join("message");
+
+    // 策略 1：直接目錄存在（常見於舊格式 ULID session）
+    let direct_dir = message_storage.join(session_id);
+    if direct_dir.is_dir() {
+        let Ok(entries) = fs::read_dir(&direct_dir) else {
+            return Vec::new();
+        };
+        return entries
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .filter_map(|e| parse_opencode_message_json(&e.path()))
+            .collect();
     }
-    let Ok(entries) = fs::read_dir(message_dir) else {
+
+    // 策略 2：全量掃描，過濾 sessionID（適用於新版 ses_* session）
+    let Ok(all_dirs) = fs::read_dir(&message_storage) else {
         return Vec::new();
     };
     let mut messages = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+    for dir_entry in all_dirs.flatten() {
+        let dir = dir_entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for file_entry in files.flatten() {
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
             if let Some(msg) = parse_opencode_message_json(&path) {
-                messages.push(msg);
+                if msg.session_id.as_deref() == Some(session_id) {
+                    messages.push(msg);
+                }
             }
         }
     }
@@ -2365,8 +2962,10 @@ fn scan_opencode_parts_for_message(storage_root: &Path, message_id: &str) -> Vec
             continue;
         };
         if value.get("type").and_then(|v| v.as_str()) == Some("tool") {
+            // 嘗試多個可能的工具名稱欄位路徑
             let tool_name = value
                 .pointer("/state/tool")
+                .or_else(|| value.get("tool"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -2377,14 +2976,20 @@ fn scan_opencode_parts_for_message(storage_root: &Path, message_id: &str) -> Vec
 }
 
 /// 計算 OpenCode session 的統計資料
-/// message_dir: storage/message/{sessionID}/
+/// message_dir: storage/message/{sessionID}/（可能不存在，會 fallback 全量掃）
 fn calculate_opencode_session_stats(message_dir: &Path) -> Result<SessionStats, String> {
     let storage_root = message_dir
         .parent()
         .and_then(|p| p.parent())
         .ok_or_else(|| "cannot determine storage root from message_dir".to_string())?;
 
-    let messages = scan_opencode_message_dir(message_dir);
+    let session_id = message_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    let messages = scan_opencode_messages_for_session(storage_root, session_id);
+
     if messages.is_empty() {
         return Ok(SessionStats::default());
     }
@@ -2396,7 +3001,7 @@ fn calculate_opencode_session_stats(message_dir: &Path) -> Result<SessionStats, 
 
     for msg in &messages {
         // 追蹤時間範圍
-        if let Some(time) = &msg.time {
+        if let Some(time) = msg.time() {
             let t = time.completed.or(time.created);
             if let Some(t) = t {
                 min_time = Some(min_time.map_or(t, |m: i64| m.min(t)));
@@ -2409,14 +3014,14 @@ fn calculate_opencode_session_stats(message_dir: &Path) -> Result<SessionStats, 
                 stats.interaction_count += 1;
             }
             "assistant" => {
-                if let Some(tokens) = &msg.tokens {
-                    stats.output_tokens += tokens.output.unwrap_or(0);
-                    stats.input_tokens += tokens.input.unwrap_or(0);
-                    if tokens.reasoning.unwrap_or(0) > 0 {
+                if let Some(tokens) = msg.tokens() {
+                    stats.output_tokens += tokens.effective_output();
+                    stats.input_tokens += tokens.effective_input();
+                    if tokens.effective_reasoning() > 0 {
                         stats.reasoning_count += 1;
                     }
                 }
-                if let Some(model) = msg.model_id.as_deref().filter(|m| !m.is_empty()) {
+                if let Some(model) = msg.model_id() {
                     models_used.insert(model.to_string());
                 }
                 // 掃描 part 目錄取得工具呼叫
@@ -2782,136 +3387,101 @@ fn scan_copilot_incremental_internal(
     Ok(())
 }
 
-/// OpenCode 增量掃描：只查詢 time_updated > last_cursor 的 session
+/// OpenCode 增量掃描：只處理 time.updated > last_cursor 的 session
 fn scan_opencode_incremental_internal(
     opencode_root: &Path,
     show_archived: bool,
     metadata_conn: &Connection,
     cache: &mut ProviderCache,
 ) -> Result<(), String> {
-    let oc_conn = match open_opencode_db_readonly(opencode_root) {
-        Ok(conn) => conn,
-        Err(error) => {
-            eprintln!("opencode incremental scan: {error}");
-            return Ok(());
-        }
-    };
-
-    let query = if show_archived {
-        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
-                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
-         FROM session s \
-         LEFT JOIN project p ON s.project_id = p.id \
-         WHERE s.time_updated > ?1 \
-         ORDER BY s.time_updated ASC"
-    } else {
-        "SELECT s.id, s.title, s.time_created, s.time_updated, s.time_archived, \
-                p.worktree, s.summary_additions, s.summary_deletions, s.summary_files \
-         FROM session s \
-         LEFT JOIN project p ON s.project_id = p.id \
-         WHERE s.time_updated > ?1 AND s.time_archived IS NULL \
-         ORDER BY s.time_updated ASC"
-    };
-
-    let mut statement = oc_conn
-        .prepare(query)
-        .map_err(|error| format!("opencode incremental query prepare error: {error}"))?;
-
-    let rows = statement
-        .query_map([cache.last_cursor], |row| {
-            let id: String = row.get(0)?;
-            let title: Option<String> = row.get(1)?;
-            let time_created: Option<i64> = row.get(2)?;
-            let time_updated: Option<i64> = row.get(3)?;
-            let time_archived: Option<i64> = row.get(4)?;
-            let worktree: Option<String> = row.get(5)?;
-            let summary_additions: Option<i64> = row.get(6)?;
-            let summary_deletions: Option<i64> = row.get(7)?;
-            let summary_files: Option<i64> = row.get(8)?;
-            Ok((
-                id,
-                title,
-                time_created,
-                time_updated,
-                time_archived,
-                worktree,
-                summary_additions,
-                summary_deletions,
-                summary_files,
-            ))
-        })
-        .map_err(|error| format!("opencode incremental query error: {error}"))?;
+    let projects = load_opencode_projects(opencode_root);
+    if projects.is_empty() {
+        return Ok(());
+    }
 
     let mut new_cursor = cache.last_cursor;
 
-    for row_result in rows {
-        let (
-            id,
-            title,
-            time_created,
-            time_updated,
-            time_archived,
-            worktree,
-            summary_additions,
-            summary_deletions,
-            summary_files,
-        ) = match row_result {
-            Ok(data) => data,
-            Err(error) => {
-                eprintln!("opencode incremental: failed to read row: {error}");
+    for (project_id, worktree) in &projects {
+        let session_dir = opencode_root
+            .join("storage")
+            .join("session")
+            .join(project_id);
+        let entries = match fs::read_dir(&session_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-        };
-
-        let is_archived = time_archived.is_some();
-        let created_at = time_created.and_then(unix_ms_to_iso8601);
-        let updated_at = time_updated.and_then(unix_ms_to_iso8601);
-
-        let summary = title;
-        let summary_count = {
-            let total = summary_additions.unwrap_or(0)
-                + summary_deletions.unwrap_or(0)
-                + summary_files.unwrap_or(0);
-            if total > 0 {
-                Some(total as u32)
-            } else {
-                None
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let session: OpencodeSessionJson = match serde_json::from_str(&content) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let time_updated = session.time.as_ref().and_then(|t| t.updated).unwrap_or(0);
+            // cursor 過濾：只處理 time_updated > last_cursor 的 session
+            if time_updated <= cache.last_cursor {
+                continue;
             }
-        };
-
-        let meta = read_session_meta(metadata_conn, &id).unwrap_or(SessionMeta {
-            notes: None,
-            tags: Vec::new(),
-        });
-
-        let info = SessionInfo {
-            id: id.clone(),
-            provider: "opencode".to_string(),
-            cwd: worktree,
-            summary,
-            summary_count,
-            created_at,
-            updated_at,
-            session_dir: String::new(),
-            parse_error: false,
-            is_archived,
-            notes: meta.notes,
-            tags: meta.tags,
-            has_plan: false,
-            has_events: false,
-        };
-
-        // upsert by session_id
-        if let Some(pos) = cache.sessions.iter().position(|s| s.id == id) {
-            cache.sessions[pos] = info;
-        } else {
-            cache.sessions.push(info);
-        }
-
-        // 更新 cursor 為見到的最大 time_updated
-        if let Some(ts) = time_updated {
-            if ts > new_cursor {
-                new_cursor = ts;
+            let time_archived = session.time.as_ref().and_then(|t| t.archived);
+            let is_archived = time_archived.is_some();
+            if !show_archived && is_archived {
+                continue;
+            }
+            let time_created = session.time.as_ref().and_then(|t| t.created);
+            let created_at = time_created.and_then(unix_ms_to_iso8601);
+            let updated_at = unix_ms_to_iso8601(time_updated);
+            let worktree_val = worktree.clone();
+            let session_summary = session.title.clone();
+            let summary_count = session.summary.as_ref().and_then(|s| {
+                let total =
+                    s.additions.unwrap_or(0) + s.deletions.unwrap_or(0) + s.files.unwrap_or(0);
+                if total > 0 {
+                    Some(total as u32)
+                } else {
+                    None
+                }
+            });
+            let meta = read_session_meta(metadata_conn, &session.id).unwrap_or(SessionMeta {
+                notes: None,
+                tags: Vec::new(),
+            });
+            let session_dir_path = opencode_root
+                .join("storage")
+                .join("message")
+                .join(&session.id);
+            let has_events = session_dir_path
+                .read_dir()
+                .map(|mut e| e.next().is_some())
+                .unwrap_or(false);
+            let info = SessionInfo {
+                id: session.id.clone(),
+                provider: OPENCODE_PROVIDER.to_string(),
+                cwd: worktree_val,
+                summary: session_summary,
+                summary_count,
+                created_at,
+                updated_at,
+                session_dir: session_dir_path.to_string_lossy().to_string(),
+                parse_error: false,
+                is_archived,
+                notes: meta.notes,
+                tags: meta.tags,
+                has_plan: false,
+                has_events,
+            };
+            if let Some(pos) = cache.sessions.iter().position(|s| s.id == session.id) {
+                cache.sessions[pos] = info;
+            } else {
+                cache.sessions.push(info);
+            }
+            if time_updated > new_cursor {
+                new_cursor = time_updated;
             }
         }
     }
@@ -3221,16 +3791,9 @@ fn open_plan_external_internal(session_dir: &str, editor_cmd: Option<&str>) -> R
 }
 
 /// 從 OpenCode DB 取得最大 time_updated 值，用於全掃描後設置 last_cursor
-fn get_opencode_max_cursor(opencode_root: &Path) -> Result<i64, String> {
-    let oc_conn = open_opencode_db_readonly(opencode_root)?;
-    let cursor: i64 = oc_conn
-        .query_row(
-            "SELECT COALESCE(MAX(time_updated), 0) FROM session",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("failed to get max cursor: {e}"))?;
-    Ok(cursor)
+fn get_opencode_max_cursor(_opencode_root: &Path) -> Result<i64, String> {
+    // JSON-based storage: no SQL cursor; always return 0
+    Ok(0)
 }
 
 fn get_sessions_internal(
@@ -3259,7 +3822,28 @@ fn get_sessions_internal(
             .lock()
             .map_err(|_| "failed to lock copilot scan cache".to_string())?;
 
-        if should_full_scan(&copilot_guard, force) {
+        if copilot_guard.is_none() {
+            let sessions = load_sessions_cache_from_db(&connection, Some(COPILOT_PROVIDER))
+                .unwrap_or_default();
+            let mtimes =
+                load_session_mtimes_from_db(&connection, COPILOT_PROVIDER).unwrap_or_default();
+            let (last_full_scan_at, last_cursor) =
+                load_scan_state_from_db(&connection, COPILOT_PROVIDER).unwrap_or((0, 0));
+            *copilot_guard = Some(ProviderCache {
+                sessions,
+                session_mtimes: mtimes,
+                last_full_scan_at: instant_from_unix_secs(last_full_scan_at),
+                last_cursor,
+            });
+        }
+
+        let copilot_force_full = force
+            || copilot_guard
+                .as_ref()
+                .map(|cache| cache.sessions.is_empty())
+                .unwrap_or(true);
+
+        if should_full_scan(&copilot_guard, copilot_force_full) {
             // 全掃描
             let mut sessions =
                 scan_session_dir(&resolved_copilot.join("session-state"), false, &connection)?;
@@ -3307,6 +3891,12 @@ fn get_sessions_internal(
             }
             all_sessions.extend(cache.sessions.iter().cloned());
         }
+
+        if let Some(cache) = copilot_guard.as_ref() {
+            if let Err(error) = persist_provider_cache(&connection, COPILOT_PROVIDER, cache) {
+                eprintln!("failed to persist copilot cache: {error}");
+            }
+        }
     }
 
     // ── OpenCode provider ─────────────────────────────────────────────────────
@@ -3317,7 +3907,26 @@ fn get_sessions_internal(
                 .lock()
                 .map_err(|_| "failed to lock opencode scan cache".to_string())?;
 
-            if should_full_scan(&oc_guard, force) {
+            if oc_guard.is_none() {
+                let sessions = load_sessions_cache_from_db(&connection, Some(OPENCODE_PROVIDER))
+                    .unwrap_or_default();
+                let (last_full_scan_at, last_cursor) =
+                    load_scan_state_from_db(&connection, OPENCODE_PROVIDER).unwrap_or((0, 0));
+                *oc_guard = Some(ProviderCache {
+                    sessions,
+                    session_mtimes: HashMap::new(),
+                    last_full_scan_at: instant_from_unix_secs(last_full_scan_at),
+                    last_cursor,
+                });
+            }
+
+            let opencode_force_full = force
+                || oc_guard
+                    .as_ref()
+                    .map(|cache| cache.sessions.is_empty())
+                    .unwrap_or(true);
+
+            if should_full_scan(&oc_guard, opencode_force_full) {
                 // 全掃描
                 match scan_opencode_sessions_internal(oc_root, show_archived, &connection) {
                     Ok(sessions) => {
@@ -3349,15 +3958,16 @@ fn get_sessions_internal(
                 }
                 all_sessions.extend(cache.sessions.iter().cloned());
             }
+
+            if let Some(cache) = oc_guard.as_ref() {
+                if let Err(error) = persist_provider_cache(&connection, OPENCODE_PROVIDER, cache) {
+                    eprintln!("failed to persist opencode cache: {error}");
+                }
+            }
         }
     }
 
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-
-    // 掃描完成後儲存快取（失敗不影響主流程）
-    if let Err(error) = save_session_cache(&all_sessions) {
-        eprintln!("session cache save error (ignored): {error}");
-    }
 
     Ok(all_sessions)
 }
@@ -3420,6 +4030,7 @@ fn restart_provider_watchers_after_integration_change(
         pinned_projects: Vec::new(),
         enabled_providers: default_enabled_providers(),
         provider_integrations: Vec::new(),
+        default_launcher: None,
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());
@@ -4034,6 +4645,484 @@ fn read_plan_content(file_path: String) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
+// ========================
+// Session Activity Status
+// ========================
+
+/// 讀取 Copilot session 的 events.jsonl 末尾 30 行，推斷活動狀態
+fn get_copilot_activity_status(session_dir: &Path, session_id: &str) -> SessionActivityStatus {
+    let events_path = session_dir.join("events.jsonl");
+    let not_started = SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status: "idle".to_string(),
+        detail: None,
+        last_activity_at: None,
+    };
+
+    if !events_path.is_file() {
+        return not_started;
+    }
+
+    let content = match fs::read_to_string(&events_path) {
+        Ok(c) => c,
+        Err(_) => return not_started,
+    };
+
+    let lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+
+    let tail: Vec<&str> = lines.iter().rev().take(30).copied().collect();
+
+    let now = chrono::Utc::now();
+    let mut last_type = "";
+    let mut last_ts: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut last_tool: Option<String> = None;
+
+    for raw in tail.iter().rev() {
+        let Ok(ev) = serde_json::from_str::<SessionEvent>(raw) else {
+            continue;
+        };
+        if let Some(ref ts_str) = ev.timestamp {
+            if let Ok(ts) = ts_str.parse::<chrono::DateTime<chrono::Utc>>() {
+                last_ts = Some(ts);
+            }
+        }
+        last_type = Box::leak(ev.event_type.clone().into_boxed_str());
+        if ev.event_type == "tool.execution_start" {
+            last_tool = ev
+                .data
+                .get("toolName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+
+    let last_activity_at = last_ts.map(|t| t.to_rfc3339());
+    let minutes_since = last_ts
+        .map(|t| (now - t).num_minutes())
+        .unwrap_or(i64::MAX);
+
+    let (status, detail) = match last_type {
+        "session.task_complete" | "session.shutdown" => {
+            ("done".to_string(), Some("completed".to_string()))
+        }
+        "assistant.turn_end" if minutes_since < 120 => {
+            ("waiting".to_string(), None)
+        }
+        "tool.execution_start" | "assistant.turn_start" if minutes_since < 30 => {
+            let detail = last_tool.as_deref().map(|tool| {
+                match tool {
+                    t if matches!(t, "edit" | "write" | "patch" | "create") => "file_op",
+                    t if matches!(t, "task" | "subtask" | "call_omo_agent") => "sub_agent",
+                    _ => "tool_call",
+                }
+                .to_string()
+            });
+            ("active".to_string(), detail)
+        }
+        _ if minutes_since < 30 && !last_type.is_empty() => {
+            ("active".to_string(), Some("working".to_string()))
+        }
+        _ => ("idle".to_string(), None),
+    };
+
+    SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status,
+        detail,
+        last_activity_at,
+    }
+}
+
+/// OpenCode message 檔案結構（只解析需要的欄位）
+#[derive(Debug, Deserialize)]
+struct OpenCodeMessageFile {
+    role: Option<String>,
+    finish: Option<String>,
+    time: Option<OpenCodeMessageTime>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenCodeMessageTime {
+    created: Option<i64>,
+    completed: Option<i64>,
+}
+
+/// 讀取 OpenCode session 的最新 message 檔案，推斷活動狀態
+fn get_opencode_activity_status(
+    opencode_root: &Path,
+    session_id: &str,
+) -> SessionActivityStatus {
+    let not_started = SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status: "idle".to_string(),
+        detail: None,
+        last_activity_at: None,
+    };
+
+    let msg_dir = opencode_root
+        .join("storage")
+        .join("message")
+        .join(session_id);
+
+    if !msg_dir.is_dir() {
+        return not_started;
+    }
+
+    let mut msg_files: Vec<PathBuf> = match fs::read_dir(&msg_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect(),
+        Err(_) => return not_started,
+    };
+    msg_files.sort();
+
+    // 取最後一個 message 檔案
+    let last_msg_path = match msg_files.last() {
+        Some(p) => p,
+        None => return not_started,
+    };
+
+    let msg: OpenCodeMessageFile = match fs::read_to_string(last_msg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(m) => m,
+        None => return not_started,
+    };
+
+    let now = chrono::Utc::now();
+    let completed_ms = msg
+        .time
+        .as_ref()
+        .and_then(|t| t.completed.or(t.created));
+    let last_ts = completed_ms.and_then(|ms| {
+        chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
+    });
+    let last_activity_at = last_ts.map(|t| t.to_rfc3339());
+    let minutes_since = last_ts
+        .map(|t| (now - t).num_minutes())
+        .unwrap_or(i64::MAX);
+
+    let (status, detail) = match msg.role.as_deref() {
+        _ if minutes_since > 1440 => ("done".to_string(), Some("completed".to_string())),
+        Some("assistant") if msg.finish.as_deref() == Some("stop") && minutes_since < 120 => {
+            ("waiting".to_string(), None)
+        }
+        Some("user") if minutes_since < 30 => {
+            ("active".to_string(), Some("working".to_string()))
+        }
+        Some("assistant") if msg.finish.as_deref() == Some("tool-calls") && minutes_since < 30 => {
+            ("active".to_string(), Some("tool_call".to_string()))
+        }
+        _ if minutes_since < 30 => ("active".to_string(), Some("working".to_string())),
+        _ => ("idle".to_string(), None),
+    };
+
+    SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status,
+        detail,
+        last_activity_at,
+    }
+}
+
+fn get_session_activity_statuses_internal(
+    sessions: &[serde_json::Value],
+    opencode_root: Option<&str>,
+) -> Vec<SessionActivityStatus> {
+    let oc_root = opencode_root
+        .map(|r| PathBuf::from(r))
+        .unwrap_or_else(|| default_opencode_root().unwrap_or_default());
+
+    sessions
+        .iter()
+        .filter_map(|s| {
+            let id = s.get("id")?.as_str()?;
+            let provider = s.get("provider").and_then(|v| v.as_str()).unwrap_or("copilot");
+            let session_dir_str = s.get("sessionDir").and_then(|v| v.as_str()).unwrap_or("");
+
+            if provider == "opencode" {
+                Some(get_opencode_activity_status(&oc_root, id))
+            } else {
+                let dir = PathBuf::from(session_dir_str);
+                Some(get_copilot_activity_status(&dir, id))
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn get_session_activity_statuses(
+    sessions: Vec<serde_json::Value>,
+    opencode_root: Option<String>,
+) -> Vec<SessionActivityStatus> {
+    get_session_activity_statuses_internal(&sessions, opencode_root.as_deref())
+}
+
+// ========================
+// Multi-tool Launcher
+// ========================
+
+fn open_in_tool_internal(
+    tool_type: &str,
+    cwd: &str,
+    terminal_path: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    match tool_type {
+        "terminal" => {
+            let path = terminal_path.unwrap_or("pwsh");
+            open_terminal_internal(path, cwd)
+        }
+        "opencode" => {
+            let mut cmd = Command::new("opencode");
+            cmd.current_dir(cwd);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+            cmd.spawn()
+                .map_err(|e| format!("failed to open opencode: {e}"))?;
+            Ok(())
+        }
+        "copilot" => {
+            let session_arg = session_id.unwrap_or_default();
+            let script = if session_arg.is_empty() {
+                format!("copilot session")
+            } else {
+                format!("copilot session --resume {}", session_arg)
+            };
+            let term = terminal_path.unwrap_or("pwsh");
+            let term_stem = PathBuf::from(term)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            let mut cmd = Command::new(term);
+            cmd.current_dir(cwd);
+            if term_stem == "cmd" {
+                cmd.args(["/K", &format!("cd /d \"{}\" && {}", cwd, script)]);
+            } else {
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; {}", cwd, script)]);
+            }
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+            cmd.spawn()
+                .map_err(|e| format!("failed to open copilot: {e}"))?;
+            Ok(())
+        }
+        "vscode" => {
+            Command::new("code")
+                .arg(cwd)
+                .spawn()
+                .map_err(|e| format!("failed to open vscode: {e}"))?;
+            Ok(())
+        }
+        "gemini" => {
+            let term = terminal_path.unwrap_or("pwsh");
+            let term_stem = PathBuf::from(term)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let mut cmd = Command::new(term);
+            cmd.current_dir(cwd);
+            if term_stem == "cmd" {
+                cmd.args(["/K", &format!("cd /d \"{}\" && gemini", cwd)]);
+            } else {
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; gemini", cwd)]);
+            }
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+            cmd.spawn()
+                .map_err(|e| format!("failed to open gemini: {e}"))?;
+            Ok(())
+        }
+        "explorer" => {
+            Command::new("explorer")
+                .arg(cwd)
+                .spawn()
+                .map_err(|e| format!("failed to open explorer: {e}"))?;
+            Ok(())
+        }
+        unknown => Err(format!("unsupported tool type: {unknown}")),
+    }
+}
+
+#[tauri::command]
+fn open_in_tool(
+    tool_type: String,
+    cwd: String,
+    terminal_path: Option<String>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    open_in_tool_internal(
+        &tool_type,
+        &cwd,
+        terminal_path.as_deref(),
+        session_id.as_deref(),
+    )
+}
+
+// ========================
+// Win32 Terminal Focus
+// ========================
+
+#[cfg(target_os = "windows")]
+mod win32_focus {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
+    };
+
+    pub struct FocusState {
+        pub target: String,
+        pub found: HWND,
+    }
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let state = &mut *(lparam as usize as *mut FocusState);
+        if IsWindowVisible(hwnd) == 0 {
+            return TRUE;
+        }
+
+        let mut buf = [0u16; 512];
+        let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        let title = OsString::from_wide(&buf[..len as usize])
+            .to_string_lossy()
+            .to_lowercase();
+
+        let mut cls_buf = [0u16; 256];
+        let cls_len = GetClassNameW(hwnd, cls_buf.as_mut_ptr(), cls_buf.len() as i32);
+        let class = OsString::from_wide(&cls_buf[..cls_len as usize])
+            .to_string_lossy()
+            .to_lowercase();
+
+        let is_terminal =
+            class.contains("windowsterminal") || class.contains("pseudoconsolewindow");
+
+        let target_lower = state.target.to_lowercase();
+        if is_terminal && title.contains(&target_lower) {
+            state.found = hwnd;
+            return 0; // 停止列舉
+        }
+
+        TRUE
+    }
+
+    /// 依標題關鍵字尋找 Windows Terminal 並帶到前景
+    pub fn focus_window_by_title(title_hint: &str) -> Result<(), String> {
+        let mut state = FocusState {
+            target: title_hint.to_string(),
+            found: std::ptr::null_mut(),
+        };
+        unsafe {
+            EnumWindows(Some(enum_proc), &mut state as *mut FocusState as usize as LPARAM);
+            if !state.found.is_null() {
+                ShowWindow(state.found, SW_RESTORE);
+                SetForegroundWindow(state.found);
+                Ok(())
+            } else {
+                Err("Terminal window not found".to_string())
+            }
+        }
+    }
+}
+
+fn focus_terminal_window_internal(title_hint: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        win32_focus::focus_window_by_title(title_hint)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title_hint;
+        Err("Terminal focus is only supported on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+fn focus_terminal_window(title_hint: String) -> Result<(), String> {
+    focus_terminal_window_internal(&title_hint)
+}
+
+// ========================
+// OpenSpec File Reader
+// ========================
+
+fn read_openspec_file_internal(project_cwd: &str, relative_path: &str) -> Result<String, String> {
+    let base = PathBuf::from(project_cwd).join("openspec");
+    let canonical_base = base
+        .canonicalize()
+        .map_err(|_| format!("openspec directory not found: {}", base.display()))?;
+
+    let target = canonical_base.join(relative_path);
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|_| format!("File not found: {}", target.display()))?;
+
+    // 路徑遍歷保護：確保目標在 openspec 目錄內
+    if !canonical_target.starts_with(&canonical_base) {
+        return Err("Access denied: path traversal detected".to_string());
+    }
+
+    if !canonical_target.is_file() {
+        return Err(format!("Not a file: {}", canonical_target.display()));
+    }
+
+    fs::read_to_string(&canonical_target)
+        .map_err(|e| format!("Failed to read file: {e}"))
+}
+
+#[tauri::command]
+fn read_openspec_file(project_cwd: String, relative_path: String) -> Result<String, String> {
+    read_openspec_file_internal(&project_cwd, &relative_path)
+}
+
+// ========================
+// check_tool_availability
+// ========================
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAvailability {
+    pub copilot: bool,
+    pub opencode: bool,
+    pub gemini: bool,
+    pub vscode: bool,
+}
+
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("where")
+        .arg(cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn check_tool_availability_internal() -> ToolAvailability {
+    ToolAvailability {
+        copilot: which_exists("copilot"),
+        opencode: which_exists("opencode"),
+        gemini: which_exists("gemini"),
+        vscode: which_exists("code"),
+    }
+}
+
+#[tauri::command]
+fn check_tool_availability() -> ToolAvailability {
+    check_tool_availability_internal()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -4055,7 +5144,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
-            load_session_cache,
             get_settings,
             save_settings,
             install_provider_integration,
@@ -4081,7 +5169,12 @@ pub fn run() {
             delete_session_meta,
             get_project_plans,
             get_project_specs,
-            read_plan_content
+            read_plan_content,
+            get_session_activity_statuses,
+            open_in_tool,
+            focus_terminal_window,
+            read_openspec_file,
+            check_tool_availability
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -4199,7 +5292,7 @@ mod tests {
         assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
             .expect("unchanged snapshot should not emit"));
 
-        create_opencode_db(&oc_dir, &[("oc-refresh", "Refresh", 1000, 2000, None)]);
+        create_opencode_json_sessions(&oc_dir, &[("oc-refresh", "Refresh", 1000, 2000, None)]);
 
         assert!(should_emit_opencode_refresh(&oc_dir, &snapshot_state)
             .expect("db change should emit once"));
@@ -4814,80 +5907,55 @@ mod tests {
     // scan_opencode_incremental_internal
     // ──────────────────────────────────────────────────────────────────────────
 
-    fn create_full_opencode_db(dir: &Path) {
-        let db_path = dir.join("opencode.db");
-        let conn = Connection::open(&db_path).expect("create opencode.db");
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS project (
-                id TEXT PRIMARY KEY,
-                worktree TEXT
-             );
-             CREATE TABLE IF NOT EXISTS session (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                time_created INTEGER,
-                time_updated INTEGER,
-                time_archived INTEGER,
-                project_id TEXT,
-                summary_additions INTEGER,
-                summary_deletions INTEGER,
-                summary_files INTEGER
-             );",
+    /// 建立 JSON-based OpenCode session storage（符合新版 JSON 儲存格式）
+    /// sessions: (id, title, time_created, time_updated, time_archived)
+    fn create_opencode_json_sessions(dir: &Path, sessions: &[(&str, &str, i64, i64, Option<i64>)]) {
+        let project_id = "project-001";
+        let project_dir = dir.join("storage").join("project");
+        fs::create_dir_all(&project_dir).expect("create storage/project dir");
+        fs::write(
+            project_dir.join(format!("{project_id}.json")),
+            format!(r#"{{"id":"{project_id}","worktree":null}}"#),
         )
-        .expect("create tables");
-    }
+        .expect("write project json");
 
-    /// 建立最小的 opencode.db，包含指定 session 資料
-    fn create_opencode_db(dir: &Path, sessions: &[(&str, &str, i64, i64, Option<i64>)]) {
-        // sessions 欄位：(id, title, time_created, time_updated, time_archived)
-        create_full_opencode_db(dir);
-        let db_path = dir.join("opencode.db");
-        let conn = Connection::open(&db_path).expect("reopen opencode.db");
+        let session_dir = dir.join("storage").join("session").join(project_id);
+        fs::create_dir_all(&session_dir).expect("create storage/session dir");
 
         for (id, title, time_created, time_updated, time_archived) in sessions {
-            conn.execute(
-                "INSERT INTO session (id, title, time_created, time_updated, time_archived)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, title, time_created, time_updated, time_archived],
-            )
-            .expect("insert session");
+            let archived_json = match time_archived {
+                Some(ts) => ts.to_string(),
+                None => "null".to_string(),
+            };
+            let json = format!(
+                r#"{{"id":"{id}","title":"{title}","directory":null,"time":{{"created":{time_created},"updated":{time_updated},"archived":{archived_json}}}}}"#
+            );
+            fs::write(session_dir.join(format!("{id}.json")), json).expect("write session json");
         }
     }
 
     #[test]
-    fn scan_opencode_sessions_reads_sqlite_rows_and_maps_metadata() {
+    fn scan_opencode_sessions_reads_json_files_and_maps_metadata() {
         let _guard = test_lock().lock().expect("lock");
         let oc_dir = unique_test_dir("oc-full-scan");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
-        create_full_opencode_db(&oc_dir);
 
-        let db_path = oc_dir.join("opencode.db");
-        let oc_conn = Connection::open(&db_path).expect("open opencode db");
-        oc_conn
-            .execute(
-                "INSERT INTO project (id, worktree) VALUES (?1, ?2)",
-                params!["project-001", "D:\\repo\\demo"],
-            )
-            .expect("insert project");
-        oc_conn
-            .execute(
-                "INSERT INTO session (
-                    id, title, time_created, time_updated, time_archived, project_id,
-                    summary_additions, summary_deletions, summary_files
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    "oc-session-001",
-                    "OpenCode Title",
-                    1_710_000_000_000_i64,
-                    1_710_000_300_000_i64,
-                    Option::<i64>::None,
-                    "project-001",
-                    12_i64,
-                    3_i64,
-                    5_i64
-                ],
-            )
-            .expect("insert session");
+        // 建立 project JSON
+        let project_dir = oc_dir.join("storage").join("project");
+        fs::create_dir_all(&project_dir).expect("create project dir");
+        fs::write(
+            project_dir.join("project-001.json"),
+            r#"{"id":"project-001","worktree":"D:\\repo\\demo"}"#,
+        )
+        .expect("write project json");
+
+        // 建立 session JSON（summary_count: 12+3+5=20）
+        let session_dir = oc_dir.join("storage").join("session").join("project-001");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        fs::write(
+            session_dir.join("oc-session-001.json"),
+            r#"{"id":"oc-session-001","title":"OpenCode Title","directory":null,"time":{"created":1710000000000,"updated":1710000300000,"archived":null},"summary":{"additions":12,"deletions":3,"files":5}}"#,
+        ).expect("write session json");
 
         let metadata_conn = Connection::open_in_memory().expect("open metadata db");
         init_db(&metadata_conn).expect("init metadata db");
@@ -4913,7 +5981,8 @@ mod tests {
         assert_eq!(session.updated_at.as_deref(), Some("2024-03-09T16:05:00Z"));
         assert_eq!(
             session.session_dir,
-            oc_dir.join("storage")
+            oc_dir
+                .join("storage")
                 .join("message")
                 .join("oc-session-001")
                 .to_string_lossy()
@@ -4927,15 +5996,15 @@ mod tests {
         assert!(!session.is_archived);
         assert!(!session.parse_error);
 
-        drop(oc_conn);
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
     }
 
     #[test]
-    fn scan_opencode_sessions_returns_empty_when_db_missing() {
+    fn scan_opencode_sessions_returns_empty_when_storage_missing() {
         let _guard = test_lock().lock().expect("lock");
-        let oc_dir = unique_test_dir("oc-missing-db");
+        let oc_dir = unique_test_dir("oc-missing-storage");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
+        // 故意不建立 storage/project/ 或 storage/session/
 
         let metadata_conn = Connection::open_in_memory().expect("open metadata db");
         init_db(&metadata_conn).expect("init metadata db");
@@ -4943,7 +6012,7 @@ mod tests {
         let sessions =
             scan_opencode_sessions_internal(&oc_dir, false, &metadata_conn).expect("scan sessions");
 
-        assert!(sessions.is_empty(), "missing opencode db should be ignored");
+        assert!(sessions.is_empty(), "missing storage dir should be ignored");
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
     }
@@ -4969,27 +6038,16 @@ mod tests {
         )
         .expect("write workspace yaml");
 
-        create_full_opencode_db(&opencode_root);
-        let oc_conn = Connection::open(opencode_root.join("opencode.db")).expect("open opencode db");
-        oc_conn
-            .execute(
-                "INSERT INTO session (
-                    id, title, time_created, time_updated, time_archived, project_id,
-                    summary_additions, summary_deletions, summary_files
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    "oc-session-001",
-                    "OpenCode Session",
-                    1_735_689_600_000_i64,
-                    1_735_693_200_000_i64,
-                    Option::<i64>::None,
-                    Option::<String>::None,
-                    1_i64,
-                    1_i64,
-                    1_i64
-                ],
-            )
-            .expect("insert opencode session");
+        create_opencode_json_sessions(
+            &opencode_root,
+            &[(
+                "oc-session-001",
+                "OpenCode Session",
+                1_735_689_600_000,
+                1_735_693_200_000,
+                None,
+            )],
+        );
 
         let scan_cache = ScanCache::default();
 
@@ -5031,11 +6089,14 @@ mod tests {
             )
             .expect("scan all providers");
             assert_eq!(all_providers.len(), 2);
-            assert!(all_providers.iter().any(|session| session.provider == COPILOT_PROVIDER));
-            assert!(all_providers.iter().any(|session| session.provider == OPENCODE_PROVIDER));
+            assert!(all_providers
+                .iter()
+                .any(|session| session.provider == COPILOT_PROVIDER));
+            assert!(all_providers
+                .iter()
+                .any(|session| session.provider == OPENCODE_PROVIDER));
         });
 
-        drop(oc_conn);
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
         fs::remove_dir_all(&opencode_root).expect("cleanup opencode root");
@@ -5047,8 +6108,10 @@ mod tests {
         let project_dir = unique_test_dir("sisyphus-project");
         let sisyphus_dir = project_dir.join(".sisyphus");
         fs::create_dir_all(sisyphus_dir.join("plans")).expect("create plans dir");
-        fs::create_dir_all(sisyphus_dir.join("notepads").join("alpha")).expect("create alpha notepad");
-        fs::create_dir_all(sisyphus_dir.join("notepads").join("beta")).expect("create beta notepad");
+        fs::create_dir_all(sisyphus_dir.join("notepads").join("alpha"))
+            .expect("create alpha notepad");
+        fs::create_dir_all(sisyphus_dir.join("notepads").join("beta"))
+            .expect("create beta notepad");
         fs::create_dir_all(sisyphus_dir.join("evidence")).expect("create evidence dir");
         fs::create_dir_all(sisyphus_dir.join("drafts")).expect("create drafts dir");
 
@@ -5074,12 +6137,18 @@ mod tests {
         )
         .expect("write beta plan");
         fs::write(
-            sisyphus_dir.join("notepads").join("alpha").join("issues.md"),
+            sisyphus_dir
+                .join("notepads")
+                .join("alpha")
+                .join("issues.md"),
             "- issue",
         )
         .expect("write alpha issues");
         fs::write(
-            sisyphus_dir.join("notepads").join("alpha").join("learnings.md"),
+            sisyphus_dir
+                .join("notepads")
+                .join("alpha")
+                .join("learnings.md"),
             "- learning",
         )
         .expect("write alpha learnings");
@@ -5097,8 +6166,18 @@ mod tests {
 
         let data = scan_sisyphus_internal(&project_dir);
 
-        assert_eq!(data.active_plan.as_ref().and_then(|plan| plan.plan_name.as_deref()), Some("Alpha Plan"));
-        assert_eq!(data.active_plan.as_ref().and_then(|plan| plan.agent.as_deref()), Some("copilot"));
+        assert_eq!(
+            data.active_plan
+                .as_ref()
+                .and_then(|plan| plan.plan_name.as_deref()),
+            Some("Alpha Plan")
+        );
+        assert_eq!(
+            data.active_plan
+                .as_ref()
+                .and_then(|plan| plan.agent.as_deref()),
+            Some("copilot")
+        );
         assert_eq!(
             data.active_plan
                 .as_ref()
@@ -5109,7 +6188,10 @@ mod tests {
         assert_eq!(data.plans.len(), 2);
         assert_eq!(data.plans[0].name, "alpha");
         assert_eq!(data.plans[0].title.as_deref(), Some("Alpha Title"));
-        assert_eq!(data.plans[0].tldr.as_deref(), Some("第一行摘要\n第二行摘要"));
+        assert_eq!(
+            data.plans[0].tldr.as_deref(),
+            Some("第一行摘要\n第二行摘要")
+        );
         assert!(data.plans[0].is_active);
         assert_eq!(data.plans[1].name, "beta");
         assert!(!data.plans[1].is_active);
@@ -5120,7 +6202,10 @@ mod tests {
         assert_eq!(data.notepads[1].name, "beta");
         assert!(data.notepads[1].has_issues);
         assert!(!data.notepads[1].has_learnings);
-        assert_eq!(data.evidence_files, vec!["a.txt".to_string(), "b.txt".to_string()]);
+        assert_eq!(
+            data.evidence_files,
+            vec!["a.txt".to_string(), "b.txt".to_string()]
+        );
         assert_eq!(
             data.draft_files,
             vec!["draft-a.md".to_string(), "draft-b.md".to_string()]
@@ -5134,23 +6219,39 @@ mod tests {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("openspec-project");
         let openspec_dir = project_dir.join("openspec");
-        fs::create_dir_all(openspec_dir.join("changes").join("feature-b").join("specs").join("auth"))
-            .expect("create feature-b specs dir");
-        fs::create_dir_all(openspec_dir.join("changes").join("archive").join("legacy-a"))
-            .expect("create archive dir");
-        fs::create_dir_all(openspec_dir.join("specs").join("api"))
-            .expect("create api spec dir");
+        fs::create_dir_all(
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("specs")
+                .join("auth"),
+        )
+        .expect("create feature-b specs dir");
+        fs::create_dir_all(
+            openspec_dir
+                .join("changes")
+                .join("archive")
+                .join("legacy-a"),
+        )
+        .expect("create archive dir");
+        fs::create_dir_all(openspec_dir.join("specs").join("api")).expect("create api spec dir");
         fs::create_dir_all(openspec_dir.join("specs").join("workflow"))
             .expect("create workflow spec dir");
 
         fs::write(openspec_dir.join("config.yaml"), "schema: v2\n").expect("write config");
         fs::write(
-            openspec_dir.join("changes").join("feature-b").join("proposal.md"),
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("proposal.md"),
             "# Proposal",
         )
         .expect("write proposal");
         fs::write(
-            openspec_dir.join("changes").join("feature-b").join("tasks.md"),
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("tasks.md"),
             "- [ ] task",
         )
         .expect("write tasks");
@@ -5165,7 +6266,11 @@ mod tests {
         )
         .expect("write change spec");
         fs::write(
-            openspec_dir.join("changes").join("archive").join("legacy-a").join("design.md"),
+            openspec_dir
+                .join("changes")
+                .join("archive")
+                .join("legacy-a")
+                .join("design.md"),
             "# Design",
         )
         .expect("write archive design");
@@ -5243,7 +6348,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(&oc_dir, &[("oc-session-001", "OC Title", 1000, 2000, None)]);
+        create_opencode_json_sessions(&oc_dir, &[("oc-session-001", "OC Title", 1000, 2000, None)]);
 
         with_appdata(&appdata_dir, || {
             let metadata_conn = open_db_connection().expect("open metadata db");
@@ -5275,7 +6380,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(
+        create_opencode_json_sessions(
             &oc_dir,
             &[
                 ("oc-a", "A", 1000, 3000, None),
@@ -5308,7 +6413,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(
+        create_opencode_json_sessions(
             &oc_dir,
             &[
                 ("oc-old", "Old", 1000, 2000, None),
@@ -5350,7 +6455,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(&oc_dir, &[("oc-x", "Title v1", 1000, 2000, None)]);
+        create_opencode_json_sessions(&oc_dir, &[("oc-x", "Title v1", 1000, 2000, None)]);
 
         with_appdata(&appdata_dir, || {
             let metadata_conn = open_db_connection().expect("open metadata db");
@@ -5364,15 +6469,16 @@ mod tests {
             assert_eq!(cache.sessions.len(), 1);
             assert_eq!(cache.last_cursor, 2000);
 
-            // 手動更新 DB 模擬 session 被修改（time_updated 推進）
-            let db_path = oc_dir.join("opencode.db");
-            let oc_conn = Connection::open(&db_path).expect("reopen db");
-            oc_conn
-                .execute(
-                    "UPDATE session SET title = 'Title v2', time_updated = 4000 WHERE id = 'oc-x'",
-                    [],
-                )
-                .expect("update session");
+            // 手動更新 JSON 檔案模擬 session 被修改（time_updated 推進）
+            let session_json_path = oc_dir
+                .join("storage")
+                .join("session")
+                .join("project-001")
+                .join("oc-x.json");
+            fs::write(
+                &session_json_path,
+                r#"{"id":"oc-x","title":"Title v2","directory":null,"time":{"created":1000,"updated":4000,"archived":null}}"#,
+            ).expect("update session json");
 
             // 第二次增量掃描：只撈 time_updated > 2000
             scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
@@ -5399,7 +6505,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(
+        create_opencode_json_sessions(
             &oc_dir,
             &[
                 ("oc-active", "Active", 1000, 2000, None),
@@ -5431,7 +6537,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(
+        create_opencode_json_sessions(
             &oc_dir,
             &[
                 ("oc-active", "Active", 1000, 2000, None),
@@ -5455,13 +6561,13 @@ mod tests {
     }
 
     #[test]
-    fn incremental_opencode_noop_when_db_missing() {
-        // opencode.db 不存在時應靜默回傳 Ok，不修改快取
+    fn incremental_opencode_noop_when_storage_missing() {
+        // storage/session/ 不存在時應靜默回傳 Ok，不修改快取
         let _guard = test_lock().lock().expect("lock");
-        let oc_dir = unique_test_dir("oc-no-db");
+        let oc_dir = unique_test_dir("oc-no-storage");
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
-        // 故意不建立 opencode.db
+        // 故意不建立 storage/ 目錄
 
         with_appdata(&appdata_dir, || {
             let metadata_conn = open_db_connection().expect("open metadata db");
@@ -5471,7 +6577,7 @@ mod tests {
             let result =
                 scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache);
 
-            assert!(result.is_ok(), "should not error when db is missing");
+            assert!(result.is_ok(), "should not error when storage is missing");
             assert!(cache.sessions.is_empty(), "cache should remain empty");
         });
 
@@ -5487,7 +6593,7 @@ mod tests {
         let appdata_dir = unique_test_dir("appdata");
         fs::create_dir_all(&oc_dir).expect("create oc dir");
 
-        create_opencode_db(&oc_dir, &[("oc-z", "Z", 1000, 2000, None)]);
+        create_opencode_json_sessions(&oc_dir, &[("oc-z", "Z", 1000, 2000, None)]);
 
         with_appdata(&appdata_dir, || {
             let metadata_conn = open_db_connection().expect("open metadata db");
@@ -5812,5 +6918,203 @@ mod tests {
 
         fs::remove_dir_all(&user_profile).expect("cleanup user profile");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // session-cache-sqlite-migration：測試 10.1-10.3
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sessions_cache_roundtrip() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-cache");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            let sessions = vec![
+                SessionInfo {
+                    id: "ses-aaa".to_string(),
+                    provider: "copilot".to_string(),
+                    cwd: Some("C:/proj/a".to_string()),
+                    summary: Some("initial session".to_string()),
+                    summary_count: Some(3),
+                    created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    updated_at: Some("2026-01-01T01:00:00Z".to_string()),
+                    session_dir: "C:/proj/a/.copilot/session-state/ses-aaa".to_string(),
+                    parse_error: false,
+                    is_archived: false,
+                    notes: None,
+                    tags: Vec::new(),
+                    has_plan: true,
+                    has_events: true,
+                },
+                SessionInfo {
+                    id: "ses-bbb".to_string(),
+                    provider: "copilot".to_string(),
+                    cwd: Some("C:/proj/b".to_string()),
+                    summary: None,
+                    summary_count: None,
+                    created_at: None,
+                    updated_at: None,
+                    session_dir: "C:/proj/b/.copilot/session-state/ses-bbb".to_string(),
+                    parse_error: true,
+                    is_archived: true,
+                    notes: None,
+                    tags: Vec::new(),
+                    has_plan: false,
+                    has_events: false,
+                },
+            ];
+
+            save_sessions_cache_to_db(&connection, &["copilot".to_string()], &sessions)
+                .expect("save sessions cache");
+
+            let loaded = load_sessions_cache_from_db(&connection, Some("copilot"))
+                .expect("load sessions cache");
+
+            assert_eq!(loaded.len(), 2);
+
+            let a = loaded
+                .iter()
+                .find(|s| s.id == "ses-aaa")
+                .expect("ses-aaa not found");
+            assert_eq!(a.provider, "copilot");
+            assert_eq!(a.cwd.as_deref(), Some("C:/proj/a"));
+            assert_eq!(a.summary.as_deref(), Some("initial session"));
+            assert_eq!(a.summary_count, Some(3));
+            assert!(!a.parse_error);
+            assert!(!a.is_archived);
+            assert!(a.has_plan);
+            assert!(a.has_events);
+
+            let b = loaded
+                .iter()
+                .find(|s| s.id == "ses-bbb")
+                .expect("ses-bbb not found");
+            assert!(b.parse_error);
+            assert!(b.is_archived);
+            assert!(!b.has_plan);
+            assert!(!b.has_events);
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn test_scan_state_roundtrip() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-scan-state");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            // 首次讀取應回傳 (0, 0)
+            let (ts0, cursor0) =
+                load_scan_state_from_db(&connection, "copilot").expect("load scan_state (empty)");
+            assert_eq!(ts0, 0);
+            assert_eq!(cursor0, 0);
+
+            save_scan_state_to_db(&connection, "copilot", 12345, 67890).expect("save scan_state");
+            let (ts, cursor) =
+                load_scan_state_from_db(&connection, "copilot").expect("load scan_state");
+            assert_eq!(ts, 12345);
+            assert_eq!(cursor, 67890);
+
+            // 覆寫後應讀到新值
+            save_scan_state_to_db(&connection, "copilot", 99999, 11111)
+                .expect("overwrite scan_state");
+            let (ts2, cursor2) = load_scan_state_from_db(&connection, "copilot")
+                .expect("load scan_state after overwrite");
+            assert_eq!(ts2, 99999);
+            assert_eq!(cursor2, 11111);
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn test_session_mtimes_roundtrip() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-mtimes");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            let mut mtimes = HashMap::new();
+            mtimes.insert("ses-aaa".to_string(), 1000_i64);
+            mtimes.insert("ses-bbb".to_string(), 2000_i64);
+            mtimes.insert("ses-ccc".to_string(), 3000_i64);
+
+            save_session_mtimes_to_db(&connection, "copilot", &mtimes)
+                .expect("save session_mtimes");
+
+            let loaded =
+                load_session_mtimes_from_db(&connection, "copilot").expect("load session_mtimes");
+
+            assert_eq!(loaded.len(), 3);
+            assert_eq!(loaded.get("ses-aaa"), Some(&1000));
+            assert_eq!(loaded.get("ses-bbb"), Some(&2000));
+            assert_eq!(loaded.get("ses-ccc"), Some(&3000));
+
+            // 覆寫：縮減為 1 個，舊的應清除
+            let mut mtimes2 = HashMap::new();
+            mtimes2.insert("ses-aaa".to_string(), 5555_i64);
+            save_session_mtimes_to_db(&connection, "copilot", &mtimes2)
+                .expect("overwrite session_mtimes");
+
+            let loaded2 = load_session_mtimes_from_db(&connection, "copilot")
+                .expect("load session_mtimes after overwrite");
+            assert_eq!(loaded2.len(), 1);
+            assert_eq!(loaded2.get("ses-aaa"), Some(&5555));
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // session-stats-panel-opencode-redesign：測試 7.1
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_opencode_session_stats_session_dir() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("oc-stats");
+        let storage_root = root_dir.join("storage");
+        let message_dir = storage_root.join("message").join("ses_test001");
+        fs::create_dir_all(&message_dir).expect("create message dir");
+
+        // 建立一個 assistant message JSON 帶 output tokens
+        fs::write(
+            message_dir.join("msg1.json"),
+            r#"{"id":"msg1","role":"assistant","metadata":{"assistant":{"modelId":"claude-3.5","tokens":{"output":150}}}}"#,
+        )
+        .expect("write msg1.json");
+
+        let stats = calculate_opencode_session_stats(&message_dir).expect("stats should calculate");
+
+        assert_eq!(stats.output_tokens, 150);
+        assert!(stats.interaction_count == 0); // assistant message 不計入
+
+        // 加一個 user message
+        fs::write(
+            message_dir.join("msg2.json"),
+            r#"{"id":"msg2","role":"user","metadata":{}}"#,
+        )
+        .expect("write msg2.json");
+
+        let stats2 =
+            calculate_opencode_session_stats(&message_dir).expect("stats2 should calculate");
+
+        assert_eq!(stats2.output_tokens, 150);
+        assert_eq!(stats2.interaction_count, 1);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
     }
 }

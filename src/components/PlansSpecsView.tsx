@@ -13,6 +13,8 @@ type Props = {
   openspecData: OpenSpecData | undefined;
   isLoading: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
+  onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+  projectCwd: string;
 };
 
 // --- 可折疊區塊 ---
@@ -200,18 +202,104 @@ function PlanItem({
 
 // --- OpenSpec 區塊 ---
 
+const CHANGE_ARTIFACTS = ["proposal.md", "design.md", "tasks.md"] as const;
+
+function ChangeItem({
+  change,
+  projectCwd,
+  onReadOpenspecFile,
+}: {
+  change: OpenSpecChange;
+  projectCwd: string;
+  onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSelectArtifact = async (relPath: string) => {
+    if (selectedArtifact === relPath) {
+      setSelectedArtifact(null);
+      setContent("");
+      return;
+    }
+    setSelectedArtifact(relPath);
+    setLoading(true);
+    try {
+      const text = await onReadOpenspecFile(projectCwd, relPath);
+      setContent(text);
+    } catch {
+      setContent("Failed to read file.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const artifacts = [
+    change.hasProposal ? "proposal" : null,
+    change.hasDesign ? "design" : null,
+    change.hasTasks ? "tasks" : null,
+    change.specsCount > 0 ? `${change.specsCount} spec(s)` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
+  return (
+    <div className="change-item">
+      <button
+        type="button"
+        className="plans-specs-item change-item-header"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span className={`collapsible-arrow ${expanded ? "collapsible-arrow--open" : ""}`}>&#9654;</span>
+        <span>{change.name}</span>
+        <span className="plans-specs-item-meta">{artifacts}</span>
+      </button>
+      {expanded ? (
+        <div className="change-item-artifacts">
+          {CHANGE_ARTIFACTS.map((file) => {
+            const flag = file === "proposal.md" ? change.hasProposal : file === "design.md" ? change.hasDesign : change.hasTasks;
+            if (!flag) return null;
+            const relPath = `changes/${change.name}/${file}`;
+            return (
+              <button
+                key={file}
+                type="button"
+                className={`change-artifact-btn${selectedArtifact === relPath ? " active" : ""}`}
+                onClick={() => void handleSelectArtifact(relPath)}
+              >
+                {file}
+              </button>
+            );
+          })}
+          {selectedArtifact ? (
+            <div className="plans-specs-preview">
+              {loading ? "..." : content}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function OpenSpecSection({
   data,
+  projectCwd,
   previewPath,
   previewContent,
   previewLoading,
   onSelectFile,
+  onReadOpenspecFile,
 }: {
   data: OpenSpecData;
+  projectCwd: string;
   previewPath: string | null;
   previewContent: string;
   previewLoading: boolean;
   onSelectFile: (path: string) => void;
+  onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
 }) {
   const { t } = useI18n();
 
@@ -227,7 +315,12 @@ function OpenSpecSection({
         >
           <div className="plans-specs-list" style={{ marginTop: 8 }}>
             {data.activeChanges.map((change) => (
-              <ChangeItem key={change.name} change={change} />
+              <ChangeItem
+                key={change.name}
+                change={change}
+                projectCwd={projectCwd}
+                onReadOpenspecFile={onReadOpenspecFile}
+              />
             ))}
           </div>
         </CollapsibleSection>
@@ -240,7 +333,12 @@ function OpenSpecSection({
         >
           <div className="plans-specs-list" style={{ marginTop: 8 }}>
             {data.archivedChanges.map((change) => (
-              <ChangeItem key={change.name} change={change} />
+              <ChangeItem
+                key={change.name}
+                change={change}
+                projectCwd={projectCwd}
+                onReadOpenspecFile={onReadOpenspecFile}
+              />
             ))}
           </div>
         </CollapsibleSection>
@@ -262,31 +360,13 @@ function OpenSpecSection({
         </CollapsibleSection>
       ) : null}
 
-      {/* 內容預覽 */}
+      {/* Spec 內容預覽 */}
       {previewPath ? (
         <div className="plans-specs-preview">
           {previewLoading ? "..." : previewContent}
         </div>
       ) : null}
     </section>
-  );
-}
-
-function ChangeItem({ change }: { change: OpenSpecChange }) {
-  const artifacts = [
-    change.hasProposal ? "proposal" : null,
-    change.hasDesign ? "design" : null,
-    change.hasTasks ? "tasks" : null,
-    change.specsCount > 0 ? `${change.specsCount} spec(s)` : null,
-  ]
-    .filter(Boolean)
-    .join(" / ");
-
-  return (
-    <div className="plans-specs-item" style={{ cursor: "default" }}>
-      <span>{change.name}</span>
-      <span className="plans-specs-item-meta">{artifacts}</span>
-    </div>
   );
 }
 
@@ -317,6 +397,8 @@ export function PlansSpecsView({
   openspecData,
   isLoading,
   onReadFileContent,
+  onReadOpenspecFile,
+  projectCwd,
 }: Props) {
   const { t } = useI18n();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -386,10 +468,12 @@ export function PlansSpecsView({
       {hasOpenSpec && openspecData ? (
         <OpenSpecSection
           data={openspecData}
+          projectCwd={projectCwd}
           previewPath={previewPath}
           previewContent={previewContent}
           previewLoading={previewLoading}
           onSelectFile={handleSelectFile}
+          onReadOpenspecFile={onReadOpenspecFile}
         />
       ) : null}
     </div>

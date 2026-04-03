@@ -117,3 +117,4 @@ bun run tauri build
 - `COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE` 環境變數可覆蓋 AppData 路徑（測試用）。
 - `src-tauri/target/` 是 Rust 編譯輸出，勿提交，大小可達數 GB。
 - `.opencode/` 有獨立 `package.json`（`@opencode-ai/plugin`），非主專案相依。
+- 每次都要查看 ~/.copilot/instructions/AGENTS.instructions.md 

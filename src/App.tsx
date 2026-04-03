@@ -12,12 +12,15 @@ import type {
   AppSettings,
   ConfirmDialogState,
   EditDialogState,
+  IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
   ProviderIntegrationStatus,
+  SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SisyphusData,
+  ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 
@@ -199,14 +202,6 @@ function App() {
     queryFn: () => invoke<AppSettings>("get_settings"),
   });
 
-  // 啟動時立即讀取上次快取，避免白屏等待
-  const cachedSessionsQuery = useQuery({
-    queryKey: ["sessions_cache"],
-    queryFn: () => invoke<SessionInfo[]>("load_session_cache"),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-
   const sessionsQuery = useQuery({
     queryKey: [
       "sessions",
@@ -217,7 +212,6 @@ function App() {
       forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
-    placeholderData: cachedSessionsQuery.data,
     queryFn: () =>
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
@@ -603,8 +597,71 @@ function App() {
     staleTime: 30_000,
   });
 
+  const activityStatusQuery = useQuery({
+    queryKey: ["activity_statuses", sessionsQuery.data?.map((s) => s.id)],
+    enabled: Boolean(sessionsQuery.data?.length),
+    queryFn: async () => {
+      const sessions = sessionsQuery.data ?? [];
+      return invoke<SessionActivityStatus[]>("get_session_activity_statuses", {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          provider: s.provider,
+          sessionDir: s.sessionDir,
+        })),
+        opencodeRoot: settingsQuery.data?.opencodeRoot || null,
+      });
+    },
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+  });
+
+  const toolAvailabilityQuery = useQuery({
+    queryKey: ["tool_availability"],
+    queryFn: () => invoke<ToolAvailability>("check_tool_availability"),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const activityStatusMap = useMemo<Map<string, SessionActivityStatus>>(() => {
+    const m = new Map<string, SessionActivityStatus>();
+    for (const status of activityStatusQuery.data ?? []) {
+      m.set(status.sessionId, status);
+    }
+    return m;
+  }, [activityStatusQuery.data]);
+
   const handleReadFileContent = async (filePath: string): Promise<string> => {
     return invoke<string>("read_plan_content", { filePath });
+  };
+
+  const handleReadOpenspecFile = async (projectCwd: string, relativePath: string): Promise<string> => {
+    return invoke<string>("read_openspec_file", { projectCwd, relativePath });
+  };
+
+  const handleOpenInTool = async (session: SessionInfo, toolType: IdeLauncherType) => {
+    if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
+    const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
+    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    try {
+      await invoke("open_in_tool", {
+        toolType,
+        cwd: session.cwd,
+        terminalPath: settingsQuery.data?.terminalPath || null,
+        sessionId: session.id,
+      });
+      showToast(t("toast.toolOpened"));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    }
+  };
+
+  const handleFocusTerminal = async (session: SessionInfo) => {
+    const hint = session.cwd?.split("\\").pop() ?? session.id;
+    try {
+      await invoke("focus_terminal_window", { titleHint: hint });
+    } catch {
+      showToast(t("toast.terminalFocusFailed"));
+    }
   };
 
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
@@ -986,6 +1043,11 @@ function App() {
               onOpenRecentSession={(session) =>
                 openProjectTab(getProjectKey(session, uncategorizedLabel))
               }
+              activityStatusMap={activityStatusMap}
+              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
+              toolAvailability={toolAvailabilityQuery.data ?? null}
             />
           ) : null}
 
@@ -1031,6 +1093,7 @@ function App() {
               openspecData={openspecQuery.data}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               onReadFileContent={handleReadFileContent}
+              onReadOpenspecFile={handleReadOpenspecFile}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}
@@ -1041,6 +1104,11 @@ function App() {
               openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
+              activityStatusMap={activityStatusMap}
+              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
+              toolAvailability={toolAvailabilityQuery.data ?? null}
             />
           ) : null}
         </div>

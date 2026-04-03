@@ -24,6 +24,31 @@ export type AppSettings = {
     pinnedProjects?: string[];
     enabledProviders: string[];
     providerIntegrations?: ProviderIntegrationStatus[];
+    defaultLauncher?: string | null;
+};
+
+export type SessionActivityStatus = {
+    sessionId: string;
+    /** "idle" | "active" | "waiting" | "done" */
+    status: "idle" | "active" | "waiting" | "done";
+    /** "thinking" | "tool_call" | "file_op" | "sub_agent" | "working" | "completed" */
+    detail?: string | null;
+    lastActivityAt?: string | null;
+};
+
+export type IdeLauncherType =
+    | "terminal"
+    | "opencode"
+    | "copilot"
+    | "vscode"
+    | "gemini"
+    | "explorer";
+
+export type ToolAvailability = {
+    copilot: boolean;
+    opencode: boolean;
+    gemini: boolean;
+    vscode: boolean;
 };
 
 export type ProviderIntegrationState =

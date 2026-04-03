@@ -35,7 +35,7 @@ export function SessionStatsBadge({ stats, isLoading }: Props) {
       <span className="stats-badge">{formatCompactNumber(stats.interactionCount)} {t("stats.turns")}</span>
       <span className="stats-badge">{formatCompactNumber(stats.outputTokens)} {t("stats.tokens")}</span>
       <span className="stats-badge">{formatDuration(stats.durationMinutes)}</span>
-      {stats.isLive ? <span className="stats-badge">LIVE</span> : null}
+      {stats.isLive ? <span className="stats-badge stats-badge-live"><span className="stats-badge-live-dot" />LIVE</span> : null}
     </div>
   );
 }

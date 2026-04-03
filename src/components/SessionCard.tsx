@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { SessionInfo, SessionStats } from "../types";
+import type { IdeLauncherType, SessionActivityStatus, SessionInfo, SessionStats, ToolAvailability } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import {
   ArchiveIcon,
@@ -16,6 +16,15 @@ import {
 import { SessionStatsBadge } from "./SessionStatsBadge";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 
+const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
+  { type: "terminal", label: "Terminal", icon: ">_" },
+  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
+  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
+  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
+  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
+  { type: "explorer", label: "Explorer", icon: "📁" },
+];
+
 type Props = {
   session: SessionInfo;
   onOpenTerminal: (session: SessionInfo) => void;
@@ -28,6 +37,11 @@ type Props = {
   onDelete: (session: SessionInfo) => void;
   stats?: SessionStats;
   statsLoading: boolean;
+  activityStatus?: SessionActivityStatus;
+  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onFocusTerminal: (session: SessionInfo) => void;
+  defaultLauncher: string | null;
+  toolAvailability: ToolAvailability | null;
 };
 
 function getSessionTitle(session: SessionInfo) {
@@ -57,9 +71,24 @@ export function SessionCard({
   onDelete,
   stats,
   statsLoading,
+  activityStatus,
+  onOpenInTool,
+  onFocusTerminal,
+  defaultLauncher,
+  toolAvailability,
 }: Props) {
   const { t, locale } = useI18n();
   const [showStats, setShowStats] = useState(false);
+  const [showLauncher, setShowLauncher] = useState(false);
+
+  const activityStatusCls = activityStatus
+    ? `activity-badge activity-badge--${activityStatus.status}`
+    : null;
+  const activityLabel = activityStatus
+    ? activityStatus.status === "active"
+      ? (t as (k: string) => string)(`dashboard.kanban.detail.${activityStatus.detail ?? "working"}`)
+      : (t as (k: string) => string)(`dashboard.kanban.status.${activityStatus.status}`)
+    : null;
 
   return (
     <article className="session-card">
@@ -81,6 +110,9 @@ export function SessionCard({
           ) : null}
           {session.parseError ? (
             <span className="session-chip error-chip">{t("session.parseError")}</span>
+          ) : null}
+          {activityStatusCls && activityLabel ? (
+            <span className={activityStatusCls}>{activityLabel}</span>
           ) : null}
           {session.tags.map((tag) => (
             <span key={tag} className="session-chip tag-chip">
@@ -120,6 +152,46 @@ export function SessionCard({
           onClick={() => onOpenTerminal(session)}
         >
           <TerminalIcon size={16} />
+        </button>
+        <div className="launcher-dropdown">
+          <button
+            type="button"
+            className="icon-button"
+            title={t("session.actions.chooseTool")}
+            aria-label={t("session.actions.chooseTool")}
+            onClick={() => setShowLauncher((v) => !v)}
+          >
+            ⋯
+          </button>
+          {showLauncher ? (
+            <div className="launcher-menu">
+              {LAUNCHER_OPTIONS.map((opt) => {
+                const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
+                return (
+                  <button
+                    key={opt.type}
+                    type="button"
+                    className={`launcher-menu-item${defaultLauncher === opt.type ? " launcher-menu-item--default" : ""}${!available ? " launcher-menu-item--disabled" : ""}`}
+                    disabled={!available}
+                    onClick={() => { onOpenInTool(session, opt.type); setShowLauncher(false); }}
+                  >
+                    <span className="launcher-option-icon">{opt.icon}</span>
+                    {opt.label}
+                    {!available ? <span className="launcher-option-unavail"> (未安裝)</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.focusTerminal")}
+          aria-label={t("session.actions.focusTerminal")}
+          onClick={() => onFocusTerminal(session)}
+        >
+          ⊙
         </button>
 
         <button
