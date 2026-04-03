@@ -25,6 +25,7 @@ AppSettings SHALL 包含以下欄位：
   - `pinned_projects: Vec<String>` — 釘選專案的 cwd 列表
   - `enabled_providers: Vec<String>` — 啟用的 provider（`"copilot"` / `"opencode"`）
   - `provider_integrations: HashMap<String, ProviderIntegration>` — provider bridge 設定
+  - `default_launcher: Option<String>` — 預設啟動工具（`"terminal"` / `"opencode"` / `"gh-copilot"` / `"gemini"` / `"explorer"`）
 
 ### Requirement: 設定對話框權限判斷
 
@@ -87,3 +88,17 @@ AppSettings SHALL 包含以下欄位：
 - **WHEN** 設定頁可用寬度不足以容納寬版排版
 - **THEN** 系統將 provider integration 內容回退為堆疊式布局
 - **AND** 使用者仍可看到並操作所有 provider integration 功能
+
+### Requirement: 預設啟動工具設定
+
+系統 SHALL 在 AppSettings 新增 `default_launcher` 欄位，讓使用者選擇點擊 SessionCard 主啟動按鈕時的預設工具。
+
+#### Scenario: 讀取預設啟動工具
+
+- **WHEN** 系統載入設定
+- **THEN** `default_launcher` 欄位為 None 時，系統預設使用 `terminal`
+
+#### Scenario: 儲存預設啟動工具
+
+- **WHEN** 使用者在設定頁選擇預設啟動工具並儲存
+- **THEN** 系統將選擇的工具類型字串寫入 settings.json 的 `default_launcher` 欄位

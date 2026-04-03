@@ -56,10 +56,58 @@
 
 ### Requirement: Kanban 視圖跨專案顯示
 
-系統 SHALL 在 Kanban 看板中展示所有專案的 sessions，不依專案分組。
+系統 SHALL 在 Kanban 看板中展示所有專案的 sessions，以**專案為單位**分組顯示。
 
-#### Scenario: 跨專案 session 顯示
+#### Scenario: 跨專案 session 顯示（ProjectCard 分組）
 
 - **WHEN** 使用者瀏覽 Kanban 視圖
-- **THEN** 來自不同專案的 sessions 在同一欄中混合顯示
-- **AND** 每張卡片的所屬專案名稱清晰可見
+- **THEN** 同一欄中的 sessions 依所屬專案分組，每個專案顯示為一張 `ProjectCard`
+- **AND** 每張 ProjectCard 標頭顯示：專案名稱、該欄中的 session 數量、平台標籤、最後更新時間
+- **AND** ProjectCard 預設為展開狀態
+
+#### Scenario: ProjectCard 收折
+
+- **WHEN** 使用者點擊 ProjectCard 的收折按鈕
+- **THEN** 隱藏 session 列表，僅顯示標頭摘要（session 數量保留可見）
+- **AND** 再次點擊時展開，恢復顯示
+
+#### Scenario: ProjectCard 展開後 session 列表
+
+- **WHEN** ProjectCard 處於展開狀態
+- **THEN** 以輕量列表行顯示每個 session：summary（截至 60 字元）、activity badge、啟動按鈕
+- **AND** Active 狀態的 session 額外顯示活動細節（Thinking / Tool Call / File Op / Sub-Agent / Working）
+
+### Requirement: Done 欄位數量限制
+
+Done 欄位 SHALL 限制顯示數量，避免已完成 session 大量佔用畫面。
+
+#### Scenario: Done 欄預設顯示 10 個
+
+- **WHEN** Done 欄的 ProjectCard 總數（或 session 數）超過 10 個
+- **THEN** 系統只顯示最新的 10 個
+- **AND** 底部顯示「載入更多」按鈕
+
+#### Scenario: 載入更多
+
+- **WHEN** 使用者點擊「載入更多」按鈕，或捲動至 Done 欄底部
+- **THEN** 系統追加顯示下一批（10 個）Done 狀態的項目
+
+### Requirement: 看板欄位寬度調整
+
+系統 SHALL 支援看板欄位寬度的手動調整與持久化。
+
+#### Scenario: 預設平均寬度
+
+- **WHEN** 使用者初次開啟看板視圖，或無已儲存寬度設定
+- **THEN** 四欄平均分配可用寬度（各 25%）
+
+#### Scenario: 手動調整欄位寬度
+
+- **WHEN** 使用者拖拉欄位分隔線
+- **THEN** 即時調整對應欄的寬度，並壓縮相鄰欄
+
+#### Scenario: 欄寬持久化
+
+- **WHEN** 使用者完成欄寬調整
+- **THEN** 系統將欄寬設定儲存（localStorage 或 AppSettings）
+- **AND** 下次開啟看板時恢復上次設定的欄寬

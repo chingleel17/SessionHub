@@ -136,3 +136,97 @@ windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "W
 - Copilot `events.jsonl` 經實際調查確認，事件類型包括：`session.start`、`session.shutdown`、`session.task_complete`、`assistant.turn_start`、`assistant.turn_end`、`assistant.message`、`tool.execution_start`、`tool.execution_complete`、`session.mode_changed`。工具名稱在 `data.toolName` 欄位（如 `task_complete`、`read_file` 等）。
 - OpenCode 狀態偵測來源確認為 `storage/message/ses_xxx/msg_*.json`（含 `role`, `finish`, `time` 欄位）與 `storage/part/msg_xxx/prt_*.json`（含 `type`, `tool`, `state.status` 欄位）。工具名稱如 `edit`、`glob`、`task`、`call_omo_agent`、`patch` 等。
 - `events.jsonl` 無 `thinking` 相關 event type（Copilot 不直接暴露 reasoning 事件），thinking 細節僅 OpenCode 可偵測（part type=reasoning）。
+
+
+---
+
+## UX Refinements (2026-04-03)
+
+### viewMode 持久化
+
+- `viewMode` 狀態提升至 `App.tsx`，以 `dashboardViewMode` state 管理
+- 預設值為 `"kanban"`（原本為 `"list"`）
+- 當使用者切換至專案頁或設定頁後返回儀表板，保留上次的視圖模式（不重置）
+- Props: `DashboardView` 新增 `viewMode: "list" | "kanban"` 和 `onViewModeChange: (mode) => void`
+
+### 切換按鈕順序
+
+- 看板 (Kanban) 在左側（第一個），清單 (List) 在右側（第二個）
+- 預設選中看板
+
+### Launcher 下拉選單定位修正
+
+- `.kanban-card` 移除 `overflow: hidden`，避免下拉選單被卡片邊框裁切
+- 狀態色條改用 `border-radius: 6px 6px 0 0` 保持圓角
+- 下拉包裝在 `position: relative` 的 div 中，確保定位正確
+
+### 預設開啟工具設定修正
+
+- `handleSaveSettings` 補上 `defaultLauncher: settingsForm.defaultLauncher ?? null`
+- 先前遺漏此欄位導致設定無法儲存
+
+### 工具可用性偵測
+
+- Rust command `check_tool_availability`：執行 `where <cmd>` 偵測 copilot / opencode / gemini / code 是否在 PATH
+- App 初始化時查詢一次（staleTime: Infinity），結果傳入 DashboardView 與 ProjectView
+- 選單中未偵測到的工具顯示 disabled 狀態
+
+### 統計卡片重設計
+
+- 從橫向 `stat-bar` 改為彈性排列的獨立 card（各有背景色）
+- parseErrorCount 為 0 時不顯示 error card
+
+### IdeLauncherType 更新
+
+- `"gh-copilot"` 改為 `"copilot"`，指令從 `gh copilot session` 改為 `copilot session`
+
+---
+
+## UX Refinements (2026-04-03, Phase 2)
+
+### 已知問題：Copilot CLI 無法開啟
+
+- 測試發現 `copilot session` 指令無法成功開啟 session
+- 需調查正確的 Copilot CLI resume 指令格式（可能為 `copilot resume <session_id>` 或其他格式）
+- 在查明前，Copilot 工具在選單中保持顯示但應有明確錯誤提示
+
+### Platform-Aware 預設啟動工具
+
+- 開啟工具選單的預設選項應依照 **session 的 provider** 決定，而非全域設定
+  - Copilot session → 預設 `copilot`
+  - OpenCode session → 預設 `opencode`
+  - 無法判斷 / 其他 → 退回 AppSettings.defaultLauncher，再退回 `terminal`
+- 全域設定中的「預設啟動工具」改為**覆蓋**用途（optional override），不再是唯一依據
+- KanbanCard 與 SessionCard 的主按鈕 icon 應反映 platform-aware 預設工具
+
+### Done 欄位數量限制
+
+- Done 欄位（已完成 sessions）僅顯示最新的 **10 個**，避免大量已完成 session 佔滿畫面
+- 超過 10 個時，顯示「載入更多」按鈕或支援捲動觸底自動載入（infinite scroll）
+- 已封存 sessions 與超過 24h 無活動 sessions 均歸入 Done
+
+### 看板欄位寬度
+
+- 四欄預設**平均分配**寬度（各 25%），取代原本內容驅動的寬度
+- 支援**手動拖拉調整**各欄寬度（CSS resize 或 mousedown 拖拉）
+- 使用者調整的欄寬應**持久化儲存**至 AppSettings 或 localStorage，下次開啟時恢復
+
+### 看板卡片：以專案為單位
+
+- 看板顯示單位從「一個 session 一張卡片」改為**「一個專案一張卡片」**
+- 同一專案、同一狀態欄的 sessions 集合在同一 ProjectCard 中
+- ProjectCard 預設**展開**顯示 session 清單，可手動**收折**（toggle）
+- ProjectCard 標頭顯示：專案名稱、session 數量、平台標籤群、最後更新時間
+- 收折後標頭仍顯示 session 數量與狀態摘要
+- 展開後每個 session 以輕量列表行顯示（summary、activity badge、啟動按鈕）
+
+### 統計週期切換排版調整
+
+- 原本的「本週 / 本月」切換按鈕從嵌入 stat card 改為獨立的切換列
+- 放置位置：**Kanban/清單切換按鈕的下方**，統計卡片的上方
+- 排版為**橫向（水平）排列**（非垂直）
+
+### Kanban/清單切換按鈕位置調整
+
+- 切換按鈕（Kanban / 清單）維持現有位置（Dashboard 頂部）
+- 統計週期切換（本週 / 本月）放在切換按鈕正下方，作為次級控制列

@@ -665,6 +665,7 @@ function App() {
   };
 
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
+  const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
 
   const filteredDashboardTotals = useMemo(() => {
     const now = new Date();
@@ -722,6 +723,7 @@ function App() {
       showArchived: settingsForm.showArchived,
       pinnedProjects,
       enabledProviders: settingsForm.enabledProviders,
+      defaultLauncher: settingsForm.defaultLauncher ?? null,
     };
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
@@ -1048,6 +1050,8 @@ function App() {
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
               defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
               toolAvailability={toolAvailabilityQuery.data ?? null}
+              viewMode={dashboardViewMode}
+              onViewModeChange={setDashboardViewMode}
             />
           ) : null}
 

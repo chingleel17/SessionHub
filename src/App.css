@@ -2130,19 +2130,36 @@ textarea {
   transform: rotate(90deg);
 }
 
+/* ── Dashboard controls rows ──────────────────── */
+.dashboard-controls-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px 4px;
+  gap: 8px;
+}
+.dashboard-period-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 16px 8px;
+  gap: 8px;
+}
+
 /* ── Kanban board ─────────────────────────────── */
 .kanban-board {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  display: flex;
+  gap: 0;
   padding: 16px;
   overflow-x: auto;
+  flex: 1;
+  min-height: 0;
 }
 .kanban-column {
   background: var(--color-surface-secondary, #f5f5f5);
   border-radius: 8px;
   padding: 12px;
   min-height: 200px;
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 .kanban-column-header {
   display: flex;
@@ -2165,10 +2182,9 @@ textarea {
   background: var(--color-surface, #fff);
   border-radius: 6px;
   border: 1px solid var(--color-border);
-  overflow: hidden;
   box-shadow: 0 1px 3px rgba(0,0,0,.06);
 }
-.kanban-card-status-bar { height: 3px; }
+.kanban-card-status-bar { height: 3px; border-radius: 6px 6px 0 0; }
 .kanban-status-active .kanban-card-status-bar,
 .kanban-card-status-bar.kanban-status-active { background: #22c55e; }
 .kanban-status-waiting .kanban-card-status-bar,
@@ -2302,9 +2318,10 @@ textarea {
 }
 .stat-card-toggles {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
   margin-left: auto;
+  align-self: center;
 }
 
 /* Override old .stat-card if used in projects/stats page - keep that, add new selector */
@@ -2348,3 +2365,108 @@ textarea {
 
 /* Fix kanban launcher menu to position relative to its wrapper */
 .kanban-launcher-menu { top: calc(100% + 2px); left: 0; }
+
+/* ── Kanban column resizer ────────────────────── */
+.kanban-column-resizer {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  position: relative;
+}
+.kanban-column-resizer::after {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 2px;
+  width: 2px;
+  background: var(--color-border, #e5e7eb);
+  border-radius: 2px;
+}
+.kanban-column-resizer:hover { background: var(--color-border, #e5e7eb); }
+
+/* ── Kanban ProjectCard ───────────────────────── */
+.kanban-project-card {
+  background: var(--color-surface, #fff);
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  overflow: visible;
+}
+.kanban-project-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 6px;
+}
+.kanban-project-card-header:hover { background: var(--color-surface-secondary, #f5f5f5); }
+.kanban-project-expand { font-size: 11px; color: var(--color-text-muted); width: 12px; flex-shrink: 0; }
+.kanban-project-name { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-project-count {
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface-tertiary, #e0e0e0);
+  border-radius: 999px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.kanban-project-providers { display: flex; gap: 3px; flex-shrink: 0; }
+.kanban-project-time { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }
+.kanban-project-goto { font-size: 14px; color: var(--color-text-muted); flex-shrink: 0; opacity: 0.5; }
+.kanban-project-card-header:hover .kanban-project-goto { opacity: 1; color: var(--color-accent, #4f46e5); }
+.kanban-project-sessions { border-top: 1px solid var(--color-border-subtle, #f3f4f6); padding: 4px 0; }
+
+/* ── Kanban session row ───────────────────────── */
+.kanban-session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  min-width: 0;
+}
+.kanban-session-row:hover { background: var(--color-surface-secondary, #f8f9fa); }
+.kanban-session-summary {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.kanban-session-actions { display: flex; gap: 3px; flex-shrink: 0; position: relative; }
+
+/* ── Kanban project more sessions button ──────── */
+.kanban-project-more-btn {
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-accent, #4f46e5);
+  text-align: left;
+}
+.kanban-project-more-btn:hover { text-decoration: underline; }
+.kanban-load-more-btn {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+.kanban-load-more-btn:hover { background: var(--color-surface-secondary, #f5f5f5); }
+
+/* ── Launcher default tag ─────────────────────── */
+.kanban-launcher-option--default { font-weight: 600; }
+.launcher-default-tag { font-size: 11px; color: var(--color-accent, #4f46e5); }

@@ -75,3 +75,49 @@
 - [x] 11.3 執行 `bun run build` 確認 TypeScript 無型別錯誤
 - [x] 11.4 執行 `cd src-tauri && cargo test` 確認 Rust 編譯與測試通過
 
+
+## 12. Bug Fixes & UX Refinements (2026-04-03)
+
+- [x] 12.1 將 iewMode 狀態從 DashboardView 內部提升至 App.tsx，以 props 傳入，預設值改為 "kanban"，確保切換到其他頁面再返回時保留上次選擇的視圖模式
+- [x] 12.2 切換按鈕順序調整：Kanban 在左（第一），清單在右（第二）
+- [x] 12.3 修正 .kanban-card { overflow: hidden } 導致 launcher 下拉選單被裁切的問題（移除 overflow:hidden，改用 border-radius 上方角）
+- [x] 12.4 修正 handleSaveSettings 遺漏 defaultLauncher 欄位，導致預設開啟工具設定無法儲存的問題
+- [x] 12.5 統計區域從橫向 stat-bar 改為獨立 card 樣式（各有背景色），解析失敗數為 0 時自動隱藏
+- [x] 12.6 新增 check_tool_availability Rust command，啟動時偵測 copilot / opencode / gemini / code 是否在 PATH 中，選單中未安裝項目顯示 disabled
+- [x] 12.7 Copilot 指令從 gh copilot session 改為 copilot session（IdeLauncherType: "gh-copilot" → "copilot"）
+- [x] 12.8 切換按鈕選中狀態改為藍色（#2563eb），不再依賴未定義的 --color-accent CSS 變數
+
+## 13. Phase 3 — 看板 UX 升級（2026-04-03）
+
+### 看板卡片改為專案分組（ProjectCard）
+
+- [x] 13.1 將 KanbanCard（session 為單位）重構為 `KanbanProjectCard`（專案為單位）：每欄依 cwd 分組，同欄同專案的 sessions 集合在一張 ProjectCard 內
+- [x] 13.2 `KanbanProjectCard` 標頭顯示：專案名稱（cwd 最後段）、session 數量 badge、平台標籤群（copilot/opencode）、最後更新時間
+- [x] 13.3 `KanbanProjectCard` 支援展開/收折（預設展開），收折後僅顯示標頭
+- [x] 13.4 展開後以輕量列表行顯示每個 session：summary（截至 60 字元）、activity badge、啟動按鈕（platform-aware 預設工具）
+
+### Platform-Aware 預設啟動工具
+
+- [x] 13.5 實作 `get_platform_default_launcher(session: &SessionInfo, global_default: Option<&str>) -> &str` 輔助函式：Copilot session → "copilot"，OpenCode session → "opencode"，其他 → global_default → "terminal"
+- [x] 13.6 前端 `getDefaultLauncher(session, toolAvailability, globalDefault)` helper：依 provider 決定預設工具，若工具不可用則退回 terminal
+- [x] 13.7 KanbanProjectCard 與 SessionCard 的主按鈕 icon/label 反映 platform-aware 預設工具（而非固定 icon）
+
+### Done 欄位數量限制
+
+- [x] 13.8 Done 欄初始只渲染最新 10 個 ProjectCard（依 lastActivityAt 排序）
+- [x] 13.9 Done 欄底部新增「載入更多」按鈕，每次追加 10 個；或支援捲動觸底自動載入
+
+### 看板欄位寬度持久化
+
+- [x] 13.10 四欄預設平均分配（25% each），以 CSS grid `fr` 單位實作
+- [x] 13.11 實作欄位寬度拖拉調整（mousedown on column divider）
+- [x] 13.12 欄寬儲存至 localStorage key `sessionhub.kanban.columnWidths`，頁面初始化時讀取並套用
+
+### 統計週期切換排版
+
+- [x] 13.13 將「本週 / 本月」切換按鈕從 stat card 抽離，改為獨立橫向列，置於 Kanban/清單切換按鈕的正下方、統計卡片上方
+- [x] 13.14 調整 DashboardView layout：視圖切換按鈕列 → 週期切換列 → 統計卡片列 → 看板/清單主內容
+
+### Copilot CLI 指令修正
+
+- [x] 13.15 調查並確認正確的 Copilot CLI resume 指令格式（可能為 `copilot resume <session_id>` 或 `copilot session <session_id>`），修正 Rust open_in_tool 的 copilot 路由

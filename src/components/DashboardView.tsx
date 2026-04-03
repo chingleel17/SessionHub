@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { IdeLauncherType, ProjectGroup, SessionActivityStatus, SessionInfo, ToolAvailability } from "../types";
 
@@ -20,10 +20,15 @@ type Props = {
   onFocusTerminal: (session: SessionInfo) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
+  viewMode: "list" | "kanban";
+  onViewModeChange: (mode: "list" | "kanban") => void;
 };
 
 const RECENT_TITLE_MAX_LEN = 80;
 const PROJECT_LAST_SESSION_MAX_LEN = 60;
+const DONE_INITIAL_LIMIT = 10;
+const DONE_LOAD_MORE_STEP = 10;
+const KANBAN_COL_WIDTHS_KEY = "sessionhub.kanban.columnWidths";
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
@@ -54,6 +59,28 @@ const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; av
   { type: "explorer", label: "Explorer", icon: "📁" },
 ];
 
+function getDefaultLauncher(
+  session: SessionInfo,
+  toolAvailability: ToolAvailability | null,
+  globalDefault: string | null,
+): IdeLauncherType {
+  if (globalDefault) {
+    const ga = globalDefault as IdeLauncherType;
+    const opt = LAUNCHER_OPTIONS.find((o) => o.type === ga);
+    if (opt?.availKey && toolAvailability && !toolAvailability[opt.availKey]) return "terminal";
+    return ga;
+  }
+  if (session.provider === "copilot") {
+    if (!toolAvailability || toolAvailability.copilot) return "copilot";
+    return "terminal";
+  }
+  if (session.provider === "opencode") {
+    if (!toolAvailability || toolAvailability.opencode) return "opencode";
+    return "terminal";
+  }
+  return "terminal";
+}
+
 function getActivityStatusLabel(t: (k: string) => string, status?: SessionActivityStatus): { label: string; cls: string } {
   if (!status) return { label: t("dashboard.kanban.status.idle"), cls: "kanban-status-idle" };
   switch (status.status) {
@@ -64,31 +91,60 @@ function getActivityStatusLabel(t: (k: string) => string, status?: SessionActivi
   }
 }
 
-function KanbanCard({
-  session,
-  activityStatus,
+function loadColumnWidths(): number[] {
+  try {
+    const stored = localStorage.getItem(KANBAN_COL_WIDTHS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as unknown;
+      if (Array.isArray(parsed) && parsed.length === 4 && (parsed as unknown[]).every((n) => typeof n === "number")) {
+        return parsed as number[];
+      }
+    }
+  } catch { /* ignore */ }
+  return [25, 25, 25, 25];
+}
+
+function saveColumnWidths(widths: number[]) {
+  try { localStorage.setItem(KANBAN_COL_WIDTHS_KEY, JSON.stringify(widths)); } catch { /* ignore */ }
+}
+
+// ─── KanbanProjectCard ────────────────────────────────────────────────────────
+
+const SESSIONS_PER_PROJECT_CARD = 3;
+
+function KanbanProjectCard({
+  projectName,
+  projectKey,
+  sessions,
+  activityStatusMap,
   onOpenInTool,
   onFocusTerminal,
+  onOpenProject,
   defaultLauncher,
   toolAvailability,
 }: {
-  session: SessionInfo;
-  activityStatus?: SessionActivityStatus;
+  projectName: string;
+  projectKey: string;
+  sessions: SessionInfo[];
+  activityStatusMap: Map<string, SessionActivityStatus>;
   onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
   onFocusTerminal: (session: SessionInfo) => void;
+  onOpenProject: (key: string) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
 }) {
   const { t } = useI18n();
-  const [showLauncher, setShowLauncher] = useState(false);
-  const { label, cls } = getActivityStatusLabel(t as (k: string) => string, activityStatus);
-  const title = session.summary?.trim() || session.id;
-  const projectName = session.cwd?.split("\\").pop() ?? null;
+  const [showLauncherFor, setShowLauncherFor] = useState<string | null>(null);
 
-  const handleDefaultLaunch = () => {
-    const tool = (defaultLauncher as IdeLauncherType) ?? "terminal";
-    onOpenInTool(session, tool);
-  };
+  const providers = [...new Set(sessions.map((s) => s.provider))];
+  const lastUpdated = sessions
+    .map((s) => s.updatedAt)
+    .filter((v): v is string => Boolean(v))
+    .sort()
+    .pop();
+
+  const visibleSessions = sessions.slice(0, SESSIONS_PER_PROJECT_CARD);
+  const hiddenCount = sessions.length - visibleSessions.length;
 
   const isToolAvailable = (opt: typeof LAUNCHER_OPTIONS[number]) => {
     if (!opt.availKey || !toolAvailability) return true;
@@ -96,65 +152,124 @@ function KanbanCard({
   };
 
   return (
-    <div className="kanban-card">
-      <div className={`kanban-card-status-bar ${cls}`} />
-      <div className="kanban-card-body">
-        <p className="kanban-card-title" title={title}>{title.length > 60 ? `${title.slice(0, 60)}…` : title}</p>
-        {projectName ? <p className="kanban-card-project">{projectName}</p> : null}
-        <div className="kanban-card-provider">
-          <span className={`provider-tag provider-tag--${session.provider}`}>
-            {session.provider === "opencode" ? "OpenCode" : "Copilot"}
-          </span>
-          <span className={`kanban-activity-badge ${cls}`}>{label}</span>
+    <div className="kanban-project-card">
+      <div
+        className="kanban-project-card-header"
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpenProject(projectKey)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpenProject(projectKey); }}
+        title={t("dashboard.kanban.openProject")}
+      >
+        <strong className="kanban-project-name">{projectName}</strong>
+        <span className="kanban-project-count">{sessions.length}</span>
+        <div className="kanban-project-providers">
+          {providers.map((p) => (
+            <span key={p} className={`provider-tag provider-tag--${p}`}>
+              {p === "opencode" ? "OC" : "CP"}
+            </span>
+          ))}
         </div>
-        <div className="kanban-card-actions">
-          <button type="button" className="kanban-action-btn" onClick={handleDefaultLaunch} title={t("session.actions.openTool")}>
-            ▶
-          </button>
-          <div style={{ position: "relative" }}>
-            <button
-              type="button"
-              className="kanban-action-btn"
-              onClick={() => setShowLauncher((v) => !v)}
-              title={t("session.actions.chooseTool")}
-            >
-              ⋯
-            </button>
-            {showLauncher ? (
-              <div className="kanban-launcher-menu">
-                {LAUNCHER_OPTIONS.map((opt) => {
-                  const available = isToolAvailable(opt);
-                  return (
-                    <button
-                      key={opt.type}
-                      type="button"
-                      className={`kanban-launcher-option${!available ? " kanban-launcher-option--disabled" : ""}`}
-                      disabled={!available}
-                      onClick={() => { onOpenInTool(session, opt.type); setShowLauncher(false); }}
-                    >
-                      <span className="launcher-option-icon">{opt.icon}</span>
-                      {opt.label}
-                      {!available ? <span className="launcher-option-unavail"> —</span> : null}
-                    </button>
-                  );
-                })}
+        {lastUpdated ? <span className="kanban-project-time">{lastUpdated.slice(0, 10)}</span> : null}
+        <span className="kanban-project-goto">›</span>
+      </div>
+
+      <div className="kanban-project-sessions">
+        {visibleSessions.map((session) => {
+          const activityStatus = activityStatusMap.get(session.id);
+          const { label, cls } = getActivityStatusLabel(t as (k: string) => string, activityStatus);
+          const sessionTitle = session.summary?.trim() || session.id;
+          const launcher = getDefaultLauncher(session, toolAvailability, defaultLauncher);
+
+          return (
+            <div key={session.id} className="kanban-session-row">
+              <span className={`kanban-activity-badge ${cls}`}>{label}</span>
+              <span className="kanban-session-summary" title={sessionTitle}>
+                {truncate(sessionTitle, 60)}
+              </span>
+              <div className="kanban-session-actions">
+                <button
+                  type="button"
+                  className="kanban-action-btn"
+                  onClick={(e) => { e.stopPropagation(); onOpenInTool(session, launcher); }}
+                  title={t("session.actions.openTool")}
+                >
+                  ▶
+                </button>
+                <div style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    className="kanban-action-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowLauncherFor(showLauncherFor === session.id ? null : session.id);
+                    }}
+                    title={t("session.actions.chooseTool")}
+                  >
+                    ⋯
+                  </button>
+                  {showLauncherFor === session.id ? (
+                    <div className="kanban-launcher-menu">
+                      {LAUNCHER_OPTIONS.map((opt) => {
+                        const available = isToolAvailable(opt);
+                        return (
+                          <button
+                            key={opt.type}
+                            type="button"
+                            className={`kanban-launcher-option${!available ? " kanban-launcher-option--disabled" : ""}${opt.type === launcher ? " kanban-launcher-option--default" : ""}`}
+                            disabled={!available}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenInTool(session, opt.type);
+                              setShowLauncherFor(null);
+                            }}
+                          >
+                            <span className="launcher-option-icon">{opt.icon}</span>
+                            {opt.label}
+                            {opt.type === launcher ? <span className="launcher-default-tag"> ★</span> : null}
+                            {!available ? <span className="launcher-option-unavail"> —</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="kanban-action-btn"
+                  onClick={(e) => { e.stopPropagation(); onFocusTerminal(session); }}
+                  title={t("session.actions.focusTerminal")}
+                >
+                  ⊙
+                </button>
               </div>
-            ) : null}
-          </div>
-          <button type="button" className="kanban-action-btn" onClick={() => onFocusTerminal(session)} title={t("session.actions.focusTerminal")}>
-            ⊙
+            </div>
+          );
+        })}
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            className="kanban-project-more-btn"
+            onClick={() => onOpenProject(projectKey)}
+          >
+            +{hiddenCount} {t("dashboard.kanban.moreSessions")}
           </button>
-        </div>
+        ) : null}
       </div>
     </div>
   );
 }
+
+// ─── KanbanBoard ──────────────────────────────────────────────────────────────
+
+type ProjectBucket = { projectName: string; projectKey: string; sessions: SessionInfo[] };
 
 function KanbanBoard({
   groupedProjects,
   activityStatusMap,
   onOpenInTool,
   onFocusTerminal,
+  onOpenProject,
   defaultLauncher,
   toolAvailability,
 }: {
@@ -162,52 +277,140 @@ function KanbanBoard({
   activityStatusMap: Map<string, SessionActivityStatus>;
   onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
   onFocusTerminal: (session: SessionInfo) => void;
+  onOpenProject: (key: string) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
 }) {
   const { t } = useI18n();
+  const [columnWidths, setColumnWidths] = useState<number[]>(loadColumnWidths);
+  const [doneLimit, setDoneLimit] = useState(DONE_INITIAL_LIMIT);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const widthsRef = useRef(columnWidths);
+  const dragRef = useRef<{ colIndex: number; startX: number; startWidths: number[] } | null>(null);
+
+  useEffect(() => { widthsRef.current = columnWidths; }, [columnWidths]);
+  useEffect(() => { saveColumnWidths(columnWidths); }, [columnWidths]);
+
   const allSessions = groupedProjects.flatMap((p) => p.sessions);
 
-  const columns: { key: string; label: string; sessions: SessionInfo[] }[] = [
-    { key: "active", label: t("dashboard.kanban.column.active"), sessions: [] },
-    { key: "waiting", label: t("dashboard.kanban.column.waiting"), sessions: [] },
-    { key: "idle", label: t("dashboard.kanban.column.idle"), sessions: [] },
-    { key: "done", label: t("dashboard.kanban.column.done"), sessions: [] },
+  const columns: { key: string; label: string; buckets: ProjectBucket[] }[] = [
+    { key: "active", label: t("dashboard.kanban.column.active"), buckets: [] },
+    { key: "waiting", label: t("dashboard.kanban.column.waiting"), buckets: [] },
+    { key: "idle", label: t("dashboard.kanban.column.idle"), buckets: [] },
+    { key: "done", label: t("dashboard.kanban.column.done"), buckets: [] },
   ];
 
+  const uncategorized = t("dashboard.kanban.uncategorized");
   for (const s of allSessions) {
-    if (s.isArchived) { columns[3].sessions.push(s); continue; }
-    const status = activityStatusMap.get(s.id)?.status ?? "idle";
-    const col = columns.find((c) => c.key === status) ?? columns[2];
-    col.sessions.push(s);
+    const statusKey = s.isArchived ? "done" : (activityStatusMap.get(s.id)?.status ?? "idle");
+    const col = columns.find((c) => c.key === statusKey) ?? columns[2];
+    const projectName = getProjectShortName(s.cwd) ?? uncategorized;
+    const projectKey = s.cwd ? s.cwd.toLowerCase() : uncategorized;
+    let bucket = col.buckets.find((b) => b.projectKey === projectKey);
+    if (!bucket) { bucket = { projectName, projectKey, sessions: [] }; col.buckets.push(bucket); }
+    bucket.sessions.push(s);
   }
 
+  for (const col of columns) {
+    col.buckets.sort((a, b) => {
+      const aTime = a.sessions.map((s) => s.updatedAt).filter(Boolean).sort().pop() ?? "";
+      const bTime = b.sessions.map((s) => s.updatedAt).filter(Boolean).sort().pop() ?? "";
+      return bTime.localeCompare(aTime);
+    });
+  }
+
+  const colSessionCounts = columns.map((c) =>
+    c.buckets.reduce((sum, b) => sum + b.sessions.length, 0),
+  );
+
+  const handleResizerMouseDown = useCallback((colIndex: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { colIndex, startX: e.clientX, startWidths: [...widthsRef.current] };
+
+    const onMouseMove = (me: MouseEvent) => {
+      if (!dragRef.current || !boardRef.current) return;
+      const { colIndex: ci, startX, startWidths } = dragRef.current;
+      const boardWidth = boardRef.current.getBoundingClientRect().width;
+      const deltaPercent = ((me.clientX - startX) / boardWidth) * 100;
+      const MIN = 10;
+      const newWidths = [...startWidths];
+      const newLeft = Math.max(MIN, Math.min(startWidths[ci] + deltaPercent, 100 - MIN * (startWidths.length - 1 - ci)));
+      const diff = newLeft - startWidths[ci];
+      newWidths[ci] = newLeft;
+      newWidths[ci + 1] = Math.max(MIN, startWidths[ci + 1] - diff);
+      setColumnWidths(newWidths);
+    };
+
+    const onMouseUp = () => {
+      dragRef.current = null;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
+
   return (
-    <div className="kanban-board">
-      {columns.map((col) => (
-        <div key={col.key} className="kanban-column">
-          <div className="kanban-column-header">
-            <span className="kanban-column-title">{col.label}</span>
-            <span className="kanban-column-count">{col.sessions.length}</span>
+    <div ref={boardRef} className="kanban-board" style={{ display: "flex", gap: 0, padding: "16px", overflow: "hidden" }}>
+      {columns.flatMap((col, idx) => {
+        const isDone = col.key === "done";
+        const visibleBuckets = isDone ? col.buckets.slice(0, doneLimit) : col.buckets;
+        const hasMore = isDone && col.buckets.length > doneLimit;
+
+        const colEl = (
+          <div
+            key={col.key}
+            className="kanban-column"
+            style={{ width: `${columnWidths[idx]}%`, flexShrink: 0, flexGrow: 0, minWidth: 0, overflow: "hidden" }}
+          >
+            <div className="kanban-column-header">
+              <span className="kanban-column-title">{col.label}</span>
+              <span className="kanban-column-count">{colSessionCounts[idx]}</span>
+            </div>
+            <div className="kanban-column-cards">
+              {visibleBuckets.map((bucket) => (
+                <KanbanProjectCard
+                  key={bucket.projectKey}
+                  projectName={bucket.projectName}
+                  projectKey={bucket.projectKey}
+                  sessions={bucket.sessions}
+                  activityStatusMap={activityStatusMap}
+                  onOpenInTool={onOpenInTool}
+                  onFocusTerminal={onFocusTerminal}
+                  onOpenProject={onOpenProject}
+                  defaultLauncher={defaultLauncher}
+                  toolAvailability={toolAvailability}
+                />
+              ))}
+              {visibleBuckets.length === 0 ? (
+                <p className="kanban-empty">{t("dashboard.kanban.empty")}</p>
+              ) : null}
+              {hasMore ? (
+                <button
+                  type="button"
+                  className="kanban-load-more-btn"
+                  onClick={() => setDoneLimit((v) => v + DONE_LOAD_MORE_STEP)}
+                >
+                  {t("dashboard.kanban.loadMore")} ({col.buckets.length - doneLimit})
+                </button>
+              ) : null}
+            </div>
           </div>
-          <div className="kanban-column-cards">
-            {col.sessions.map((session) => (
-              <KanbanCard
-                key={session.id}
-                session={session}
-                activityStatus={activityStatusMap.get(session.id)}
-                onOpenInTool={onOpenInTool}
-                onFocusTerminal={onFocusTerminal}
-                defaultLauncher={defaultLauncher}
-                toolAvailability={toolAvailability}
-              />
-            ))}
-            {col.sessions.length === 0 ? (
-              <p className="kanban-empty">{t("dashboard.kanban.empty")}</p>
-            ) : null}
-          </div>
-        </div>
-      ))}
+        );
+
+        if (idx < columns.length - 1) {
+          return [
+            colEl,
+            <div
+              key={`resizer-${idx}`}
+              className="kanban-column-resizer"
+              onMouseDown={(e) => handleResizerMouseDown(idx, e)}
+            />,
+          ];
+        }
+        return [colEl];
+      })}
     </div>
   );
 }
@@ -230,9 +433,10 @@ export function DashboardView({
   onFocusTerminal,
   defaultLauncher,
   toolAvailability,
+  viewMode,
+  onViewModeChange,
 }: Props) {
   const { t } = useI18n();
-  const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
 
   const totalSessionCount = groupedProjects.reduce((sum, p) => sum + p.sessions.length, 0);
   const activeProjectCount = groupedProjects.length;
@@ -245,7 +449,7 @@ export function DashboardView({
 
   return (
     <section className="dashboard-layout">
-      {/* Stats cards row */}
+      {/* Stat cards row — toggles on right */}
       <div className="stat-cards-row">
         <div className="stat-card stat-card--sessions">
           <span className="stat-card-icon">🗂</span>
@@ -279,8 +483,25 @@ export function DashboardView({
           <strong className="stat-card-value">{loading ? "…" : formatCompactNumber(filteredTotalInteractions)}</strong>
           <span className="stat-card-label">{t("dashboard.stats.totalInteractions")}</span>
         </div>
-        {/* Period + view mode toggles */}
+
+        {/* Toggles on the far right, stacked vertically */}
         <div className="stat-card-toggles">
+          <div className="view-mode-toggle">
+            <button
+              type="button"
+              className={`period-toggle-btn${viewMode === "kanban" ? " active" : ""}`}
+              onClick={() => onViewModeChange("kanban")}
+            >
+              {t("dashboard.viewMode.kanban")}
+            </button>
+            <button
+              type="button"
+              className={`period-toggle-btn${viewMode === "list" ? " active" : ""}`}
+              onClick={() => onViewModeChange("list")}
+            >
+              {t("dashboard.viewMode.list")}
+            </button>
+          </div>
           <div className="period-toggle">
             <button
               type="button"
@@ -295,22 +516,6 @@ export function DashboardView({
               onClick={() => onPeriodChange("month")}
             >
               {t("dashboard.stats.period.month")}
-            </button>
-          </div>
-          <div className="view-mode-toggle">
-            <button
-              type="button"
-              className={`period-toggle-btn${viewMode === "list" ? " active" : ""}`}
-              onClick={() => setViewMode("list")}
-            >
-              {t("dashboard.viewMode.list")}
-            </button>
-            <button
-              type="button"
-              className={`period-toggle-btn${viewMode === "kanban" ? " active" : ""}`}
-              onClick={() => setViewMode("kanban")}
-            >
-              {t("dashboard.viewMode.kanban")}
             </button>
           </div>
         </div>
@@ -333,6 +538,7 @@ export function DashboardView({
           activityStatusMap={activityStatusMap}
           onOpenInTool={onOpenInTool}
           onFocusTerminal={onFocusTerminal}
+          onOpenProject={onOpenProject}
           defaultLauncher={defaultLauncher}
           toolAvailability={toolAvailability}
         />

@@ -4889,12 +4889,8 @@ fn open_in_tool_internal(
             Ok(())
         }
         "copilot" => {
-            let session_arg = session_id.unwrap_or_default();
-            let script = if session_arg.is_empty() {
-                format!("copilot session")
-            } else {
-                format!("copilot session --resume {}", session_arg)
-            };
+            // Run `copilot` in the session's working directory.
+            // The copilot CLI starts an interactive session chooser when invoked without sub-commands.
             let term = terminal_path.unwrap_or("pwsh");
             let term_stem = PathBuf::from(term)
                 .file_stem()
@@ -4905,9 +4901,9 @@ fn open_in_tool_internal(
             let mut cmd = Command::new(term);
             cmd.current_dir(cwd);
             if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && {}", cwd, script)]);
+                cmd.args(["/K", &format!("cd /d \"{}\" && copilot", cwd)]);
             } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; {}", cwd, script)]);
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; copilot", cwd)]);
             }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
