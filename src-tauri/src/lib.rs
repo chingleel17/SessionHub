@@ -429,11 +429,11 @@ fn should_emit_provider_refresh_at(
         .lock()
         .map_err(|_| "failed to lock provider refresh state".to_string())?;
     let dedup_window = Duration::from_millis(PROVIDER_REFRESH_DEDUP_MS);
-    tracked.retain(|_, last_emit| now.duration_since(*last_emit) < dedup_window);
+    tracked.retain(|_, last_emit| now.saturating_duration_since(*last_emit) < dedup_window);
 
     if tracked
         .get(provider)
-        .is_some_and(|last_emit| now.duration_since(*last_emit) < dedup_window)
+        .is_some_and(|last_emit| now.saturating_duration_since(*last_emit) < dedup_window)
     {
         return Ok(false);
     }
@@ -1903,19 +1903,25 @@ fn save_session_mtimes_to_db(
 }
 
 fn instant_from_unix_secs(stored: i64) -> Instant {
+    let now = Instant::now();
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     if stored <= 0 {
-        return Instant::now() - Duration::from_secs(FULL_SCAN_THRESHOLD_SECS + 1);
+        // 若系統剛開機、uptime 不足 FULL_SCAN_THRESHOLD_SECS，checked_sub 會失敗；
+        // 此時回傳 now，讓呼叫端視為「剛掃描過」以避免 panic。
+        return now
+            .checked_sub(Duration::from_secs(FULL_SCAN_THRESHOLD_SECS + 1))
+            .unwrap_or(now);
     }
     let stored_secs = stored as u64;
     if stored_secs >= now_secs {
-        return Instant::now();
+        return now;
     }
     let elapsed = now_secs - stored_secs;
-    Instant::now() - Duration::from_secs(elapsed)
+    // 若 elapsed 超過系統 uptime，同樣以 now 作為 fallback。
+    now.checked_sub(Duration::from_secs(elapsed)).unwrap_or(now)
 }
 
 fn persist_provider_cache(
@@ -2181,7 +2187,12 @@ fn create_provider_bridge_watcher(
             let pending = Arc::clone(&pending_providers);
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS));
-                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                let elapsed = le.lock()
+                    .map(|ts| {
+                        let now = Instant::now();
+                        now.saturating_duration_since(*ts)
+                    })
+                    .unwrap_or_else(|_| Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS));
                 if elapsed >= Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS) {
                     running.store(false, Ordering::SeqCst);
                     let providers_to_process = pending
@@ -2880,7 +2891,11 @@ fn is_opencode_session_live(message_dir: &Path) -> bool {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    now - mtime < 300
+    if mtime > now {
+        false // 未來時間不視為活躍
+    } else {
+        now - mtime < 300
+    }
 }
 
 /// 解析單一 message JSON 檔案為 OpencodeMessage
@@ -4701,7 +4716,13 @@ fn get_copilot_activity_status(session_dir: &Path, session_id: &str) -> SessionA
 
     let last_activity_at = last_ts.map(|t| t.to_rfc3339());
     let minutes_since = last_ts
-        .map(|t| (now - t).num_minutes())
+        .map(|t| {
+            if t > now {
+                0 // 未來時間視為 0 分鐘
+            } else {
+                (now - t).num_minutes()
+            }
+        })
         .unwrap_or(i64::MAX);
 
     let (status, detail) = match last_type {
@@ -4805,7 +4826,13 @@ fn get_opencode_activity_status(
     });
     let last_activity_at = last_ts.map(|t| t.to_rfc3339());
     let minutes_since = last_ts
-        .map(|t| (now - t).num_minutes())
+        .map(|t| {
+            if t > now {
+                0 // 未來時間視為 0 分鐘
+            } else {
+                (now - t).num_minutes()
+            }
+        })
         .unwrap_or(i64::MAX);
 
     let (status, detail) = match msg.role.as_deref() {
