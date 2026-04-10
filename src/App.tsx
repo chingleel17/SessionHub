@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -187,6 +187,7 @@ function App() {
   const [forceFull, setForceFull] = useState(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
+  const hasShownOutdatedToast = useRef(false);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
@@ -253,6 +254,20 @@ function App() {
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
   }, [settingsQuery.data]);
+
+  // 啟動時偵測 provider integration 版本是否過期，提示使用者前往設定更新
+  useEffect(() => {
+    if (!settingsQuery.data || hasShownOutdatedToast.current) return;
+    const integrations = settingsQuery.data.providerIntegrations ?? [];
+    const hasOutdated = integrations.some(
+      (integration) => integration.status === "outdated" || integration.status === "missing",
+    );
+    if (hasOutdated) {
+      hasShownOutdatedToast.current = true;
+      showToast(t("toast.providerOutdatedOnStartup"));
+    }
+  }, [settingsQuery.data, t]);
+
 
   useEffect(() => {
     if (activePlanSession) {

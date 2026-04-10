@@ -49,11 +49,11 @@
 ## 9. 前端調整
 
 - [x] 9.1 在 `src/App.tsx` 中移除 `invoke("load_session_cache")` 的呼叫及相關初始化邏輯
-- [ ] 9.2 確認 `get_sessions` 呼叫在應用啟動時正常觸發（已有邏輯，確認即可）
+- [x] 9.2 確認 `get_sessions` 呼叫在應用啟動時正常觸發（已有邏輯，確認即可）
 
 ## 10. 測試
 
 - [x] 10.1 新增 Rust unit test：`test_sessions_cache_roundtrip`（寫入 → 讀取 → 比對欄位）
 - [x] 10.2 新增 Rust unit test：`test_scan_state_roundtrip`（寫入 cursor/timestamp → 讀取比對）
 - [x] 10.3 新增 Rust unit test：`test_session_mtimes_roundtrip`（HashMap 寫入 → 讀取比對）
-- [ ] 10.4 在現有 `test_get_sessions` 系列測試中驗證：啟動後 ScanCache 從 DB 恢復，增量掃描不執行全掃
+- [x] 10.4 在現有 `test_get_sessions` 系列測試中驗證：啟動後 ScanCache 從 DB 恢復，增量掃描不執行全掃

@@ -230,6 +230,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "toast.providerPathOpenFailed": "Failed to open provider integration location",
   "toast.providerPathEdited": "Opened provider integration in an editor",
   "toast.providerPathEditFailed": "Failed to open provider integration in an editor",
+  "toast.providerOutdatedOnStartup": "Provider integration update available. Go to Settings to install or update.",
   "toast.planSaved": "Plan saved",
   "toast.planOpenedExternal": "Plan opened in external editor",
   "toast.planOpenFailed": "Failed to open plan",

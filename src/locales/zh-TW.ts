@@ -224,6 +224,7 @@ export const zhTwMessages = {
   "toast.providerPathOpenFailed": "開啟 provider integration 位置失敗",
   "toast.providerPathEdited": "已用編輯器開啟 provider integration",
   "toast.providerPathEditFailed": "開啟 provider integration 編輯失敗",
+  "toast.providerOutdatedOnStartup": "有 provider integration 需要更新，請前往設定頁面安裝或更新",
   "toast.planSaved": "Plan 已儲存",
   "toast.planOpenedExternal": "已用外部編輯器開啟 plan",
   "toast.planOpenFailed": "開啟 plan 失敗",
