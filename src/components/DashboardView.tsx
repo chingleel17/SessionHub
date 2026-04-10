@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
 import type { IdeLauncherType, ProjectGroup, SessionActivityStatus, SessionInfo, ToolAvailability } from "../types";
 
@@ -122,6 +123,8 @@ function KanbanProjectCard({
   onOpenProject,
   defaultLauncher,
   toolAvailability,
+  openMenu,
+  onToggleMenu,
 }: {
   projectName: string;
   projectKey: string;
@@ -132,9 +135,10 @@ function KanbanProjectCard({
   onOpenProject: (key: string) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
+  openMenu: { sessionId: string; rect: DOMRect } | null;
+  onToggleMenu: (sessionId: string, rect: DOMRect) => void;
 }) {
   const { t } = useI18n();
-  const [showLauncherFor, setShowLauncherFor] = useState<string | null>(null);
 
   const providers = [...new Set(sessions.map((s) => s.provider))];
   const lastUpdated = sessions
@@ -196,44 +200,52 @@ function KanbanProjectCard({
                 >
                   ▶
                 </button>
-                <div style={{ position: "relative" }}>
-                  <button
-                    type="button"
-                    className="kanban-action-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowLauncherFor(showLauncherFor === session.id ? null : session.id);
+                <button
+                  type="button"
+                  className="kanban-action-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleMenu(session.id, e.currentTarget.getBoundingClientRect());
+                  }}
+                  title={t("session.actions.chooseTool")}
+                >
+                  ⋯
+                </button>
+                {openMenu?.sessionId === session.id ? createPortal(
+                  <div
+                    data-launcher-menu="true"
+                    className="kanban-launcher-menu"
+                    style={{
+                      position: "fixed",
+                      top: openMenu.rect.bottom + 2,
+                      left: openMenu.rect.left,
+                      zIndex: 9999,
                     }}
-                    title={t("session.actions.chooseTool")}
                   >
-                    ⋯
-                  </button>
-                  {showLauncherFor === session.id ? (
-                    <div className="kanban-launcher-menu">
-                      {LAUNCHER_OPTIONS.map((opt) => {
-                        const available = isToolAvailable(opt);
-                        return (
-                          <button
-                            key={opt.type}
-                            type="button"
-                            className={`kanban-launcher-option${!available ? " kanban-launcher-option--disabled" : ""}${opt.type === launcher ? " kanban-launcher-option--default" : ""}`}
-                            disabled={!available}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOpenInTool(session, opt.type);
-                              setShowLauncherFor(null);
-                            }}
-                          >
-                            <span className="launcher-option-icon">{opt.icon}</span>
-                            {opt.label}
-                            {opt.type === launcher ? <span className="launcher-default-tag"> ★</span> : null}
-                            {!available ? <span className="launcher-option-unavail"> —</span> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
+                    {LAUNCHER_OPTIONS.map((opt) => {
+                      const available = isToolAvailable(opt);
+                      return (
+                        <button
+                          key={opt.type}
+                          type="button"
+                          className={`kanban-launcher-option${!available ? " kanban-launcher-option--disabled" : ""}${opt.type === launcher ? " kanban-launcher-option--default" : ""}`}
+                          disabled={!available}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenInTool(session, opt.type);
+                            onToggleMenu(session.id, e.currentTarget.getBoundingClientRect());
+                          }}
+                        >
+                          <span className="launcher-option-icon">{opt.icon}</span>
+                          {opt.label}
+                          {opt.type === launcher ? <span className="launcher-default-tag"> ★</span> : null}
+                          {!available ? <span className="launcher-option-unavail"> —</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>,
+                  document.body
+                ) : null}
                 <button
                   type="button"
                   className="kanban-action-btn"
@@ -284,12 +296,38 @@ function KanbanBoard({
   const { t } = useI18n();
   const [columnWidths, setColumnWidths] = useState<number[]>(loadColumnWidths);
   const [doneLimit, setDoneLimit] = useState(DONE_INITIAL_LIMIT);
+  const [openMenu, setOpenMenu] = useState<{ sessionId: string; rect: DOMRect } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const widthsRef = useRef(columnWidths);
   const dragRef = useRef<{ colIndex: number; startX: number; startWidths: number[] } | null>(null);
 
   useEffect(() => { widthsRef.current = columnWidths; }, [columnWidths]);
   useEffect(() => { saveColumnWidths(columnWidths); }, [columnWidths]);
+
+  const handleToggleMenu = useCallback((sessionId: string, rect: DOMRect) => {
+    setOpenMenu((prev) => prev?.sessionId === sessionId ? null : { sessionId, rect });
+  }, []);
+
+  const handleCloseMenu = useCallback(() => setOpenMenu(null), []);
+
+  // 點擊選單外部關閉
+  useEffect(() => {
+    if (!openMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest("[data-launcher-menu]")) {
+        handleCloseMenu();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openMenu, handleCloseMenu]);
+
+  // 捲動時關閉，避免選單位置偏移（用 capture 捕捉各欄內部的 overflow-y: auto 捲動）
+  useEffect(() => {
+    if (!openMenu) return;
+    document.addEventListener("scroll", handleCloseMenu, true);
+    return () => document.removeEventListener("scroll", handleCloseMenu, true);
+  }, [openMenu, handleCloseMenu]);
 
   const allSessions = groupedProjects.flatMap((p) => p.sessions);
 
@@ -381,6 +419,8 @@ function KanbanBoard({
                   onOpenProject={onOpenProject}
                   defaultLauncher={defaultLauncher}
                   toolAvailability={toolAvailability}
+                  openMenu={openMenu}
+                  onToggleMenu={handleToggleMenu}
                 />
               ))}
               {visibleBuckets.length === 0 ? (

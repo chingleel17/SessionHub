@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: 多工具啟動下拉選單
 
@@ -50,48 +50,3 @@
 - **WHEN** 工具選單已展開
 - **AND** 使用者點擊選單外部任意區域
 - **THEN** 選單 SHALL 自動關閉
-
-### Requirement: Platform-Aware 預設啟動工具
-
-系統 SHALL 依照 session 的 provider 決定啟動按鈕的預設工具，而非僅依全域設定。
-
-#### Scenario: Copilot session 預設以 Copilot CLI 開啟
-
-- **WHEN** 使用者點擊 Copilot session 的主啟動按鈕
-- **THEN** 系統預設使用 `copilot` 工具啟動（而非全域 defaultLauncher）
-
-#### Scenario: OpenCode session 預設以 OpenCode 開啟
-
-- **WHEN** 使用者點擊 OpenCode session 的主啟動按鈕
-- **THEN** 系統預設使用 `opencode` 工具啟動
-
-#### Scenario: 退回全域設定
-
-- **WHEN** session provider 無法對應特定工具，或 platform-aware 工具不可用
-- **THEN** 系統退回 `AppSettings.defaultLauncher`，再退回 `terminal`
-
-#### Scenario: 全域設定作為覆蓋
-
-- **WHEN** 使用者在設定頁明確設定「預設啟動工具」
-- **THEN** 該設定覆蓋 platform-aware 邏輯，所有 session 均使用此工具
-
-#### Scenario: 使用預設工具啟動
-
-- **WHEN** 使用者點擊 SessionCard 的主啟動按鈕（非展開下拉）
-- **THEN** 系統以 AppSettings.defaultLauncher 設定的工具啟動
-- **AND** 若未設定 defaultLauncher，則預設使用 Terminal
-
-### Requirement: 設定頁預設啟動工具選項
-
-系統 SHALL 在設定頁提供「預設啟動工具」選項，讓使用者選擇點擊啟動按鈕時的預設行為。
-
-#### Scenario: 設定預設工具
-
-- **WHEN** 使用者在設定頁選擇預設啟動工具（Terminal / OpenCode / Copilot CLI / Gemini CLI / File Explorer）
-- **THEN** 系統將選擇儲存至 AppSettings.defaultLauncher
-- **AND** SessionCard 主啟動按鈕的 icon 更新為對應工具的 icon
-
-#### Scenario: 設定儲存並生效
-
-- **WHEN** 使用者儲存設定
-- **THEN** 所有 SessionCard 立即反映新的預設啟動工具

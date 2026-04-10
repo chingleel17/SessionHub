@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
 import type { IdeLauncherType, SessionActivityStatus, SessionInfo, SessionStats, ToolAvailability } from "../types";
 import { formatDateTime } from "../utils/formatDate";
@@ -42,6 +43,8 @@ type Props = {
   onFocusTerminal: (session: SessionInfo) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
+  isLauncherOpen: boolean;
+  onToggleLauncher: () => void;
 };
 
 function getSessionTitle(session: SessionInfo) {
@@ -76,10 +79,35 @@ export function SessionCard({
   onFocusTerminal,
   defaultLauncher,
   toolAvailability,
+  isLauncherOpen,
+  onToggleLauncher,
 }: Props) {
   const { t, locale } = useI18n();
   const [showStats, setShowStats] = useState(false);
-  const [showLauncher, setShowLauncher] = useState(false);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  // 選單開啟時計算位置；關閉時清除
+  useEffect(() => {
+    if (isLauncherOpen && menuBtnRef.current) {
+      const rect = menuBtnRef.current.getBoundingClientRect();
+      setMenuPos({ top: rect.bottom + 2, left: rect.left });
+    } else {
+      setMenuPos(null);
+    }
+  }, [isLauncherOpen]);
+
+  // click-outside 自動關閉
+  useEffect(() => {
+    if (!isLauncherOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest("[data-launcher-menu]")) {
+        onToggleLauncher();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [isLauncherOpen, onToggleLauncher]);
 
   const activityStatusCls = activityStatus
     ? `activity-badge activity-badge--${activityStatus.status}`
@@ -155,16 +183,26 @@ export function SessionCard({
         </button>
         <div className="launcher-dropdown">
           <button
+            ref={menuBtnRef}
             type="button"
             className="icon-button"
             title={t("session.actions.chooseTool")}
             aria-label={t("session.actions.chooseTool")}
-            onClick={() => setShowLauncher((v) => !v)}
+            onClick={() => onToggleLauncher()}
           >
             ⋯
           </button>
-          {showLauncher ? (
-            <div className="launcher-menu">
+          {isLauncherOpen && menuPos ? createPortal(
+            <div
+              data-launcher-menu="true"
+              className="launcher-menu"
+              style={{
+                position: "fixed",
+                top: menuPos.top,
+                left: menuPos.left,
+                zIndex: 9999,
+              }}
+            >
               {LAUNCHER_OPTIONS.map((opt) => {
                 const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
                 return (
@@ -173,7 +211,7 @@ export function SessionCard({
                     type="button"
                     className={`launcher-menu-item${defaultLauncher === opt.type ? " launcher-menu-item--default" : ""}${!available ? " launcher-menu-item--disabled" : ""}`}
                     disabled={!available}
-                    onClick={() => { onOpenInTool(session, opt.type); setShowLauncher(false); }}
+                    onClick={() => { onOpenInTool(session, opt.type); onToggleLauncher(); }}
                   >
                     <span className="launcher-option-icon">{opt.icon}</span>
                     {opt.label}
@@ -181,7 +219,8 @@ export function SessionCard({
                   </button>
                 );
               })}
-            </div>
+            </div>,
+            document.body
           ) : null}
         </div>
         <button

@@ -2363,8 +2363,7 @@ textarea {
 }
 .launcher-option-unavail { font-size: 11px; color: var(--color-text-muted, #9ca3af); }
 
-/* Fix kanban launcher menu to position relative to its wrapper */
-.kanban-launcher-menu { top: calc(100% + 2px); left: 0; }
+/* (kanban-launcher-menu position is set via inline style from portal) */
 
 /* ── Kanban column resizer ────────────────────── */
 .kanban-column-resizer {

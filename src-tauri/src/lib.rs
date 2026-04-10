@@ -15,6 +15,9 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -1968,6 +1971,20 @@ fn open_db_connection() -> Result<Connection, String> {
     Connection::open(db_path).map_err(|error| format!("failed to open metadata db: {error}"))
 }
 
+
+/// 全域旗標：DB schema 是否已初始化過（`init_db` 只需執行一次）
+static DB_SCHEMA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// 開啟 DB 連線，並在第一次呼叫時執行 `init_db` 初始化 schema。
+/// 後續呼叫直接回傳連線，跳過重複的 `CREATE TABLE IF NOT EXISTS`。
+fn open_db_connection_and_init() -> Result<Connection, String> {
+    let conn = open_db_connection()?;
+    if !DB_SCHEMA_INITIALIZED.load(Ordering::Acquire) {
+        init_db(&conn)?;
+        DB_SCHEMA_INITIALIZED.store(true, Ordering::Release);
+    }
+    Ok(conn)
+}
 fn create_sessions_watcher(
     app: &tauri::AppHandle,
     root: &Path,
@@ -3507,8 +3524,11 @@ fn scan_opencode_incremental_internal(
 
 fn detect_terminal_path() -> Result<Option<String>, String> {
     for terminal_name in ["pwsh", "powershell"] {
-        let output = Command::new("where")
-            .arg(terminal_name)
+        let mut cmd = Command::new("where");
+        cmd.arg(terminal_name);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let output = cmd
             .output()
             .map_err(|error| format!("failed to execute where command: {error}"))?;
 
@@ -3528,8 +3548,11 @@ fn detect_terminal_path() -> Result<Option<String>, String> {
 }
 
 fn detect_vscode_path() -> Result<Option<String>, String> {
-    let output = Command::new("where")
-        .arg("code")
+    let mut cmd = Command::new("where");
+    cmd.arg("code");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd
         .output()
         .map_err(|error| format!("failed to execute where command: {error}"))?;
 
@@ -3825,8 +3848,7 @@ fn get_sessions_internal(
     let show_archived = show_archived.unwrap_or(false);
     let force = force_full.unwrap_or(false);
 
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
+    let connection = open_db_connection_and_init()?;
 
     let mut all_sessions: Vec<SessionInfo> = Vec::new();
 
@@ -5123,13 +5145,13 @@ pub struct ToolAvailability {
 }
 
 fn which_exists(cmd: &str) -> bool {
-    std::process::Command::new("where")
-        .arg(cmd)
+    let mut c = std::process::Command::new("where");
+    c.arg(cmd)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c.status().map(|s| s.success()).unwrap_or(false)
 }
 
 fn check_tool_availability_internal() -> ToolAvailability {
@@ -5155,6 +5177,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
+            open_db_connection_and_init()
+                .map_err(|e| tauri::Error::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(
                 app.handle(),

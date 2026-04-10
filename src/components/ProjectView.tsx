@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type {
   IdeLauncherType,
@@ -159,6 +159,23 @@ export function ProjectView({
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
+  const [openLauncherSessionId, setOpenLauncherSessionId] = useState<string | null>(null);
+
+  const handleToggleLauncher = useCallback((sessionId: string) => {
+    setOpenLauncherSessionId((prev) => prev === sessionId ? null : sessionId);
+  }, []);
+
+  // 點擊選單外部關閉
+  useEffect(() => {
+    if (!openLauncherSessionId) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest("[data-launcher-menu]")) {
+        setOpenLauncherSessionId(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openLauncherSessionId]);
 
   const setActiveSubTab = (next: string) => {
     onSubTabStateChange({ openPlanKeys, activeSubTab: next });
@@ -445,6 +462,8 @@ export function ProjectView({
                   onFocusTerminal={onFocusTerminal}
                   defaultLauncher={defaultLauncher}
                   toolAvailability={toolAvailability}
+                  isLauncherOpen={openLauncherSessionId === session.id}
+                  onToggleLauncher={() => handleToggleLauncher(session.id)}
                 />
               ))
             )}
