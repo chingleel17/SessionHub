@@ -189,7 +189,16 @@ struct SessionMeta {
     tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ModelMetricsEntry {
+    requests_count: f64,
+    requests_cost: f64,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct SessionStats {
     output_tokens: u64,
@@ -200,6 +209,7 @@ struct SessionStats {
     models_used: Vec<String>,
     reasoning_count: u32,
     tool_breakdown: BTreeMap<String, u32>,
+    model_metrics: BTreeMap<String, ModelMetricsEntry>,
     is_live: bool,
 }
 
@@ -214,6 +224,7 @@ impl Default for SessionStats {
             models_used: Vec::new(),
             reasoning_count: 0,
             tool_breakdown: BTreeMap::new(),
+            model_metrics: BTreeMap::new(),
             is_live: false,
         }
     }
@@ -260,6 +271,40 @@ struct AssistantMessageData {
     output_tokens: Option<u64>,
     #[serde(default)]
     reasoning_opaque: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionShutdownRequestData {
+    #[serde(default)]
+    count: Option<f64>,
+    #[serde(default)]
+    cost: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionShutdownUsageData {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionShutdownModelMetric {
+    #[serde(default)]
+    requests: Option<SessionShutdownRequestData>,
+    #[serde(default)]
+    usage: Option<SessionShutdownUsageData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionShutdownData {
+    #[serde(default)]
+    model_metrics: BTreeMap<String, SessionShutdownModelMetric>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2420,7 +2465,8 @@ fn init_db(connection: &Connection) -> Result<(), String> {
                 duration_minutes INTEGER NOT NULL,
                 models_used TEXT NOT NULL,
                 reasoning_count INTEGER NOT NULL,
-                tool_breakdown TEXT NOT NULL
+                tool_breakdown TEXT NOT NULL,
+                model_metrics TEXT NOT NULL DEFAULT '{}'
             )
             ",
             [],
@@ -2487,6 +2533,17 @@ fn init_db(connection: &Connection) -> Result<(), String> {
         }
     }
 
+    // Migration: 新增 model_metrics 欄位（舊資料庫相容）
+    if let Err(error) = connection.execute(
+        "ALTER TABLE session_stats ADD COLUMN model_metrics TEXT NOT NULL DEFAULT '{}'",
+        [],
+    ) {
+        let error_message = error.to_string();
+        if !error_message.contains("duplicate column name") {
+            eprintln!("Warning: failed to add model_metrics column: {error}");
+        }
+    }
+
     if let Err(error) = migrate_legacy_session_cache(connection) {
         eprintln!("Warning: failed to migrate legacy session cache: {error}");
     }
@@ -2528,7 +2585,8 @@ fn get_session_stats_cache(
         .prepare(
             "
             SELECT events_mtime, output_tokens, interaction_count, tool_call_count,
-                   duration_minutes, models_used, reasoning_count, tool_breakdown, input_tokens
+                     duration_minutes, models_used, reasoning_count, tool_breakdown, input_tokens,
+                     model_metrics
             FROM session_stats
             WHERE session_id = ?1
             ",
@@ -2560,6 +2618,11 @@ fn get_session_stats_cache(
                 &tool_breakdown_json,
             )
             .map_err(|error| format!("failed to deserialize cached tool_breakdown: {error}"))?;
+            let model_metrics_json: String = row.get(9).unwrap_or_else(|_| "{}".to_string());
+            let model_metrics = serde_json::from_str::<BTreeMap<String, ModelMetricsEntry>>(
+                &model_metrics_json,
+            )
+            .unwrap_or_default();
 
             Ok(Some((
                 events_mtime,
@@ -2584,6 +2647,7 @@ fn get_session_stats_cache(
                         format!("failed to read reasoning_count column: {error}")
                     })?,
                     tool_breakdown,
+                    model_metrics,
                     is_live: false,
                 },
             )))
@@ -2602,15 +2666,18 @@ fn upsert_session_stats_cache(
         .map_err(|error| format!("failed to serialize models_used: {error}"))?;
     let tool_breakdown_json = serde_json::to_string(&stats.tool_breakdown)
         .map_err(|error| format!("failed to serialize tool_breakdown: {error}"))?;
+    let model_metrics_json = serde_json::to_string(&stats.model_metrics)
+        .map_err(|error| format!("failed to serialize model_metrics: {error}"))?;
 
     connection
         .execute(
             "
             INSERT INTO session_stats (
                 session_id, events_mtime, output_tokens, input_tokens, interaction_count,
-                tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown
+                tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown,
+                model_metrics
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(session_id) DO UPDATE SET
                 events_mtime = excluded.events_mtime,
                 output_tokens = excluded.output_tokens,
@@ -2620,7 +2687,8 @@ fn upsert_session_stats_cache(
                 duration_minutes = excluded.duration_minutes,
                 models_used = excluded.models_used,
                 reasoning_count = excluded.reasoning_count,
-                tool_breakdown = excluded.tool_breakdown
+                tool_breakdown = excluded.tool_breakdown,
+                model_metrics = excluded.model_metrics
             ",
             params![
                 session_id,
@@ -2633,6 +2701,7 @@ fn upsert_session_stats_cache(
                 models_used_json,
                 stats.reasoning_count,
                 tool_breakdown_json,
+                model_metrics_json,
             ],
         )
         .map_err(|error| format!("failed to upsert session stats cache: {error}"))?;
@@ -2773,6 +2842,27 @@ fn parse_session_stats_internal(session_dir: &Path) -> Result<SessionStats, Stri
                     }
                 }
             }
+            "session.shutdown" => {
+                if let Ok(data) = serde_json::from_value::<SessionShutdownData>(event.data) {
+                    for (model, metric) in data.model_metrics {
+                        if model.trim().is_empty() {
+                            continue;
+                        }
+                        models_used.insert(model.clone());
+                        let requests = metric.requests;
+                        let usage = metric.usage;
+                        stats.model_metrics.insert(
+                            model,
+                            ModelMetricsEntry {
+                                requests_count: requests.as_ref().and_then(|v| v.count).unwrap_or(0.0),
+                                requests_cost: requests.as_ref().and_then(|v| v.cost).unwrap_or(0.0),
+                                input_tokens: usage.as_ref().and_then(|v| v.input_tokens).unwrap_or(0),
+                                output_tokens: usage.as_ref().and_then(|v| v.output_tokens).unwrap_or(0),
+                            },
+                        );
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -2830,7 +2920,7 @@ struct OpencodeMessageTime {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpencodeAssistantMeta {
-    #[serde(default)]
+    #[serde(default, alias = "modelID")]
     model_id: Option<String>,
     #[serde(default)]
     tokens: Option<OpencodeTokens>,
@@ -2852,7 +2942,7 @@ struct OpencodeMessageMetadata {
 #[serde(rename_all = "camelCase")]
 struct OpencodeMessage {
     id: String,
-    #[serde(default)]
+    #[serde(default, alias = "sessionID")]
     session_id: Option<String>,
     #[serde(default)]
     role: String,

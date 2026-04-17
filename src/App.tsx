@@ -705,9 +705,13 @@ function App() {
         if (!stats) return acc;
         acc.totalOutputTokens += stats.outputTokens;
         acc.totalInteractions += stats.interactionCount;
+        acc.totalCost += Object.values(stats.modelMetrics ?? {}).reduce(
+          (sum, metric) => sum + metric.requestsCost,
+          0,
+        );
         return acc;
       },
-      { totalOutputTokens: 0, totalInteractions: 0 },
+      { totalOutputTokens: 0, totalInteractions: 0, totalCost: 0 },
     );
   }, [dashboardPeriod, sessionsQuery.data, sessionStatsMap]);
 
@@ -1056,6 +1060,7 @@ function App() {
               onPeriodChange={setDashboardPeriod}
               filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
               filteredTotalInteractions={filteredDashboardTotals.totalInteractions}
+              filteredTotalCost={filteredDashboardTotals.totalCost}
               onOpenProject={openProjectTab}
               onOpenRecentSession={(session) =>
                 openProjectTab(getProjectKey(session, uncategorizedLabel))

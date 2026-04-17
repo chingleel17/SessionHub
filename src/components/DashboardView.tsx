@@ -14,6 +14,7 @@ type Props = {
   onPeriodChange: (period: "week" | "month") => void;
   filteredTotalOutputTokens: number;
   filteredTotalInteractions: number;
+  filteredTotalCost: number;
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
   activityStatusMap: Map<string, SessionActivityStatus>;
@@ -466,6 +467,7 @@ export function DashboardView({
   onPeriodChange,
   filteredTotalOutputTokens,
   filteredTotalInteractions,
+  filteredTotalCost,
   onOpenProject,
   onOpenRecentSession,
   activityStatusMap,
@@ -522,6 +524,11 @@ export function DashboardView({
           <span className="stat-card-icon">💬</span>
           <strong className="stat-card-value">{loading ? "…" : formatCompactNumber(filteredTotalInteractions)}</strong>
           <span className="stat-card-label">{t("dashboard.stats.totalInteractions")}</span>
+        </div>
+        <div className="stat-card stat-card--tokens">
+          <span className="stat-card-icon">🧾</span>
+          <strong className="stat-card-value">{loading ? "…" : filteredTotalCost.toFixed(2).replace(/\.00$/, "")}</strong>
+          <span className="stat-card-label">{t("dashboard.stats.totalCost")}</span>
         </div>
 
         {/* Toggles on the far right, stacked vertically */}

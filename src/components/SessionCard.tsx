@@ -317,7 +317,7 @@ export function SessionCard({
       </div>
 
       <SessionStatsBadge stats={stats} isLoading={statsLoading} />
-      {showStats && stats ? <SessionStatsPanel stats={stats} /> : null}
+      {showStats && stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
     </article>
   );
 }

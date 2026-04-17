@@ -3,6 +3,7 @@ import type { SessionStats } from "../types";
 
 type Props = {
   stats: SessionStats;
+  provider: string;
 };
 
 function formatCompactNumber(value: number) {
@@ -11,9 +12,15 @@ function formatCompactNumber(value: number) {
   return String(value);
 }
 
-export function SessionStatsPanel({ stats }: Props) {
+function formatCost(value: number) {
+  return value.toFixed(2).replace(/\.00$/, "");
+}
+
+export function SessionStatsPanel({ stats, provider }: Props) {
   const { t } = useI18n();
   const toolEntries = Object.entries(stats.toolBreakdown).sort((a, b) => b[1] - a[1]);
+  const modelMetricEntries = Object.entries(stats.modelMetrics ?? {}).sort((a, b) => b[1].requestsCost - a[1].requestsCost);
+  const totalModelCost = modelMetricEntries.reduce((sum, [, metric]) => sum + metric.requestsCost, 0);
 
   return (
     <section className="stats-panel">
@@ -76,6 +83,22 @@ export function SessionStatsPanel({ stats }: Props) {
               <span className="stats-panel-text">{t("stats.noData")}</span>
             )}
           </div>
+          {provider === "copilot" && modelMetricEntries.length > 0 ? (
+            <div className="stats-panel-section">
+              <strong>{t("stats.detail.modelCost")}</strong>
+              <div className="stats-tool-breakdown-scroll">
+                {modelMetricEntries.map(([modelName, metric]) => (
+                  <div key={modelName} className="stats-tool-row">
+                    <span>{modelName}</span>
+                    <strong>{formatCost(metric.requestsCost)}</strong>
+                  </div>
+                ))}
+              </div>
+              <span className="stats-panel-text">
+                {t("stats.detail.totalCost")} {formatCost(totalModelCost)}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
     </section>

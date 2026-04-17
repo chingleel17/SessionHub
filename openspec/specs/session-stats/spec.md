@@ -2,17 +2,17 @@
 
 ### Requirement: 解析 events.jsonl 取得 Copilot session 統計
 
-系統 SHALL 解析 Copilot session 目錄下的 `events.jsonl`，計算使用統計資料。
+系統 SHALL 解析 Copilot session 目錄下的 `events.jsonl`，計算使用統計資料，包含 `modelMetrics`（各 model 的計費點數與 token 用量）。
 
 #### Scenario: 成功解析
 
 - **WHEN** `get_session_stats` 被呼叫且 session 目錄含有 `events.jsonl`
-- **THEN** 回傳 SessionStats 包含：outputTokens、interactionCount、toolCallCount、durationMinutes、modelsUsed、reasoningCount、toolBreakdown
+- **THEN** 回傳 SessionStats 包含：outputTokens、interactionCount、toolCallCount、durationMinutes、modelsUsed、reasoningCount、toolBreakdown、**modelMetrics**
 
 #### Scenario: 缺少 events.jsonl
 
 - **WHEN** session 目錄無 `events.jsonl`
-- **THEN** 回傳所有數字欄位為 0 的 SessionStats
+- **THEN** 回傳所有數字欄位為 0、modelMetrics 為空物件的 SessionStats
 
 #### Scenario: 格式錯誤行
 
@@ -45,3 +45,26 @@
 
 - **WHEN** session 非 live 且 events_mtime 未變更
 - **THEN** 直接回傳快取統計，不重新解析
+
+### Requirement: modelMetrics 欄位包含於 SessionStats 型別
+
+`SessionStats` 型別 SHALL 新增 `modelMetrics: Record<string, ModelMetricsEntry>` 欄位，其中 `ModelMetricsEntry` 包含 `requestsCount: number`、`requestsCost: number`（支援小數）、`inputTokens: number`、`outputTokens: number`。
+
+#### Scenario: 前端接收含 modelMetrics 的 SessionStats
+
+- **WHEN** 前端呼叫 `get_session_stats` 並收到回傳值
+- **THEN** `stats.modelMetrics` SHALL 可正確索引各 model key 並讀取 requestsCost
+
+### Requirement: UI 顯示 Copilot 計費點數
+
+`SessionStatsPanel` 元件 SHALL 在 Copilot session 的統計區塊中顯示 `modelMetrics` 的各 model 計費點數（requestsCost），並顯示所有 model 的點數總和。
+
+#### Scenario: session 有計費資料
+
+- **WHEN** `SessionStats.modelMetrics` 非空且 provider 為 `copilot`
+- **THEN** UI SHALL 顯示各 model 的 requestsCost 及總計點數
+
+#### Scenario: session 無計費資料
+
+- **WHEN** `SessionStats.modelMetrics` 為空物件
+- **THEN** 不顯示計費區塊（或顯示 `-`）

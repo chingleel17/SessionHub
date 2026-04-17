@@ -76,7 +76,15 @@ export type SessionStats = {
     modelsUsed: string[];
     reasoningCount: number;
     toolBreakdown: Record<string, number>;
+    modelMetrics: Record<string, ModelMetricsEntry>;
     isLive: boolean;
+};
+
+export type ModelMetricsEntry = {
+    requestsCount: number;
+    requestsCost: number;
+    inputTokens: number;
+    outputTokens: number;
 };
 
 export type SettingsSection = "general" | "language" | "icon-style";
