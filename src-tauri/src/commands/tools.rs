@@ -44,7 +44,7 @@ pub(crate) fn open_in_tool_internal(
     tool_type: &str,
     cwd: &str,
     terminal_path: Option<&str>,
-    session_id: Option<&str>,
+    _session_id: Option<&str>,
 ) -> Result<(), String> {
     match tool_type {
         "terminal" => {

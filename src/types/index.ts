@@ -171,3 +171,13 @@ export type OpenSpecData = {
     archivedChanges: OpenSpecChange[];
     specs: OpenSpecSpec[];
 };
+
+export type TreeNode = {
+    id: string;
+    label: string;
+    badge?: string;
+    children?: TreeNode[];
+    defaultOpen?: boolean;
+    filePath?: string;
+    filePathType?: "absolute" | "openspec";
+};

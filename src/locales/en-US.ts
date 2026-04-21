@@ -262,4 +262,8 @@ export const enUsMessages: Record<MessageKey, string> = {
   "plansSpecs.openspec.specs": "Specs",
   "plansSpecs.openspec.noData": "No openspec data found in this project",
   "plansSpecs.loading": "Loading...",
+  "plansSpecs.explorer.selectPrompt": "Select a file from the explorer to view its content",
+  "plansSpecs.explorer.collapsePanel": "Collapse panel",
+  "plansSpecs.explorer.expandPanel": "Expand panel",
+  "plansSpecs.explorer.title": "Explorer",
 };

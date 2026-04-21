@@ -16,13 +16,7 @@ use tauri::Manager;
 pub(crate) use types::*;
 pub(crate) use settings::*;
 pub(crate) use db::*;
-pub(crate) use provider::*;
-pub(crate) use sessions::*;
-pub(crate) use stats::*;
 pub(crate) use watcher::*;
-pub(crate) use activity::*;
-pub(crate) use sisyphus::*;
-pub(crate) use openspec_scan::*;
 pub(crate) use commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

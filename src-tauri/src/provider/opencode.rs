@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 
 use crate::db::ensure_parent_dir;
 use crate::settings::resolve_opencode_integration_path;

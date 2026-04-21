@@ -256,6 +256,10 @@ export const zhTwMessages = {
   "plansSpecs.openspec.specs": "Specs",
   "plansSpecs.openspec.noData": "此專案尚無 openspec 資料",
   "plansSpecs.loading": "載入中...",
+  "plansSpecs.explorer.selectPrompt": "請從左側選取文件查看內容",
+  "plansSpecs.explorer.collapsePanel": "收折面板",
+  "plansSpecs.explorer.expandPanel": "展開面板",
+  "plansSpecs.explorer.title": "Explorer",
 } as const;
 
 export type MessageKey = keyof typeof zhTwMessages;

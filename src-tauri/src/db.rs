@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{fs, time};
+use std::fs;
 
 use rusqlite::{params, Connection};
 
@@ -482,138 +482,6 @@ pub(crate) fn persist_provider_cache(
         .unwrap_or(0);
     save_scan_state_to_db(connection, provider, last_full_scan_at, cache.last_cursor)?;
     save_session_mtimes_to_db(connection, provider, &cache.session_mtimes)?;
-
-    Ok(())
-}
-
-pub(crate) fn get_session_stats_cache(
-    connection: &Connection,
-    session_id: &str,
-) -> Result<Option<(i64, SessionStats)>, String> {
-    let mut statement = connection
-        .prepare(
-            "
-            SELECT events_mtime, output_tokens, interaction_count, tool_call_count,
-                     duration_minutes, models_used, reasoning_count, tool_breakdown, input_tokens,
-                     model_metrics
-            FROM session_stats
-            WHERE session_id = ?1
-            ",
-        )
-        .map_err(|error| format!("failed to prepare session stats cache query: {error}"))?;
-
-    let mut rows = statement
-        .query(params![session_id])
-        .map_err(|error| format!("failed to query session stats cache: {error}"))?;
-
-    match rows
-        .next()
-        .map_err(|error| format!("failed to read session stats cache row: {error}"))?
-    {
-        Some(row) => {
-            let events_mtime: i64 = row
-                .get(0)
-                .map_err(|error| format!("failed to read events_mtime column: {error}"))?;
-            let models_used_json: String = row
-                .get(5)
-                .map_err(|error| format!("failed to read models_used column: {error}"))?;
-            let tool_breakdown_json: String = row
-                .get(7)
-                .map_err(|error| format!("failed to read tool_breakdown column: {error}"))?;
-
-            let models_used = serde_json::from_str::<Vec<String>>(&models_used_json)
-                .map_err(|error| format!("failed to deserialize cached models_used: {error}"))?;
-            let tool_breakdown = serde_json::from_str::<BTreeMap<String, u32>>(
-                &tool_breakdown_json,
-            )
-            .map_err(|error| format!("failed to deserialize cached tool_breakdown: {error}"))?;
-            let model_metrics_json: String = row.get(9).unwrap_or_else(|_| "{}".to_string());
-            let model_metrics = serde_json::from_str::<BTreeMap<String, ModelMetricsEntry>>(
-                &model_metrics_json,
-            )
-            .unwrap_or_default();
-
-            Ok(Some((
-                events_mtime,
-                SessionStats {
-                    output_tokens: row
-                        .get(1)
-                        .map_err(|error| format!("failed to read output_tokens column: {error}"))?,
-                    input_tokens: row
-                        .get(8)
-                        .map_err(|error| format!("failed to read input_tokens column: {error}"))?,
-                    interaction_count: row.get(2).map_err(|error| {
-                        format!("failed to read interaction_count column: {error}")
-                    })?,
-                    tool_call_count: row.get(3).map_err(|error| {
-                        format!("failed to read tool_call_count column: {error}")
-                    })?,
-                    duration_minutes: row.get(4).map_err(|error| {
-                        format!("failed to read duration_minutes column: {error}")
-                    })?,
-                    models_used,
-                    reasoning_count: row.get(6).map_err(|error| {
-                        format!("failed to read reasoning_count column: {error}")
-                    })?,
-                    tool_breakdown,
-                    model_metrics,
-                    is_live: false,
-                },
-            )))
-        }
-        None => Ok(None),
-    }
-}
-
-pub(crate) fn upsert_session_stats_cache(
-    connection: &Connection,
-    session_id: &str,
-    events_mtime: i64,
-    stats: &SessionStats,
-) -> Result<(), String> {
-    let models_used_json = serde_json::to_string(&stats.models_used)
-        .map_err(|error| format!("failed to serialize models_used: {error}"))?;
-    let tool_breakdown_json = serde_json::to_string(&stats.tool_breakdown)
-        .map_err(|error| format!("failed to serialize tool_breakdown: {error}"))?;
-    let model_metrics_json = serde_json::to_string(&stats.model_metrics)
-        .map_err(|error| format!("failed to serialize model_metrics: {error}"))?;
-
-    connection
-        .execute(
-            "
-            INSERT INTO session_stats (
-                session_id, events_mtime, output_tokens, input_tokens, interaction_count,
-                tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown,
-                model_metrics
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ON CONFLICT(session_id) DO UPDATE SET
-                events_mtime = excluded.events_mtime,
-                output_tokens = excluded.output_tokens,
-                input_tokens = excluded.input_tokens,
-                interaction_count = excluded.interaction_count,
-                tool_call_count = excluded.tool_call_count,
-                duration_minutes = excluded.duration_minutes,
-                models_used = excluded.models_used,
-                reasoning_count = excluded.reasoning_count,
-                tool_breakdown = excluded.tool_breakdown,
-                model_metrics = excluded.model_metrics
-            ",
-            params![
-                session_id,
-                events_mtime,
-                stats.output_tokens,
-                stats.input_tokens,
-                stats.interaction_count,
-                stats.tool_call_count,
-                stats.duration_minutes,
-                models_used_json,
-                stats.reasoning_count,
-                tool_breakdown_json,
-                model_metrics_json,
-            ],
-        )
-        .map_err(|error| format!("failed to upsert session stats cache: {error}"))?;
 
     Ok(())
 }

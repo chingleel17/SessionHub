@@ -391,7 +391,7 @@ function KanbanBoard({
   }, []);
 
   return (
-    <div ref={boardRef} className="kanban-board" style={{ display: "flex", gap: 0, padding: "16px", overflow: "hidden" }}>
+    <div ref={boardRef} className="kanban-board" style={{ overflow: "hidden" }}>
       {columns.flatMap((col, idx) => {
         const isDone = col.key === "done";
         const visibleBuckets = isDone ? col.buckets.slice(0, doneLimit) : col.buckets;

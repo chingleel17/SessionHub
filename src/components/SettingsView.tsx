@@ -121,7 +121,7 @@ export function SettingsView({
   onEditProviderPath,
   pendingProviderAction,
 }: Props) {
-  const { t, locale } = useI18n();
+  const { t, locale, setLocale } = useI18n();
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
   const providerLabels = {
     copilot: t("settings.fields.providerCopilot"),
@@ -279,6 +279,19 @@ export function SettingsView({
               <option value="gemini">Gemini</option>
               <option value="vscode">VS Code</option>
               <option value="explorer">Explorer</option>
+            </select>
+          </div>
+
+          <div className="settings-field">
+            <label htmlFor="language-select">{t("sidebar.language.label")}</label>
+            <select
+              id="language-select"
+              className="settings-select"
+              value={locale}
+              onChange={(e) => setLocale(e.currentTarget.value as "zh-TW" | "en-US")}
+            >
+              <option value="zh-TW">{t("sidebar.language.zhTW")}</option>
+              <option value="en-US">{t("sidebar.language.enUS")}</option>
             </select>
           </div>
 

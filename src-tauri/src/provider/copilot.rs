@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::db::ensure_parent_dir;
 use crate::settings::resolve_copilot_root;
