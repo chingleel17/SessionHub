@@ -50,6 +50,10 @@ pub(crate) fn default_enabled_providers() -> Vec<String> {
     vec!["copilot".to_string(), "opencode".to_string()]
 }
 
+pub(crate) fn default_notification_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionActivityStatus {
@@ -78,6 +82,10 @@ pub(crate) struct AppSettings {
     pub(crate) provider_integrations: Vec<ProviderIntegrationStatus>,
     #[serde(default)]
     pub(crate) default_launcher: Option<String>,
+    #[serde(default = "default_notification_enabled")]
+    pub(crate) enable_intervention_notification: bool,
+    #[serde(default)]
+    pub(crate) enable_session_end_notification: bool,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 2;

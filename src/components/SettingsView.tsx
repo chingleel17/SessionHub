@@ -263,6 +263,34 @@ export function SettingsView({
             <span>{t("settings.fields.showArchived")}</span>
           </label>
 
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.enableInterventionNotification ?? true}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, enableInterventionNotification: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.enableInterventionNotification")}
+              <small className="settings-field-desc">{t("settings.fields.enableInterventionNotificationDesc")}</small>
+            </span>
+          </label>
+
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.enableSessionEndNotification ?? false}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, enableSessionEndNotification: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.enableSessionEndNotification")}
+              <small className="settings-field-desc">{t("settings.fields.enableSessionEndNotificationDesc")}</small>
+            </span>
+          </label>
+
           <div className="settings-field">
             <label htmlFor="default-launcher-select">{t("settings.fields.defaultLauncher")}</label>
             <select
@@ -309,7 +337,7 @@ export function SettingsView({
         </div>
       </article>
 
-      <article className="info-card" style={{ gridColumn: "1 / -1" }}>
+      <article className="info-card">
         <div className="section-heading">
           <h3>{t("settings.integrations.title")}</h3>
           <span>{t("settings.integrations.subtitle")}</span>

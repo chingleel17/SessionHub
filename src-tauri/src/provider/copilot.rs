@@ -34,12 +34,12 @@ fn render_copilot_hook_powershell(bridge_path: &Path) -> String {
             "$error = if ($event.reason -eq 'error') {{ 'copilot session ended with error' }} else {{ $null }}; ",
             "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = 'session.ended'; timestamp = $timestamp; sessionId = $null; cwd = $cwd; sourcePath = $null; title = $null; error = $error }}; ",
             "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
-            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false));"
+            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false)); ",
         ),
         version = PROVIDER_INTEGRATION_VERSION,
         provider = powershell_single_quoted(COPILOT_PROVIDER),
         bridge_parent = bridge_parent_literal,
-        bridge_path = bridge_path_literal
+        bridge_path = bridge_path_literal,
     )
 }
 

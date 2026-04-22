@@ -25,6 +25,7 @@ pub fn run() {
         .manage(WatcherState::default())
         .manage(ScanCache::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
@@ -72,7 +73,8 @@ pub fn run() {
             open_in_tool,
             focus_terminal_window,
             read_openspec_file,
-            check_tool_availability
+            check_tool_availability,
+            send_intervention_notification
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

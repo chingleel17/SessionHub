@@ -667,9 +667,9 @@ textarea {
   grid-column: 2;
 }
 
-.settings-layout > :only-child {
+/* .settings-layout > :only-child {
   grid-column: 1 / -1;
-}
+} */
 
 .roadmap-grid {
   display: grid;
@@ -763,13 +763,22 @@ textarea {
 
 .checkbox-group {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
 }
 
 .checkbox-group input {
   width: 18px;
   min-height: 18px;
+  margin-top: 2px;
+}
+
+.settings-field-desc {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary, #888);
+  margin-top: 2px;
+  font-weight: normal;
 }
 
 .settings-form {
@@ -851,17 +860,16 @@ textarea {
 }
 
 .provider-integration-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .provider-integration-meta {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
-  align-content: start;
 }
 
 .provider-path-summary {
@@ -1586,8 +1594,7 @@ textarea {
   .toolbar-card,
   .session-meta-grid,
   .plan-editor-layout,
-  .field-with-action,
-  .provider-integration-grid {
+  .field-with-action {
     grid-template-columns: 1fr;
   }
 

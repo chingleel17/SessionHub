@@ -108,6 +108,10 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.fields.enabledProviders": "Enabled platforms",
   "settings.fields.providerCopilot": "GitHub Copilot CLI",
   "settings.fields.providerOpencode": "OpenCode",
+  "settings.fields.enableInterventionNotification": "AI intervention notification",
+  "settings.fields.enableInterventionNotificationDesc": "Send a Windows notification when an AI Agent finishes a response and is waiting for your input, selection, or authorization",
+  "settings.fields.enableSessionEndNotification": "Session end notification",
+  "settings.fields.enableSessionEndNotificationDesc": "Send a Windows notification when a Copilot session ends normally",
   "settings.integrations.title": "Provider integration",
   "settings.integrations.subtitle":
     "Manage the Copilot hook and OpenCode plugin to verify bridge-based event integration.",

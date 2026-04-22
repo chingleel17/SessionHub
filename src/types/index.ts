@@ -25,6 +25,8 @@ export type AppSettings = {
     enabledProviders: string[];
     providerIntegrations?: ProviderIntegrationStatus[];
     defaultLauncher?: string | null;
+    enableInterventionNotification?: boolean;
+    enableSessionEndNotification?: boolean;
 };
 
 export type SessionActivityStatus = {

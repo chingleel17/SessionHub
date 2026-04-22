@@ -188,6 +188,9 @@ function App() {
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
   const hasShownOutdatedToast = useRef(false);
+  const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
+  const lastInterventionSessionRef = useRef<string | null>(null);
+  const lastNotificationSessionRef = useRef<{ id: string; type: string } | null>(null);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
@@ -196,6 +199,8 @@ function App() {
     showArchived: false,
     enabledProviders: ["copilot", "opencode"],
     providerIntegrations: [],
+    enableInterventionNotification: true,
+    enableSessionEndNotification: false,
   });
 
   const settingsQuery = useQuery({
@@ -250,6 +255,8 @@ function App() {
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
+        enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
+        enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
@@ -626,7 +633,7 @@ function App() {
         opencodeRoot: settingsQuery.data?.opencodeRoot || null,
       });
     },
-    refetchInterval: 30_000,
+   refetchInterval: 30_000,
     staleTime: 25_000,
   });
 
@@ -644,6 +651,58 @@ function App() {
     }
     return m;
   }, [activityStatusQuery.data]);
+
+  // 偵測 session 狀態轉換，發送 Windows 通知
+  useEffect(() => {
+    const currentStatuses = activityStatusQuery.data ?? [];
+    const enableWaiting = settingsQuery.data?.enableInterventionNotification ?? true;
+    const enableSessionEnd = settingsQuery.data?.enableSessionEndNotification ?? false;
+
+    for (const status of currentStatuses) {
+      const prev = prevActivityStatusRef.current.get(status.sessionId);
+      const session = sessionsQuery.data?.find((s) => s.id === status.sessionId);
+      const projectName = session?.cwd?.split("\\").pop() ?? session?.cwd ?? status.sessionId;
+      const summary = session?.summary ?? "";
+
+      if (status.status === "waiting" && prev !== "waiting" && enableWaiting) {
+        lastInterventionSessionRef.current = status.sessionId;
+        lastNotificationSessionRef.current = { id: status.sessionId, type: "waiting" };
+        invoke("send_intervention_notification", {
+          sessionId: status.sessionId,
+          projectName,
+          summary,
+          notificationType: "waiting",
+        }).catch((e) => console.warn("[notification] send failed:", e));
+      } else if (status.status === "done" && prev !== "done" && prev !== undefined && enableSessionEnd) {
+        lastNotificationSessionRef.current = { id: status.sessionId, type: "session_end" };
+        invoke("send_intervention_notification", {
+          sessionId: status.sessionId,
+          projectName,
+          summary,
+          notificationType: "session_end",
+        }).catch((e) => console.warn("[notification] send failed:", e));
+      }
+
+      prevActivityStatusRef.current.set(status.sessionId, status.status);
+    }
+  }, [activityStatusQuery.data, settingsQuery.data?.enableInterventionNotification, settingsQuery.data?.enableSessionEndNotification, sessionsQuery.data]);
+
+  // 通知點擊後聚焦視窗並導航至對應 session
+  useEffect(() => {
+    const unlistenPromise = listen("notification://action-performed", () => {
+      const notif = lastNotificationSessionRef.current;
+      if (!notif) return;
+      const session = sessionsQuery.data?.find((s) => s.id === notif.id);
+      if (!session) return;
+      const status = activityStatusMap.get(notif.id);
+      if (notif.type === "waiting" && status?.status !== "waiting") return;
+      const projectKey = getProjectKey(session, uncategorizedLabel);
+      setActiveView(projectKey);
+      lastNotificationSessionRef.current = null;
+      lastInterventionSessionRef.current = null;
+    });
+    return () => { unlistenPromise.then((fn) => fn()); };
+  }, [sessionsQuery.data, activityStatusMap, uncategorizedLabel]);
 
   const handleReadFileContent = async (filePath: string): Promise<string> => {
     return invoke<string>("read_plan_content", { filePath });

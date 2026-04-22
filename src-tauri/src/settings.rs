@@ -141,6 +141,8 @@ impl AppSettings {
             enabled_providers: default_enabled_providers(),
             provider_integrations: Vec::new(),
             default_launcher: None,
+            enable_intervention_notification: true,
+            enable_session_end_notification: false,
         })
     }
 }
