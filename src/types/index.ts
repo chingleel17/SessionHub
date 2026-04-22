@@ -65,6 +65,8 @@ export type ProviderIntegrationStatus = {
     status: ProviderIntegrationState;
     configPath?: string | null;
     bridgePath?: string | null;
+    /** 目前安裝的 integration 版本號，null 表示未安裝或無法讀取 */
+    installedVersion?: number | null;
     lastEventAt?: string | null;
     lastError?: string | null;
 };

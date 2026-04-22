@@ -88,7 +88,7 @@ pub(crate) struct AppSettings {
     pub(crate) enable_session_end_notification: bool,
 }
 
-pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 2;
+pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
 pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
@@ -136,6 +136,8 @@ pub(crate) struct ProviderIntegrationStatus {
     pub(crate) status: ProviderIntegrationState,
     pub(crate) config_path: Option<String>,
     pub(crate) bridge_path: Option<String>,
+    /// 目前安裝的 integration 版本號（None 表示未安裝或無法讀取）
+    pub(crate) installed_version: Option<u32>,
     pub(crate) last_event_at: Option<String>,
     pub(crate) last_error: Option<String>,
 }

@@ -115,6 +115,7 @@ export const zhTwMessages = {
   "settings.integrations.fields.bridgePath": "Bridge 檔案路徑",
   "settings.integrations.fields.lastEventAt": "最後事件時間",
   "settings.integrations.fields.lastError": "最後錯誤",
+  "settings.integrations.fields.version": "整合版本",
   "settings.integrations.values.unavailable": "不可用",
   "settings.integrations.values.noEvent": "尚未收到 bridge 事件",
   "settings.integrations.status.installed": "已安裝",

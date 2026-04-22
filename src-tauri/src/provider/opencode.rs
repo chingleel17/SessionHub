@@ -108,6 +108,7 @@ pub(crate) fn install_or_update_opencode_integration() -> ProviderIntegrationSta
                 ProviderIntegrationState::ManualRequired,
                 None,
                 diagnostics,
+                None,
                 Some(error),
             );
         }
@@ -118,6 +119,7 @@ pub(crate) fn install_or_update_opencode_integration() -> ProviderIntegrationSta
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some("failed to resolve OpenCode bridge path".to_string()),
         );
     };
@@ -158,6 +160,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
                 ProviderIntegrationState::ManualRequired,
                 None,
                 diagnostics,
+                None,
                 Some(error),
             );
         }
@@ -169,6 +172,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some(error),
         );
     }
@@ -179,6 +183,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some("failed to resolve OpenCode bridge path".to_string()),
         );
     };
@@ -189,6 +194,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
             ProviderIntegrationState::Missing,
             Some(config_path),
             diagnostics,
+            None,
             None,
         );
     }
@@ -205,6 +211,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
                 ProviderIntegrationState::Error,
                 Some(config_path),
                 diagnostics,
+                None,
                 Some(error_message),
             );
         }
@@ -218,6 +225,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
                 ProviderIntegrationState::Outdated,
                 Some(config_path),
                 diagnostics,
+                None,
                 Some("missing SessionHub integration metadata".to_string()),
             );
         }
@@ -227,17 +235,20 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
                 ProviderIntegrationState::Error,
                 Some(config_path),
                 diagnostics,
+                None,
                 Some(error),
             );
         }
     };
 
+    let installed_version = Some(metadata.integration_version);
     match validate_managed_metadata(&metadata, OPENCODE_PROVIDER, &expected_bridge_path) {
         Ok(()) => build_provider_integration_status(
             OPENCODE_PROVIDER,
             ProviderIntegrationState::Installed,
             Some(config_path),
             diagnostics,
+            installed_version,
             None,
         ),
         Err(error) => build_provider_integration_status(
@@ -245,6 +256,7 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
             ProviderIntegrationState::Outdated,
             Some(config_path),
             diagnostics,
+            installed_version,
             Some(error),
         ),
     }

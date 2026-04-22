@@ -93,7 +93,21 @@ mod tests {
     use std::ffi::OsString;
     use rusqlite::Connection;
     use crate::provider::register_provider_bridge_record;
-    use crate::stats::calculate_opencode_session_stats;
+    use crate::provider::bridge::{
+        build_opencode_watch_snapshot, resolve_copilot_integration_path,
+        should_emit_provider_refresh_at, should_emit_opencode_refresh,
+    };
+    use crate::provider::copilot::{detect_copilot_integration_status, install_or_update_copilot_integration};
+    use crate::provider::opencode::{detect_opencode_integration_status, install_or_update_opencode_integration};
+    use crate::sessions::copilot::{
+        delete_empty_sessions_internal, dir_mtime_secs, scan_copilot_incremental_internal,
+        scan_session_dir, should_full_scan,
+    };
+    use crate::sessions::get_sessions_internal;
+    use crate::sessions::opencode::{scan_opencode_incremental_internal, scan_opencode_sessions_internal};
+    use crate::stats::{calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal};
+    use crate::openspec_scan::scan_openspec_internal;
+    use crate::sisyphus::scan_sisyphus_internal;
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {
         unsafe {
@@ -1615,6 +1629,7 @@ mod tests {
             status.config_path.as_deref(),
             Some(config_path.to_string_lossy().as_ref())
         );
+        assert_eq!(status.installed_version, Some(PROVIDER_INTEGRATION_VERSION));
 
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
@@ -1659,6 +1674,10 @@ mod tests {
             .last_error
             .as_deref()
             .is_some_and(|error| error.contains("outdated")));
+        assert_eq!(
+            status.installed_version,
+            Some(PROVIDER_INTEGRATION_VERSION - 1)
+        );
 
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
@@ -1683,6 +1702,11 @@ mod tests {
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains("\"sessionHub\""));
         assert!(content.contains("\"sessionEnd\""));
+        assert!(content.contains("\"sessionStart\""));
+        assert!(content.contains("\"userPromptSubmitted\""));
+        assert!(content.contains("\"preToolUse\""));
+        assert!(content.contains("\"postToolUse\""));
+        assert!(content.contains("\"errorOccurred\""));
         assert!(content.contains("AppendAllText"));
 
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");

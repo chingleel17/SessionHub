@@ -379,6 +379,11 @@ export function SettingsView({
                       >
                         {getProviderStatusLabel(integration.status, statusLabels)}
                       </span>
+                      {integration.installedVersion != null ? (
+                        <span className="provider-version-badge">
+                          v{integration.installedVersion}
+                        </span>
+                      ) : null}
                     </div>
 
                     <div className="provider-integration-actions">
@@ -463,6 +468,13 @@ export function SettingsView({
                           : t("settings.integrations.values.noEvent")}
                       </p>
                     </div>
+
+                    {integration.installedVersion != null ? (
+                      <div className="provider-integration-meta">
+                        <span>{t("settings.integrations.fields.version")}</span>
+                        <p>v{integration.installedVersion}</p>
+                      </div>
+                    ) : null}
                   </div>
 
                   {integration.lastError ? (

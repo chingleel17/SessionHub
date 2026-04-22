@@ -15,7 +15,12 @@ fn powershell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn render_copilot_hook_powershell(bridge_path: &Path) -> String {
+fn render_copilot_hook_ps(
+    bridge_path: &Path,
+    event_type: &str,
+    title_assignment: &str,
+    error_assignment: &str,
+) -> String {
     let bridge_path_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
     let bridge_parent_literal = powershell_single_quoted(
         &bridge_path
@@ -23,6 +28,8 @@ fn render_copilot_hook_powershell(bridge_path: &Path) -> String {
             .unwrap_or(bridge_path)
             .to_string_lossy(),
     );
+    let event_type_literal = powershell_single_quoted(event_type);
+    let provider_literal = powershell_single_quoted(COPILOT_PROVIDER);
 
     format!(
         concat!(
@@ -31,29 +38,70 @@ fn render_copilot_hook_powershell(bridge_path: &Path) -> String {
             "$event = $payload | ConvertFrom-Json; ",
             "$timestamp = if ($event.timestamp) {{ [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$event.timestamp).UtcDateTime.ToString('o') }} else {{ [DateTimeOffset]::UtcNow.ToString('o') }}; ",
             "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
-            "$error = if ($event.reason -eq 'error') {{ 'copilot session ended with error' }} else {{ $null }}; ",
-            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = 'session.ended'; timestamp = $timestamp; sessionId = $null; cwd = $cwd; sourcePath = $null; title = $null; error = $error }}; ",
+            "{title_assignment} ",
+            "{error_assignment} ",
+            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = {event_type}; timestamp = $timestamp; sessionId = $null; cwd = $cwd; sourcePath = $null; title = $title; error = $error }}; ",
             "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
-            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false)); ",
+            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false));",
         ),
+        title_assignment = title_assignment,
+        error_assignment = error_assignment,
         version = PROVIDER_INTEGRATION_VERSION,
-        provider = powershell_single_quoted(COPILOT_PROVIDER),
+        provider = provider_literal,
+        event_type = event_type_literal,
         bridge_parent = bridge_parent_literal,
         bridge_path = bridge_path_literal,
     )
 }
 
 fn render_copilot_integration(bridge_path: &Path) -> Result<String, String> {
+    let hook_session_start = render_copilot_hook_ps(
+        bridge_path,
+        "session.started",
+        "$title = $null;",
+        "$error = $null;",
+    );
+    let hook_session_end = render_copilot_hook_ps(
+        bridge_path,
+        "session.ended",
+        "$title = $null;",
+        "$error = if ($event.reason -eq 'error') { 'copilot session ended with error' } else { $null };",
+    );
+    let hook_prompt_submitted = render_copilot_hook_ps(
+        bridge_path,
+        "prompt.submitted",
+        "$title = if ($event.prompt) { $s = [string]$event.prompt; if ($s.Length -gt 80) { $s.Substring(0, 80) } else { $s } } else { $null };",
+        "$error = $null;",
+    );
+    let hook_pre_tool = render_copilot_hook_ps(
+        bridge_path,
+        "tool.pre",
+        "$title = if ($event.toolName) { [string]$event.toolName } else { $null };",
+        "$error = $null;",
+    );
+    let hook_post_tool = render_copilot_hook_ps(
+        bridge_path,
+        "tool.post",
+        "$title = if ($event.toolName) { [string]$event.toolName } else { $null };",
+        "$rt = if ($event.toolResult) { [string]$event.toolResult.resultType } else { $null }; $error = if ($rt -eq 'failure' -or $rt -eq 'denied') { 'tool ' + [string]$event.toolName + ' ' + $rt } else { $null };",
+    );
+    let hook_error_occurred = render_copilot_hook_ps(
+        bridge_path,
+        "session.errored",
+        "$title = if ($event.error -and $event.error.name) { [string]$event.error.name } else { $null };",
+        "$error = if ($event.error -and $event.error.message) { [string]$event.error.message } else { 'unknown error' };",
+    );
+
     let integration = serde_json::json!({
         "version": 1,
         "sessionHub": managed_provider_metadata(COPILOT_PROVIDER, bridge_path),
         "hooks": {
-            "sessionEnd": [
-                {
-                    "type": "command",
-                    "powershell": render_copilot_hook_powershell(bridge_path)
-                }
-            ]
+            "sessionStart":         [{ "type": "command", "powershell": hook_session_start }],
+            "sessionEnd":           [{ "type": "command", "powershell": hook_session_end }],
+            "userPromptSubmitted":  [{ "type": "command", "powershell": hook_prompt_submitted }],
+            "preToolUse":           [{ "type": "command", "powershell": hook_pre_tool }],
+            "postToolUse":          [{ "type": "command", "powershell": hook_post_tool }],
+            "errorOccurred":        [{ "type": "command", "powershell": hook_error_occurred }],
         }
     });
 
@@ -73,6 +121,7 @@ pub(crate) fn install_or_update_copilot_integration(
                 ProviderIntegrationState::ManualRequired,
                 None,
                 diagnostics,
+                None,
                 Some(error),
             );
         }
@@ -84,6 +133,7 @@ pub(crate) fn install_or_update_copilot_integration(
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some("failed to resolve Copilot bridge path".to_string()),
         );
     };
@@ -126,6 +176,7 @@ pub(crate) fn detect_copilot_integration_status(
                 ProviderIntegrationState::ManualRequired,
                 None,
                 diagnostics,
+                None,
                 Some(error),
             );
         }
@@ -138,6 +189,7 @@ pub(crate) fn detect_copilot_integration_status(
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some(error),
         );
     }
@@ -148,6 +200,7 @@ pub(crate) fn detect_copilot_integration_status(
             ProviderIntegrationState::ManualRequired,
             Some(config_path),
             diagnostics,
+            None,
             Some("failed to resolve Copilot bridge path".to_string()),
         );
     };
@@ -158,6 +211,7 @@ pub(crate) fn detect_copilot_integration_status(
             ProviderIntegrationState::Missing,
             Some(config_path),
             diagnostics,
+            None,
             None,
         );
     }
@@ -174,6 +228,7 @@ pub(crate) fn detect_copilot_integration_status(
                 ProviderIntegrationState::Error,
                 Some(config_path),
                 diagnostics,
+                None,
                 Some(error_message),
             );
         }
@@ -191,6 +246,7 @@ pub(crate) fn detect_copilot_integration_status(
                 ProviderIntegrationState::Error,
                 Some(config_path),
                 diagnostics,
+                None,
                 Some(error_message),
             );
         }
@@ -202,16 +258,19 @@ pub(crate) fn detect_copilot_integration_status(
             ProviderIntegrationState::Outdated,
             Some(config_path),
             diagnostics,
+            None,
             Some("missing SessionHub integration metadata".to_string()),
         );
     };
 
+    let installed_version = Some(metadata.integration_version);
     match validate_managed_metadata(&metadata, COPILOT_PROVIDER, &expected_bridge_path) {
         Ok(()) => build_provider_integration_status(
             COPILOT_PROVIDER,
             ProviderIntegrationState::Installed,
             Some(config_path),
             diagnostics,
+            installed_version,
             None,
         ),
         Err(error) => build_provider_integration_status(
@@ -219,6 +278,7 @@ pub(crate) fn detect_copilot_integration_status(
             ProviderIntegrationState::Outdated,
             Some(config_path),
             diagnostics,
+            installed_version,
             Some(error),
         ),
     }

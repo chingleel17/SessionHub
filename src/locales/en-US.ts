@@ -120,6 +120,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.integrations.fields.bridgePath": "Bridge file path",
   "settings.integrations.fields.lastEventAt": "Last event time",
   "settings.integrations.fields.lastError": "Last error",
+  "settings.integrations.fields.version": "Integration version",
   "settings.integrations.values.unavailable": "Unavailable",
   "settings.integrations.values.noEvent": "No bridge event received yet",
   "settings.integrations.status.installed": "Installed",

@@ -74,6 +74,7 @@ pub(crate) fn build_provider_integration_status(
     status: ProviderIntegrationState,
     config_path: Option<PathBuf>,
     diagnostics: ProviderBridgeDiagnostics,
+    installed_version: Option<u32>,
     last_error: Option<String>,
 ) -> ProviderIntegrationStatus {
     ProviderIntegrationStatus {
@@ -83,6 +84,7 @@ pub(crate) fn build_provider_integration_status(
         bridge_path: diagnostics
             .bridge_path
             .map(|path| path.to_string_lossy().to_string()),
+        installed_version,
         last_event_at: diagnostics.last_event_at,
         last_error: last_error.or(diagnostics.last_error),
     }
@@ -125,7 +127,7 @@ pub(super) fn build_install_failure_status(
         ProviderIntegrationState::Error
     };
 
-    build_provider_integration_status(provider, status, config_path, diagnostics, Some(error))
+    build_provider_integration_status(provider, status, config_path, diagnostics, None, Some(error))
 }
 
 // ── 公開聚合函式 ─────────────────────────────────────────────────────────────
