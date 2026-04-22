@@ -1,5 +1,3 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
@@ -21,8 +19,6 @@ type Props = {
   onConfigurePath: () => void;
 };
 
-type PopoverPos = { left: number; bottom: number };
-
 export function Sidebar({
   activeView,
   isSidebarCollapsed,
@@ -37,11 +33,8 @@ export function Sidebar({
   onRefresh,
   onConfigurePath,
 }: Props) {
-  const { t, locale, setLocale } = useI18n();
+  const { t } = useI18n();
   const { theme, setTheme } = useTheme();
-  const [openPopover, setOpenPopover] = useState<"language" | null>(null);
-  const [popoverPos, setPopoverPos] = useState<PopoverPos>({ left: 0, bottom: 0 });
-  const langBtnRef = useRef<HTMLButtonElement>(null);
 
   const realtimeLabel =
     sessionsIsFetching
@@ -52,22 +45,6 @@ export function Sidebar({
           ? t("dashboard.status.realtimeActive")
           : t("dashboard.status.realtimeConnecting");
 
-  const togglePopover = (name: "language") => {
-    const btnRef = langBtnRef;
-    if (btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      setPopoverPos({ left: rect.left, bottom: window.innerHeight - rect.top + 8 });
-    }
-    setOpenPopover((current) => (current === name ? null : name));
-  };
-
-  useEffect(() => {
-    if (!openPopover) return;
-    const close = () => setOpenPopover(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [openPopover]);
-
   // 只顯示有對應 projectGroup 的釘選項目
   const visiblePinnedGroups = pinnedProjects
     .map((key) => projectGroups.find((g) => g.key === key))
@@ -76,7 +53,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-icon">CS</div>
+        <div className="sidebar-brand-icon">SH</div>
         <div className="sidebar-brand-copy">
           <h1 className="topbar-title">{t("app.title")}</h1>
         </div>
@@ -155,33 +132,6 @@ export function Sidebar({
         ) : null}
       </nav>
 
-      {openPopover === "language"
-        ? createPortal(
-            <div
-              className="sidebar-popover sidebar-popover-fixed"
-              style={{ left: popoverPos.left, bottom: popoverPos.bottom }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="sidebar-popover-header">{t("sidebar.language.label")}</div>
-              <button
-                type="button"
-                className={`sidebar-popover-item ${locale === "zh-TW" ? "active" : ""}`}
-                onClick={() => { setLocale("zh-TW"); setOpenPopover(null); }}
-              >
-                {t("sidebar.language.zhTW")}
-              </button>
-              <button
-                type="button"
-                className={`sidebar-popover-item ${locale === "en-US" ? "active" : ""}`}
-                onClick={() => { setLocale("en-US"); setOpenPopover(null); }}
-              >
-                {t("sidebar.language.enUS")}
-              </button>
-            </div>,
-            document.body,
-          )
-        : null}
-
       <footer className="sidebar-footer">
         {/* Theme toggle: icon button when collapsed, switch row when expanded */}
         {isSidebarCollapsed ? (
@@ -213,32 +163,9 @@ export function Sidebar({
           </div>
         )}
 
-        {/* Language row */}
-        {!isSidebarCollapsed ? (
-          <div className="sidebar-quick-action-item">
-            <button
-              ref={langBtnRef}
-              type="button"
-              className={`sidebar-link ${openPopover === "language" ? "active" : ""}`}
-              onClick={(e) => { e.stopPropagation(); togglePopover("language"); }}
-            >
-              <span className="sidebar-link-icon">文</span>
-              <span>{t("sidebar.language.label")}</span>
-            </button>
-          </div>
-        ) : (
+        {/* Collapsed: icon buttons for settings + refresh */}
+        {isSidebarCollapsed ? (
           <div className="sidebar-quick-actions">
-            <div className="sidebar-quick-action-item">
-              <button
-                ref={langBtnRef}
-                type="button"
-                className={`sidebar-icon-button ${openPopover === "language" ? "active" : ""}`}
-                title={t("sidebar.language.label")}
-                onClick={(e) => { e.stopPropagation(); togglePopover("language"); }}
-              >
-                文
-              </button>
-            </div>
             <button
               type="button"
               className={`sidebar-icon-button ${activeView === "settings" ? "active" : ""}`}
@@ -256,7 +183,7 @@ export function Sidebar({
               ↺
             </button>
           </div>
-        )}
+        ) : null}
 
         {/* Settings row (expanded only) */}
         {!isSidebarCollapsed ? (

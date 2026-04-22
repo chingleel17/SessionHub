@@ -24,6 +24,33 @@ export type AppSettings = {
     pinnedProjects?: string[];
     enabledProviders: string[];
     providerIntegrations?: ProviderIntegrationStatus[];
+    defaultLauncher?: string | null;
+    enableInterventionNotification?: boolean;
+    enableSessionEndNotification?: boolean;
+};
+
+export type SessionActivityStatus = {
+    sessionId: string;
+    /** "idle" | "active" | "waiting" | "done" */
+    status: "idle" | "active" | "waiting" | "done";
+    /** "thinking" | "tool_call" | "file_op" | "sub_agent" | "working" | "completed" */
+    detail?: string | null;
+    lastActivityAt?: string | null;
+};
+
+export type IdeLauncherType =
+    | "terminal"
+    | "opencode"
+    | "copilot"
+    | "vscode"
+    | "gemini"
+    | "explorer";
+
+export type ToolAvailability = {
+    copilot: boolean;
+    opencode: boolean;
+    gemini: boolean;
+    vscode: boolean;
 };
 
 export type ProviderIntegrationState =
@@ -38,6 +65,8 @@ export type ProviderIntegrationStatus = {
     status: ProviderIntegrationState;
     configPath?: string | null;
     bridgePath?: string | null;
+    /** 目前安裝的 integration 版本號，null 表示未安裝或無法讀取 */
+    installedVersion?: number | null;
     lastEventAt?: string | null;
     lastError?: string | null;
 };
@@ -51,7 +80,15 @@ export type SessionStats = {
     modelsUsed: string[];
     reasoningCount: number;
     toolBreakdown: Record<string, number>;
+    modelMetrics: Record<string, ModelMetricsEntry>;
     isLive: boolean;
+};
+
+export type ModelMetricsEntry = {
+    requestsCount: number;
+    requestsCost: number;
+    inputTokens: number;
+    outputTokens: number;
 };
 
 export type SettingsSection = "general" | "language" | "icon-style";
@@ -137,4 +174,14 @@ export type OpenSpecData = {
     activeChanges: OpenSpecChange[];
     archivedChanges: OpenSpecChange[];
     specs: OpenSpecSpec[];
+};
+
+export type TreeNode = {
+    id: string;
+    label: string;
+    badge?: string;
+    children?: TreeNode[];
+    defaultOpen?: boolean;
+    filePath?: string;
+    filePathType?: "absolute" | "openspec";
 };

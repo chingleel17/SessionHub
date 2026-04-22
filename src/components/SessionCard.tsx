@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
-import type { SessionInfo, SessionStats } from "../types";
+import type { IdeLauncherType, SessionActivityStatus, SessionInfo, SessionStats, ToolAvailability } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import {
   ArchiveIcon,
@@ -16,6 +17,15 @@ import {
 import { SessionStatsBadge } from "./SessionStatsBadge";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 
+const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
+  { type: "terminal", label: "Terminal", icon: ">_" },
+  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
+  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
+  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
+  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
+  { type: "explorer", label: "Explorer", icon: "📁" },
+];
+
 type Props = {
   session: SessionInfo;
   onOpenTerminal: (session: SessionInfo) => void;
@@ -28,6 +38,13 @@ type Props = {
   onDelete: (session: SessionInfo) => void;
   stats?: SessionStats;
   statsLoading: boolean;
+  activityStatus?: SessionActivityStatus;
+  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onFocusTerminal: (session: SessionInfo) => void;
+  defaultLauncher: string | null;
+  toolAvailability: ToolAvailability | null;
+  isLauncherOpen: boolean;
+  onToggleLauncher: () => void;
 };
 
 function getSessionTitle(session: SessionInfo) {
@@ -57,9 +74,49 @@ export function SessionCard({
   onDelete,
   stats,
   statsLoading,
+  activityStatus,
+  onOpenInTool,
+  onFocusTerminal,
+  defaultLauncher,
+  toolAvailability,
+  isLauncherOpen,
+  onToggleLauncher,
 }: Props) {
   const { t, locale } = useI18n();
   const [showStats, setShowStats] = useState(false);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  // 選單開啟時計算位置；關閉時清除
+  useEffect(() => {
+    if (isLauncherOpen && menuBtnRef.current) {
+      const rect = menuBtnRef.current.getBoundingClientRect();
+      setMenuPos({ top: rect.bottom + 2, left: rect.left });
+    } else {
+      setMenuPos(null);
+    }
+  }, [isLauncherOpen]);
+
+  // click-outside 自動關閉
+  useEffect(() => {
+    if (!isLauncherOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest("[data-launcher-menu]")) {
+        onToggleLauncher();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [isLauncherOpen, onToggleLauncher]);
+
+  const activityStatusCls = activityStatus
+    ? `activity-badge activity-badge--${activityStatus.status}`
+    : null;
+  const activityLabel = activityStatus
+    ? activityStatus.status === "active"
+      ? (t as (k: string) => string)(`dashboard.kanban.detail.${activityStatus.detail ?? "working"}`)
+      : (t as (k: string) => string)(`dashboard.kanban.status.${activityStatus.status}`)
+    : null;
 
   return (
     <article className="session-card">
@@ -81,6 +138,9 @@ export function SessionCard({
           ) : null}
           {session.parseError ? (
             <span className="session-chip error-chip">{t("session.parseError")}</span>
+          ) : null}
+          {activityStatusCls && activityLabel ? (
+            <span className={activityStatusCls}>{activityLabel}</span>
           ) : null}
           {session.tags.map((tag) => (
             <span key={tag} className="session-chip tag-chip">
@@ -120,6 +180,57 @@ export function SessionCard({
           onClick={() => onOpenTerminal(session)}
         >
           <TerminalIcon size={16} />
+        </button>
+        <div className="launcher-dropdown">
+          <button
+            ref={menuBtnRef}
+            type="button"
+            className="icon-button"
+            title={t("session.actions.chooseTool")}
+            aria-label={t("session.actions.chooseTool")}
+            onClick={() => onToggleLauncher()}
+          >
+            ⋯
+          </button>
+          {isLauncherOpen && menuPos ? createPortal(
+            <div
+              data-launcher-menu="true"
+              className="launcher-menu"
+              style={{
+                position: "fixed",
+                top: menuPos.top,
+                left: menuPos.left,
+                zIndex: 9999,
+              }}
+            >
+              {LAUNCHER_OPTIONS.map((opt) => {
+                const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
+                return (
+                  <button
+                    key={opt.type}
+                    type="button"
+                    className={`launcher-menu-item${defaultLauncher === opt.type ? " launcher-menu-item--default" : ""}${!available ? " launcher-menu-item--disabled" : ""}`}
+                    disabled={!available}
+                    onClick={() => { onOpenInTool(session, opt.type); onToggleLauncher(); }}
+                  >
+                    <span className="launcher-option-icon">{opt.icon}</span>
+                    {opt.label}
+                    {!available ? <span className="launcher-option-unavail"> (未安裝)</span> : null}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          title={t("session.actions.focusTerminal")}
+          aria-label={t("session.actions.focusTerminal")}
+          onClick={() => onFocusTerminal(session)}
+        >
+          ⊙
         </button>
 
         <button
@@ -206,7 +317,7 @@ export function SessionCard({
       </div>
 
       <SessionStatsBadge stats={stats} isLoading={statsLoading} />
-      {showStats && stats ? <SessionStatsPanel stats={stats} /> : null}
+      {showStats && stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
     </article>
   );
 }

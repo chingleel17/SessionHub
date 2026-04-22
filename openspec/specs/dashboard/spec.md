@@ -27,14 +27,30 @@
 
 ### Requirement: Session 統計摘要
 
-系統 SHALL 在 Dashboard 頁面以緊湊的水平 stat bar 顯示整體 session 統計資訊，每個指標搭配 icon，並在 token 用量與互動次數旁顯示當前時間範圍（本周 / 本月）標籤。
+系統 SHALL 在 Dashboard 頁面顯示整體 session 統計資訊。
 
 #### Scenario: 顯示統計數字
 
 - **WHEN** 使用者切換至 Dashboard 頁面
-- **THEN** 系統以單列 stat bar 顯示：總 session 數量、已封存數量、活躍專案數量、parse 錯誤數量、token 用量（含時間範圍）、互動次數（含時間範圍）
+- **THEN** 系統顯示統計卡片：總 session 數量、已封存數量、活躍專案數量、parse 錯誤數量、token 用量（含時間範圍）、互動次數（含時間範圍）
 - **AND** 每個指標前顯示對應 icon
-- **AND** stat bar 垂直高度 SHALL 不超過 72px
+- **AND** parse 錯誤數為 0 時不顯示對應卡片
+
+### Requirement: 統計週期切換排版
+
+系統 SHALL 以橫向獨立列顯示「本週 / 本月」切換按鈕，位於視圖切換按鈕下方。
+
+#### Scenario: 週期切換按鈕位置
+
+- **WHEN** 使用者在 Dashboard 頁面
+- **THEN** 「本週 / 本月」切換按鈕顯示於 Kanban/清單切換按鈕的**正下方**，統計卡片的上方
+- **AND** 排版為水平（橫向）排列
+
+#### Scenario: 切換統計週期
+
+- **WHEN** 使用者點擊「本週」或「本月」
+- **THEN** 系統重新計算並更新 token 用量與互動次數統計
+- **AND** 選中的週期按鈕以 active 樣式（藍色）標示
 
 ### Requirement: 多平台 Token 與互動統計
 
@@ -54,3 +70,13 @@ Dashboard SHALL 顯示各 provider 的 session 數量分佈。
 
 - **WHEN** 使用者查看 Dashboard
 - **THEN** 系統顯示 Copilot 與 OpenCode 各自的 session 數量與佔比
+
+### Requirement: Dashboard 視圖模式切換
+
+系統 SHALL 提供清單視圖與 Kanban 視圖的切換按鈕，兩種視圖並列可選。
+
+#### Scenario: 顯示視圖切換按鈕
+
+- **WHEN** 使用者在 Dashboard 頁面
+- **THEN** 系統在 Dashboard 標題區域顯示「清單」與「Kanban」切換按鈕
+- **AND** 當前視圖的按鈕以 active 樣式標示

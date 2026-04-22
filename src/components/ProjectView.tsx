@@ -1,12 +1,15 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type {
+  IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
+  SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SisyphusData,
   SortKey,
+  ToolAvailability,
 } from "../types";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
@@ -41,6 +44,12 @@ type Props = {
   openspecData: OpenSpecData | undefined;
   plansSpecsLoading: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
+  onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+  activityStatusMap: Map<string, SessionActivityStatus>;
+  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onFocusTerminal: (session: SessionInfo) => void;
+  defaultLauncher: string | null;
+  toolAvailability: ToolAvailability | null;
   // Plan sub-tab props (IPC handled by App.tsx, state flows through here)
   activePlanSessionId: string | null;
   onActivePlanChange: (sessionId: string | null) => void;
@@ -128,6 +137,7 @@ export function ProjectView({
   openspecData,
   plansSpecsLoading,
   onReadFileContent,
+  onReadOpenspecFile,
   activePlanSessionId,
   onActivePlanChange,
   planDraft,
@@ -138,12 +148,34 @@ export function ProjectView({
   openPlanKeys,
   activeSubTab,
   onSubTabStateChange,
+  activityStatusMap,
+  onOpenInTool,
+  onFocusTerminal,
+  defaultLauncher,
+  toolAvailability,
 }: Props) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
+  const [openLauncherSessionId, setOpenLauncherSessionId] = useState<string | null>(null);
+
+  const handleToggleLauncher = useCallback((sessionId: string) => {
+    setOpenLauncherSessionId((prev) => prev === sessionId ? null : sessionId);
+  }, []);
+
+  // 點擊選單外部關閉
+  useEffect(() => {
+    if (!openLauncherSessionId) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest("[data-launcher-menu]")) {
+        setOpenLauncherSessionId(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openLauncherSessionId]);
 
   const setActiveSubTab = (next: string) => {
     onSubTabStateChange({ openPlanKeys, activeSubTab: next });
@@ -425,6 +457,13 @@ export function ProjectView({
                   onDelete={onDelete}
                   stats={sessionStats[session.id]}
                   statsLoading={Boolean(sessionStatsLoading[session.id])}
+                  activityStatus={activityStatusMap.get(session.id)}
+                  onOpenInTool={onOpenInTool}
+                  onFocusTerminal={onFocusTerminal}
+                  defaultLauncher={defaultLauncher}
+                  toolAvailability={toolAvailability}
+                  isLauncherOpen={openLauncherSessionId === session.id}
+                  onToggleLauncher={() => handleToggleLauncher(session.id)}
                 />
               ))
             )}
@@ -436,6 +475,8 @@ export function ProjectView({
           openspecData={openspecData}
           isLoading={plansSpecsLoading}
           onReadFileContent={onReadFileContent}
+          onReadOpenspecFile={onReadOpenspecFile}
+          projectCwd={project.pathLabel}
         />
       ) : activeSubTab.startsWith("plan:") ? (
         (() => {

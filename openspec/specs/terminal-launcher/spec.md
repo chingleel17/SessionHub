@@ -46,3 +46,32 @@
 
 - **WHEN** 使用者點擊 OpenCode session 的「複製指令」
 - **THEN** 複製 `opencode --session <session-id>` 至剪貼簿
+
+### Requirement: 多工具啟動指令路由
+
+系統 SHALL 在 `open_in_tool` command 中依 tool_type 決定啟動邏輯，統一處理所有工具的啟動參數。
+
+#### Scenario: terminal 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `terminal`
+- **THEN** 套用現有終端啟動邏輯（settings.terminal_path + file_stem 白名單）
+
+#### Scenario: opencode 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `opencode`
+- **THEN** 在終端中執行 `opencode --cwd <cwd>`，以 settings.terminal_path 開啟終端
+
+#### Scenario: gh-copilot 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `gh-copilot` 且 session_id 不為空
+- **THEN** 在終端中執行 `gh copilot session resume <session_id>`
+
+#### Scenario: gemini 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `gemini`
+- **THEN** 在終端中執行 `gemini`，工作目錄設為 cwd
+
+#### Scenario: explorer 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `explorer`
+- **THEN** 直接 spawn `explorer.exe <cwd>`，不開啟終端視窗

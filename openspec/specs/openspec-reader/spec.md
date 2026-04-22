@@ -21,3 +21,23 @@
 - **WHEN** 使用者開啟 Plans & Specs 子分頁
 - **THEN** 系統列出 `<cwd>/openspec/changes/`（不含 archive）下的 change 資料夾
 - **AND** 顯示每個 change 的 tasks.md 完成進度（已勾 / 總數）
+
+### Requirement: 讀取 OpenSpec 文件內容
+
+系統 SHALL 提供 `read_openspec_file(project_cwd, relative_path)` Tauri command，讀取指定 openspec 目錄下的 md 文件內容。
+
+#### Scenario: 成功讀取文件內容
+
+- **WHEN** 前端呼叫 `read_openspec_file` 並傳入有效的 project_cwd 與 relative_path
+- **AND** relative_path 對應的檔案存在且在 openspec 目錄下
+- **THEN** 系統回傳檔案的完整 UTF-8 文字內容
+
+#### Scenario: 路徑安全驗證失敗
+
+- **WHEN** relative_path 包含 `..` 或正規化後逃逸出 `<project_cwd>/openspec/` 目錄
+- **THEN** 系統回傳 `Err("path traversal not allowed")`，不讀取任何檔案
+
+#### Scenario: 檔案不存在
+
+- **WHEN** 指定路徑的檔案不存在
+- **THEN** 系統回傳 `Err("file not found")`

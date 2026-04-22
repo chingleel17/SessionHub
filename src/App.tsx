@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -12,12 +12,15 @@ import type {
   AppSettings,
   ConfirmDialogState,
   EditDialogState,
+  IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
   ProviderIntegrationStatus,
+  SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SisyphusData,
+  ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 
@@ -184,6 +187,10 @@ function App() {
   const [forceFull, setForceFull] = useState(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
+  const hasShownOutdatedToast = useRef(false);
+  const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
+  const lastInterventionSessionRef = useRef<string | null>(null);
+  const lastNotificationSessionRef = useRef<{ id: string; type: string } | null>(null);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
@@ -192,19 +199,13 @@ function App() {
     showArchived: false,
     enabledProviders: ["copilot", "opencode"],
     providerIntegrations: [],
+    enableInterventionNotification: true,
+    enableSessionEndNotification: false,
   });
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => invoke<AppSettings>("get_settings"),
-  });
-
-  // 啟動時立即讀取上次快取，避免白屏等待
-  const cachedSessionsQuery = useQuery({
-    queryKey: ["sessions_cache"],
-    queryFn: () => invoke<SessionInfo[]>("load_session_cache"),
-    staleTime: Infinity,
-    gcTime: Infinity,
   });
 
   const sessionsQuery = useQuery({
@@ -217,7 +218,6 @@ function App() {
       forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
-    placeholderData: cachedSessionsQuery.data,
     queryFn: () =>
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
@@ -255,10 +255,26 @@ function App() {
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
+        enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
+        enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
   }, [settingsQuery.data]);
+
+  // 啟動時偵測 provider integration 版本是否過期，提示使用者前往設定更新
+  useEffect(() => {
+    if (!settingsQuery.data || hasShownOutdatedToast.current) return;
+    const integrations = settingsQuery.data.providerIntegrations ?? [];
+    const hasOutdated = integrations.some(
+      (integration) => integration.status === "outdated" || integration.status === "missing",
+    );
+    if (hasOutdated) {
+      hasShownOutdatedToast.current = true;
+      showToast(t("toast.providerOutdatedOnStartup"));
+    }
+  }, [settingsQuery.data, t]);
+
 
   useEffect(() => {
     if (activePlanSession) {
@@ -603,11 +619,127 @@ function App() {
     staleTime: 30_000,
   });
 
+  const activityStatusQuery = useQuery({
+    queryKey: ["activity_statuses", sessionsQuery.data?.map((s) => s.id)],
+    enabled: Boolean(sessionsQuery.data?.length),
+    queryFn: async () => {
+      const sessions = sessionsQuery.data ?? [];
+      return invoke<SessionActivityStatus[]>("get_session_activity_statuses", {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          provider: s.provider,
+          sessionDir: s.sessionDir,
+        })),
+        opencodeRoot: settingsQuery.data?.opencodeRoot || null,
+      });
+    },
+   refetchInterval: 30_000,
+    staleTime: 25_000,
+  });
+
+  const toolAvailabilityQuery = useQuery({
+    queryKey: ["tool_availability"],
+    queryFn: () => invoke<ToolAvailability>("check_tool_availability"),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const activityStatusMap = useMemo<Map<string, SessionActivityStatus>>(() => {
+    const m = new Map<string, SessionActivityStatus>();
+    for (const status of activityStatusQuery.data ?? []) {
+      m.set(status.sessionId, status);
+    }
+    return m;
+  }, [activityStatusQuery.data]);
+
+  // 偵測 session 狀態轉換，發送 Windows 通知
+  useEffect(() => {
+    const currentStatuses = activityStatusQuery.data ?? [];
+    const enableWaiting = settingsQuery.data?.enableInterventionNotification ?? true;
+    const enableSessionEnd = settingsQuery.data?.enableSessionEndNotification ?? false;
+
+    for (const status of currentStatuses) {
+      const prev = prevActivityStatusRef.current.get(status.sessionId);
+      const session = sessionsQuery.data?.find((s) => s.id === status.sessionId);
+      const projectName = session?.cwd?.split("\\").pop() ?? session?.cwd ?? status.sessionId;
+      const summary = session?.summary ?? "";
+
+      if (status.status === "waiting" && prev !== "waiting" && enableWaiting) {
+        lastInterventionSessionRef.current = status.sessionId;
+        lastNotificationSessionRef.current = { id: status.sessionId, type: "waiting" };
+        invoke("send_intervention_notification", {
+          sessionId: status.sessionId,
+          projectName,
+          summary,
+          notificationType: "waiting",
+        }).catch((e) => console.warn("[notification] send failed:", e));
+      } else if (status.status === "done" && prev !== "done" && prev !== undefined && enableSessionEnd) {
+        lastNotificationSessionRef.current = { id: status.sessionId, type: "session_end" };
+        invoke("send_intervention_notification", {
+          sessionId: status.sessionId,
+          projectName,
+          summary,
+          notificationType: "session_end",
+        }).catch((e) => console.warn("[notification] send failed:", e));
+      }
+
+      prevActivityStatusRef.current.set(status.sessionId, status.status);
+    }
+  }, [activityStatusQuery.data, settingsQuery.data?.enableInterventionNotification, settingsQuery.data?.enableSessionEndNotification, sessionsQuery.data]);
+
+  // 通知點擊後聚焦視窗並導航至對應 session
+  useEffect(() => {
+    const unlistenPromise = listen("notification://action-performed", () => {
+      const notif = lastNotificationSessionRef.current;
+      if (!notif) return;
+      const session = sessionsQuery.data?.find((s) => s.id === notif.id);
+      if (!session) return;
+      const status = activityStatusMap.get(notif.id);
+      if (notif.type === "waiting" && status?.status !== "waiting") return;
+      const projectKey = getProjectKey(session, uncategorizedLabel);
+      setActiveView(projectKey);
+      lastNotificationSessionRef.current = null;
+      lastInterventionSessionRef.current = null;
+    });
+    return () => { unlistenPromise.then((fn) => fn()); };
+  }, [sessionsQuery.data, activityStatusMap, uncategorizedLabel]);
+
   const handleReadFileContent = async (filePath: string): Promise<string> => {
     return invoke<string>("read_plan_content", { filePath });
   };
 
+  const handleReadOpenspecFile = async (projectCwd: string, relativePath: string): Promise<string> => {
+    return invoke<string>("read_openspec_file", { projectCwd, relativePath });
+  };
+
+  const handleOpenInTool = async (session: SessionInfo, toolType: IdeLauncherType) => {
+    if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
+    const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
+    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    try {
+      await invoke("open_in_tool", {
+        toolType,
+        cwd: session.cwd,
+        terminalPath: settingsQuery.data?.terminalPath || null,
+        sessionId: session.id,
+      });
+      showToast(t("toast.toolOpened"));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    }
+  };
+
+  const handleFocusTerminal = async (session: SessionInfo) => {
+    const hint = session.cwd?.split("\\").pop() ?? session.id;
+    try {
+      await invoke("focus_terminal_window", { titleHint: hint });
+    } catch {
+      showToast(t("toast.terminalFocusFailed"));
+    }
+  };
+
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
+  const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
 
   const filteredDashboardTotals = useMemo(() => {
     const now = new Date();
@@ -632,9 +764,13 @@ function App() {
         if (!stats) return acc;
         acc.totalOutputTokens += stats.outputTokens;
         acc.totalInteractions += stats.interactionCount;
+        acc.totalCost += Object.values(stats.modelMetrics ?? {}).reduce(
+          (sum, metric) => sum + metric.requestsCost,
+          0,
+        );
         return acc;
       },
-      { totalOutputTokens: 0, totalInteractions: 0 },
+      { totalOutputTokens: 0, totalInteractions: 0, totalCost: 0 },
     );
   }, [dashboardPeriod, sessionsQuery.data, sessionStatsMap]);
 
@@ -665,6 +801,7 @@ function App() {
       showArchived: settingsForm.showArchived,
       pinnedProjects,
       enabledProviders: settingsForm.enabledProviders,
+      defaultLauncher: settingsForm.defaultLauncher ?? null,
     };
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
@@ -982,10 +1119,18 @@ function App() {
               onPeriodChange={setDashboardPeriod}
               filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
               filteredTotalInteractions={filteredDashboardTotals.totalInteractions}
+              filteredTotalCost={filteredDashboardTotals.totalCost}
               onOpenProject={openProjectTab}
               onOpenRecentSession={(session) =>
                 openProjectTab(getProjectKey(session, uncategorizedLabel))
               }
+              activityStatusMap={activityStatusMap}
+              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
+              toolAvailability={toolAvailabilityQuery.data ?? null}
+              viewMode={dashboardViewMode}
+              onViewModeChange={setDashboardViewMode}
             />
           ) : null}
 
@@ -1031,6 +1176,7 @@ function App() {
               openspecData={openspecQuery.data}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               onReadFileContent={handleReadFileContent}
+              onReadOpenspecFile={handleReadOpenspecFile}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}
@@ -1041,6 +1187,11 @@ function App() {
               openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
+              activityStatusMap={activityStatusMap}
+              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
+              toolAvailability={toolAvailabilityQuery.data ?? null}
             />
           ) : null}
         </div>

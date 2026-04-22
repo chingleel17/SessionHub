@@ -22,9 +22,13 @@ export function ProjectStatsBanner({ sessions, sessionStats, sessionStatsLoading
       if (!stats) return acc;
       acc.tokens += stats.outputTokens;
       acc.interactions += stats.interactionCount;
+      acc.cost += Object.values(stats.modelMetrics ?? {}).reduce(
+        (sum, metric) => sum + metric.requestsCost,
+        0,
+      );
       return acc;
     },
-    { tokens: 0, interactions: 0 },
+    { tokens: 0, interactions: 0, cost: 0 },
   ), [sessionStats, sessions]);
 
   if (sessions.length === 0) return null;
@@ -35,6 +39,7 @@ export function ProjectStatsBanner({ sessions, sessionStats, sessionStatsLoading
       <strong>{t("stats.projectBanner").replace("{count}", String(sessions.length))}</strong>
       <span>{formatCompactNumber(totals.interactions)} {t("stats.turns")}</span>
       <span>{formatCompactNumber(totals.tokens)} {t("stats.tokens")}</span>
+      <span>{t("stats.detail.totalCost")} {totals.cost.toFixed(2).replace(/\.00$/, "")}</span>
       {loadingCount > 0 ? <span>{t("dashboard.stats.loadingState")}: {loadingCount}</span> : null}
     </div>
   );
