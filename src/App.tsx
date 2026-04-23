@@ -27,7 +27,6 @@ import { formatDateTime } from "./utils/formatDate";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
-import { PinIcon } from "./components/Icons";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -526,6 +525,26 @@ function App() {
     await invoke("save_settings", { settings });
     await queryClient.invalidateQueries({ queryKey: ["settings"] });
   };
+
+  const clearOpenProjects = () => {
+    const nonPinned = openProjectKeys.filter((k) => !pinnedProjects.includes(k));
+    setOpenProjectKeys((v) => v.filter((k) => pinnedProjects.includes(k)));
+    if (nonPinned.includes(activeView)) setActiveView("dashboard");
+  };
+
+  const reorderOpenProjects = (newNonPinnedKeys: string[]) => {
+    setOpenProjectKeys((v) => {
+      const pinnedKeys = v.filter((k) => pinnedProjects.includes(k));
+      return [...pinnedKeys, ...newNonPinnedKeys];
+    });
+  };
+
+  const pinProjectViaDrag = async (key: string) => {
+    if (!pinnedProjects.includes(key)) {
+      await togglePinProject(key);
+    }
+  };
+
 
   const uncategorizedLabel = t("session.uncategorized");
 
@@ -1031,8 +1050,13 @@ function App() {
         sessionsIsFetching={sessionsQuery.isFetching}
         pinnedProjects={pinnedProjects}
         projectGroups={groupedProjects}
+        openProjectKeys={openProjectKeys}
         onNavigate={(view) => setActiveView(view)}
         onOpenProject={openProjectTab}
+        onCloseProject={closeProjectTab}
+        onClearOpenProjects={clearOpenProjects}
+        onReorderOpenProjects={reorderOpenProjects}
+        onPinProject={(key) => void pinProjectViaDrag(key)}
         onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
         onRefresh={() => sessionsQuery.refetch()}
         onConfigurePath={() => setActiveView("settings")}
@@ -1058,53 +1082,6 @@ function App() {
             </div>
           </header>
 
-        {activeView !== "settings" ? (
-          <section className="tabbar">
-            <button
-              type="button"
-              className={`tab-item ${activeView === "dashboard" ? "active" : ""}`}
-              onClick={() => setActiveView("dashboard")}
-            >
-              {t("tabs.dashboard")}
-            </button>
-
-            {[
-              ...openProjectKeys.filter((k) => pinnedProjects.includes(k)),
-              ...openProjectKeys.filter((k) => !pinnedProjects.includes(k)),
-            ].map((projectKey) => {
-              const project = groupedProjects.find((p) => p.key === projectKey);
-              if (!project) return null;
-                const isPinned = pinnedProjects.includes(projectKey);
-                return (
-                  <div
-                    key={project.key}
-                    className={`tab-item tab-item-project ${isPinned ? "tab-item--pinned" : ""} ${activeView === project.key ? "active" : ""}`}
-                  >
-                  <button
-                    type="button"
-                    className="tab-label"
-                    onClick={() => setActiveView(project.key)}
-                  >
-                    {isPinned ? (
-                      <span className="tab-pin-indicator">
-                        <PinIcon size={11} />
-                      </span>
-                    ) : null}
-                    {project.title}
-                  </button>
-                  <button
-                    type="button"
-                    className="tab-close"
-                    onClick={() => closeProjectTab(project.key)}
-                    aria-label={`${t("tabs.close")} ${project.title}`}
-                  >
-                    ×
-                  </button>
-                  </div>
-              );
-            })}
-          </section>
-        ) : null}
 
         <div className="workspace-content">
           {activeView === "dashboard" ? (

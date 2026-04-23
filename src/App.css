@@ -453,79 +453,173 @@ textarea {
   font-weight: 500;
 }
 
-.tabbar {
+/* ─── Sidebar open projects ────────────────────────────────────────────────── */
+
+/* 拖曳排序中的 item 半透明 */
+.sidebar-open-item--dragging {
+  opacity: 0.4;
+}
+
+/* 拖曳到某 item 上方，顯示插入指示線 */
+.sidebar-open-item--drag-over > .sidebar-link {
+  border-top: 2px solid var(--color-accent);
+  border-radius: 4px 4px 0 0;
+}
+
+.sidebar-open-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: grab;
+  user-select: none;
+}
+
+.sidebar-open-item:active {
+  cursor: grabbing;
+}
+
+.sidebar-open-item-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-open-item-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.sidebar-open-item:hover .sidebar-open-item-close,
+.sidebar-open-item-close:focus-visible {
+  opacity: 0.6;
+}
+
+.sidebar-open-item-close:hover {
+  background: var(--color-surface-accent);
+  opacity: 1;
+  color: var(--color-text-primary);
+}
+
+.sidebar-open-icon-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.sidebar-open-item-close--collapsed {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  font-size: 10px;
+  opacity: 0;
+  background: var(--color-surface-panel);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.sidebar-open-icon-wrap:hover .sidebar-open-item-close--collapsed {
+  opacity: 1;
+}
+
+/* 已開啟專案區段標題列：分隔線 + 右側按鈕 */
+.sidebar-open-section-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  overflow-x: auto;
-  padding: 12px 12px 8px;
-  flex-shrink: 0;
-  flex-wrap: nowrap;
+  margin: 6px 0 4px;
 }
 
-.tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  min-width: 60px;
-  max-width: 200px;
-  padding: 0 16px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 14px;
-  background: var(--color-surface-panel);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  cursor: pointer;
-  flex-shrink: 1;
-  overflow: hidden;
-}
-
-.tab-item.active {
-  border-color: var(--color-action-primary);
-  color: var(--color-text-primary);
-  box-shadow: 0 10px 24px rgba(47, 109, 246, 0.12);
-}
-
-.tab-item-project {
-  padding-right: 8px;
-}
-
-.tab-item--pinned {
-  border-color: var(--color-action-primary-subtle-border);
-  background: var(--color-action-primary-subtle-bg);
-}
-
-.tab-label,
-.tab-close {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.tab-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+.sidebar-open-section-divider {
   flex: 1;
+  height: 1px;
+  background: var(--color-border-subtle);
+  opacity: 0.8;
 }
 
-.tab-close {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  border-radius: 999px;
+.sidebar-open-section-clear {
   flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 
-.tab-close:hover {
-  background: var(--color-surface-accent);
+.sidebar-open-section-header:hover .sidebar-open-section-clear,
+.sidebar-open-section-clear:focus-visible {
+  opacity: 1;
 }
+
+.sidebar-open-section-clear:hover {
+  background: var(--color-surface-accent);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-default);
+}
+
+/* 拖曳把手 */
+.sidebar-open-drag-handle {
+  flex-shrink: 0;
+  width: 16px;
+  color: var(--color-text-secondary);
+  cursor: grab;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.sidebar-open-item:hover .sidebar-open-drag-handle {
+  opacity: 0.5;
+}
+
+.sidebar-open-drag-handle:active {
+  cursor: grabbing;
+  opacity: 1;
+}
+
+/* 釘選區變成拖放目標時高亮 */
+.sidebar-pinned-section.sidebar-section--drop-target {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Pin icon 在釘選項目左側 */
+.sidebar-pin-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  width: 20px;
+}
+
+
+
+/* ─── Tabbar (removed, kept for sub-tab compatibility) ─────────────────────── */
 
 .dashboard-layout,
 .project-page {

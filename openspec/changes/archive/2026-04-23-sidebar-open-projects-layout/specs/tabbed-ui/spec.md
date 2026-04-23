@@ -1,4 +1,21 @@
-## ADDED Requirements
+## REMOVED Requirements
+
+### Requirement: 固定 Dashboard 分頁
+
+**Reason**: 橫排 tab 列移除，Dashboard 改以 Sidebar 的固定連結呈現，啟動時自動聚焦 dashboard 視圖的行為不變。
+**Migration**: Dashboard 入口保留於 Sidebar 頂部的「Dashboard」連結，行為與原本一致。
+
+### Requirement: Tab header 高度一致
+
+**Reason**: 橫排 tab 列移除後此需求不再適用；workspace-header 高度由視圖本身控制，無切換跳動問題。
+**Migration**: 無需遷移。workspace-header 相關樣式保留。
+
+### Requirement: 釘選專案 tab 排序優先
+
+**Reason**: 橫排 tab 列移除，釘選排序改由 Sidebar 區塊順序（釘選在上方、已開啟在下方）體現，無需 tab 排序邏輯。
+**Migration**: 釘選項目仍顯示於 Sidebar 釘選區塊，行為等效。
+
+## MODIFIED Requirements
 
 ### Requirement: ProjectView 內子分頁機制
 
