@@ -246,229 +246,233 @@ export function ProjectView({
 
   return (
     <section className="project-page">
-      {/* Sub-tab bar */}
-      <div className="sub-tab-bar">
-        <button
-          type="button"
-          className={`sub-tab-item ${activeSubTab === "sessions" ? "sub-tab-item--active" : ""}`}
-          onClick={() => setActiveSubTab("sessions")}
-        >
-          {t("project.subTab.sessions")}
-        </button>
-        <button
-          type="button"
-          className={`sub-tab-item ${activeSubTab === "plans-specs" ? "sub-tab-item--active" : ""}`}
-          onClick={() => setActiveSubTab("plans-specs")}
-        >
-          {t("project.subTab.plansSpecs")}
-        </button>
-        {openPlanKeys.map((planKey) => {
-          const sessionId = planKey.replace("plan:", "");
-          const session = project.sessions.find((s) => s.id === sessionId);
-          if (!session) return null;
-          const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
-          return (
-            <div
-              key={planKey}
-              className={`sub-tab-item sub-tab-item--closeable ${activeSubTab === planKey ? "sub-tab-item--active" : ""}`}
-            >
-              <button
-                type="button"
-                className="sub-tab-label"
-                onClick={() => {
-                  setActiveSubTab(planKey);
-                  onActivePlanChange(sessionId);
-                }}
+      <div className="sticky-project-header">
+        {/* Sub-tab bar */}
+        <div className="sub-tab-bar">
+          <button
+            type="button"
+            className={`sub-tab-item ${activeSubTab === "sessions" ? "sub-tab-item--active" : ""}`}
+            onClick={() => setActiveSubTab("sessions")}
+          >
+            {t("project.subTab.sessions")}
+          </button>
+          <button
+            type="button"
+            className={`sub-tab-item ${activeSubTab === "plans-specs" ? "sub-tab-item--active" : ""}`}
+            onClick={() => setActiveSubTab("plans-specs")}
+          >
+            {t("project.subTab.plansSpecs")}
+          </button>
+          {openPlanKeys.map((planKey) => {
+            const sessionId = planKey.replace("plan:", "");
+            const session = project.sessions.find((s) => s.id === sessionId);
+            if (!session) return null;
+            const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
+            return (
+              <div
+                key={planKey}
+                className={`sub-tab-item sub-tab-item--closeable ${activeSubTab === planKey ? "sub-tab-item--active" : ""}`}
               >
-                {t("plan.tab")} · {tabTitle}
-              </button>
-              <button
-                type="button"
-                className="sub-tab-close"
-                onClick={() => handleClosePlanSubTab(planKey)}
-                aria-label={`${t("tabs.close")} ${tabTitle}`}
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
+                <button
+                  type="button"
+                  className="sub-tab-label"
+                  onClick={() => {
+                    setActiveSubTab(planKey);
+                    onActivePlanChange(sessionId);
+                  }}
+                >
+                  {t("plan.tab")} · {tabTitle}
+                </button>
+                <button
+                  type="button"
+                  className="sub-tab-close"
+                  onClick={() => handleClosePlanSubTab(planKey)}
+                  aria-label={`${t("tabs.close")} ${tabTitle}`}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {activeSubTab === "sessions" ? (
+          <div className="sticky-filter-header">
+            <section className="toolbar-card">
+              <ProjectStatsBanner
+                sessions={filteredSessions}
+                sessionStats={sessionStats}
+                sessionStatsLoading={sessionStatsLoading}
+              />
+
+              <div className="filter-bar">
+                <label className="field-group compact-field" style={{ flex: 2, minWidth: '160px' }}>
+                  <span>{t("session.search")}</span>
+                  <input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.currentTarget.value)}
+                    placeholder={t("session.searchPlaceholder")}
+                  />
+                </label>
+
+                <label className="field-group compact-field">
+                  <span>{t("session.sort")}</span>
+                  <select
+                    value={sortKey}
+                    onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
+                  >
+                    <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
+                    <option value="createdAt">{t("session.sortCreatedAt")}</option>
+                    <option value="summaryCount">{t("session.sortSummaryCount")}</option>
+                    <option value="summary">{t("session.sortSummary")}</option>
+                  </select>
+                </label>
+
+                <label className="checkbox-group compact-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={showArchived}
+                    onChange={(event) => onToggleArchived(event.currentTarget.checked)}
+                  />
+                  <span>{t("project.showArchivedToggle")}</span>
+                </label>
+
+                <label className="checkbox-group compact-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={hideEmptySessions}
+                    onChange={(event) => onHideEmptySessionsChange(event.currentTarget.checked)}
+                  />
+                  <span>
+                    {t("session.filter.hideEmpty")}
+                    {hideEmptySessions && hiddenCount > 0 ? (
+                      <span className="hidden-count-hint">
+                        {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
+                      </span>
+                    ) : null}
+                  </span>
+                </label>
+
+                <div className="filter-bar-actions">
+                  {availableProviders.length > 1 ? (
+                    <>
+                      <span className="session-meta-label">{t("session.providerFilter")}</span>
+                      {availableProviders.map((provider) => {
+                        const isActive = selectedProviders.length === 0 || selectedProviders.includes(provider);
+                        return (
+                          <button
+                            key={provider}
+                            type="button"
+                            className={`tag-filter-chip ${isActive ? "active" : ""}`}
+                            onClick={() =>
+                              setSelectedProviders((current) => {
+                                if (current.length === 0) {
+                                  return [provider];
+                                }
+                                if (current.includes(provider)) {
+                                  const next = current.filter((p) => p !== provider);
+                                  return next.length === 0 ? [] : next;
+                                }
+                                const next = [...current, provider];
+                                return next.length === availableProviders.length ? [] : next;
+                              })
+                            }
+                          >
+                            {provider === "copilot" ? "Copilot" : provider === "opencode" ? "OpenCode" : provider}
+                          </button>
+                        );
+                      })}
+                    </>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
+                    aria-label={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
+                    onClick={onTogglePin}
+                  >
+                    {isPinned ? <UnpinIcon size={16} /> : <PinIcon size={16} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="icon-button icon-button--danger"
+                    title={t("session.actions.deleteEmpty")}
+                    aria-label={t("session.actions.deleteEmpty")}
+                    disabled={totalEmptySessions === 0}
+                    onClick={onDeleteEmptySessions}
+                  >
+                    <DeleteIcon size={16} />
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {availableTags.length > 0 ? (
+              <section className="tag-filter-bar">
+                <span className="session-meta-label">{t("session.tagFilter")}</span>
+                <div className="session-chip-row">
+                  {availableTags.map((tag) => {
+                    const isActive = selectedTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`tag-filter-chip ${isActive ? "active" : ""}`}
+                        onClick={() =>
+                          setSelectedTags((current) =>
+                            current.includes(tag)
+                              ? current.filter((item) => item !== tag)
+                              : [...current, tag],
+                          )
+                        }
+                      >
+                        #{tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {activeSubTab === "sessions" ? (
-        <>
-          <section className="toolbar-card">
-            <ProjectStatsBanner
-              sessions={filteredSessions}
-              sessionStats={sessionStats}
-              sessionStatsLoading={sessionStatsLoading}
-            />
-
-            <div className="filter-bar">
-              <label className="field-group compact-field" style={{ flex: 2, minWidth: '160px' }}>
-                <span>{t("session.search")}</span>
-                <input
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.currentTarget.value)}
-                  placeholder={t("session.searchPlaceholder")}
-                />
-              </label>
-
-              <label className="field-group compact-field">
-                <span>{t("session.sort")}</span>
-                <select
-                  value={sortKey}
-                  onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
-                >
-                  <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
-                  <option value="createdAt">{t("session.sortCreatedAt")}</option>
-                  <option value="summaryCount">{t("session.sortSummaryCount")}</option>
-                  <option value="summary">{t("session.sortSummary")}</option>
-                </select>
-              </label>
-
-              <label className="checkbox-group compact-checkbox">
-                <input
-                  type="checkbox"
-                  checked={showArchived}
-                  onChange={(event) => onToggleArchived(event.currentTarget.checked)}
-                />
-                <span>{t("project.showArchivedToggle")}</span>
-              </label>
-
-              <label className="checkbox-group compact-checkbox">
-                <input
-                  type="checkbox"
-                  checked={hideEmptySessions}
-                  onChange={(event) => onHideEmptySessionsChange(event.currentTarget.checked)}
-                />
-                <span>
-                  {t("session.filter.hideEmpty")}
-                  {hideEmptySessions && hiddenCount > 0 ? (
-                    <span className="hidden-count-hint">
-                      {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
-                    </span>
-                  ) : null}
-                </span>
-              </label>
-
-              <div className="filter-bar-actions">
-                {availableProviders.length > 1 ? (
-                  <>
-                    <span className="session-meta-label">{t("session.providerFilter")}</span>
-                    {availableProviders.map((provider) => {
-                      const isActive = selectedProviders.length === 0 || selectedProviders.includes(provider);
-                      return (
-                        <button
-                          key={provider}
-                          type="button"
-                          className={`tag-filter-chip ${isActive ? "active" : ""}`}
-                          onClick={() =>
-                            setSelectedProviders((current) => {
-                              if (current.length === 0) {
-                                return [provider];
-                              }
-                              if (current.includes(provider)) {
-                                const next = current.filter((p) => p !== provider);
-                                return next.length === 0 ? [] : next;
-                              }
-                              const next = [...current, provider];
-                              return next.length === availableProviders.length ? [] : next;
-                            })
-                          }
-                        >
-                          {provider === "copilot" ? "Copilot" : provider === "opencode" ? "OpenCode" : provider}
-                        </button>
-                      );
-                    })}
-                  </>
-                ) : null}
-
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
-                  aria-label={isPinned ? t("project.actions.unpin") : t("project.actions.pin")}
-                  onClick={onTogglePin}
-                >
-                  {isPinned ? <UnpinIcon size={16} /> : <PinIcon size={16} />}
-                </button>
-
-                <button
-                   type="button"
-                   className="icon-button icon-button--danger"
-                   title={t("session.actions.deleteEmpty")}
-                   aria-label={t("session.actions.deleteEmpty")}
-                   disabled={totalEmptySessions === 0}
-                   onClick={onDeleteEmptySessions}
-                 >
-                   <DeleteIcon size={16} />
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {availableTags.length > 0 ? (
-            <section className="tag-filter-bar">
-              <span className="session-meta-label">{t("session.tagFilter")}</span>
-              <div className="session-chip-row">
-                {availableTags.map((tag) => {
-                  const isActive = selectedTags.includes(tag);
-                  return (
-                    <button
-                      key={tag}
-                      type="button"
-                      className={`tag-filter-chip ${isActive ? "active" : ""}`}
-                      onClick={() =>
-                        setSelectedTags((current) =>
-                          current.includes(tag)
-                            ? current.filter((item) => item !== tag)
-                            : [...current, tag],
-                        )
-                      }
-                    >
-                      #{tag}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
-          <div className="session-list">
-            {sessionsLoading ? (
-              <>
-                <div className="skeleton-card" />
-                <div className="skeleton-card" />
-                <div className="skeleton-card" />
-              </>
-            ) : (
-              filteredSessions.map((session) => (
-                <SessionCard
-                  key={session.id}
-                  session={session}
-                  onOpenTerminal={onOpenTerminal}
-                  onCopyCommand={onCopyCommand}
-                  onEditNotes={onEditNotes}
-                  onEditTags={onEditTags}
-                  onOpenPlan={handleOpenPlanSubTab}
-                  onArchive={onArchive}
-                  onUnarchive={onUnarchive}
-                  onDelete={onDelete}
-                  stats={sessionStats[session.id]}
-                  statsLoading={Boolean(sessionStatsLoading[session.id])}
-                  activityStatus={activityStatusMap.get(session.id)}
-                  onOpenInTool={onOpenInTool}
-                  onFocusTerminal={onFocusTerminal}
-                  defaultLauncher={defaultLauncher}
-                  toolAvailability={toolAvailability}
-                  isLauncherOpen={openLauncherSessionId === session.id}
-                  onToggleLauncher={() => handleToggleLauncher(session.id)}
-                />
-              ))
-            )}
-          </div>
-        </>
+        <div className="session-list">
+          {sessionsLoading ? (
+            <>
+              <div className="skeleton-card" />
+              <div className="skeleton-card" />
+              <div className="skeleton-card" />
+            </>
+          ) : (
+            filteredSessions.map((session) => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                onOpenTerminal={onOpenTerminal}
+                onCopyCommand={onCopyCommand}
+                onEditNotes={onEditNotes}
+                onEditTags={onEditTags}
+                onOpenPlan={handleOpenPlanSubTab}
+                onArchive={onArchive}
+                onUnarchive={onUnarchive}
+                onDelete={onDelete}
+                stats={sessionStats[session.id]}
+                statsLoading={Boolean(sessionStatsLoading[session.id])}
+                activityStatus={activityStatusMap.get(session.id)}
+                onOpenInTool={onOpenInTool}
+                onFocusTerminal={onFocusTerminal}
+                defaultLauncher={defaultLauncher}
+                toolAvailability={toolAvailability}
+                isLauncherOpen={openLauncherSessionId === session.id}
+                onToggleLauncher={() => handleToggleLauncher(session.id)}
+              />
+            ))
+          )}
+        </div>
       ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView
           sisyphusData={sisyphusData}

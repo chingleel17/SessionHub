@@ -293,7 +293,7 @@ export function SettingsView({
             </span>
           </label>
 
-          <label className="field-group field-group--checkbox">
+          <label className="checkbox-group">
             <input
               type="checkbox"
               checked={settingsForm.showStatusBar ?? true}
