@@ -262,7 +262,7 @@ textarea {
 
 .workspace {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr auto;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -3038,4 +3038,368 @@ textarea {
 .tree-subgroup-btn:hover {
   background: var(--color-surface-input);
   color: var(--color-text-primary);
+}
+
+/* ── Bridge Event Monitor ─────────────────────────────────────── */
+
+.event-monitor-panel {
+  position: fixed;
+  width: min(860px, calc(100vw - 40px));
+  height: 60vh;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  z-index: 300;
+  /* user-select 防止拖曳時選取文字 */
+  user-select: none;
+}
+
+.event-monitor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+  cursor: grab;
+}
+
+.event-monitor-header:active {
+  cursor: grabbing;
+}
+
+.event-monitor-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8b949e;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: monospace;
+}
+
+.event-monitor-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.event-monitor-clear-btn {
+  color: #8b949e;
+}
+
+.event-log-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  font-family: 'Consolas', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+}
+
+.event-log-empty {
+  padding: 32px 20px;
+  color: #484f58;
+  text-align: center;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.event-log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 16px;
+  border-bottom: 1px solid #161b22;
+  flex-wrap: wrap;
+}
+
+.event-log-entry:hover {
+  background: #161b22;
+}
+
+.event-log-entry--copilot {
+  border-left: 2px solid #388bfd;
+}
+
+.event-log-entry--opencode {
+  border-left: 2px solid #3fb950;
+}
+
+.event-log-time {
+  color: #484f58;
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.event-log-provider {
+  color: #58a6ff;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 68px;
+}
+
+.event-log-entry--opencode .event-log-provider {
+  color: #3fb950;
+}
+
+.event-log-type {
+  color: #e3b341;
+  flex-shrink: 0;
+  min-width: 160px;
+}
+
+.event-log-status {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.event-log-status--targeted {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+}
+
+.event-log-status--fallback {
+  background: rgba(227, 179, 65, 0.15);
+  color: #e3b341;
+}
+
+.event-log-status--full-refresh {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.event-log-status--skipped {
+  background: rgba(72, 79, 88, 0.3);
+  color: #6e7681;
+}
+
+.event-log-cwd {
+  color: #8b949e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.event-log-error {
+  color: #f85149;
+  font-size: 11px;
+}
+
+/* ── Bridge Status Bar ───────────────────────────────────────────── */
+
+.bridge-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-family: 'Consolas', 'Fira Code', monospace;
+  color: var(--color-text-secondary);
+  margin-top: 12px;
+  min-height: 32px;
+}
+
+.bridge-status-bar--empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.bridge-status-bar-label {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.bridge-status-bar-time {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.bridge-status-bar-provider {
+  color: var(--color-action-primary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.bridge-status-bar-type {
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.bridge-status-bar-status {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.bridge-status-bar-status--targeted {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+}
+
+.bridge-status-bar-status--fallback {
+  background: rgba(227, 179, 65, 0.15);
+  color: #e3b341;
+}
+
+.bridge-status-bar-status--full_refresh {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.bridge-status-bar-status--skipped_dedup,
+.bridge-status-bar-status--skipped_rate_limit {
+  background: rgba(72, 79, 88, 0.3);
+  color: #6e7681;
+}
+
+.bridge-status-bar-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-muted);
+}
+
+/* ─── Global Status Bar ───────────────────────────────────────────────────── */
+
+.global-status-bar {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 100;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  padding: 0 12px;
+  font-size: 12px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.global-status-bar-event {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  min-width: 0;
+  flex: 1;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: background 0.15s;
+}
+
+.global-status-bar-event:hover {
+  background: var(--hover-bg);
+}
+
+.global-status-bar-no-event {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.global-status-bar-time {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.global-status-bar-provider {
+  color: var(--color-action-primary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.global-status-bar-type {
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.global-status-bar-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-text-muted);
+}
+
+.global-status-bar-status-dot--targeted { background: #58a6ff; }
+.global-status-bar-status-dot--fallback { background: #e3b341; }
+.global-status-bar-status-dot--full_refresh { background: #3fb950; }
+.global-status-bar-status-dot--skipped_dedup,
+.global-status-bar-status-dot--skipped_rate_limit { background: #6e7681; }
+
+.global-status-bar-status-label {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.global-status-bar-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  min-width: 0;
+}
+
+.global-status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.global-status-bar-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.global-status-bar-count--zero {
+  opacity: 0.4;
+}
+
+.global-status-bar-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.global-status-bar-count--active .global-status-bar-count-badge {
+  background: rgba(63, 185, 80, 0.2);
+  color: #3fb950;
+}
+
+.global-status-bar-count--waiting .global-status-bar-count-badge {
+  background: rgba(227, 179, 65, 0.2);
+  color: #e3b341;
 }

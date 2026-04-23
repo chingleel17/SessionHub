@@ -4,7 +4,8 @@ use crate::activity::get_session_activity_statuses_internal;
 use crate::db::{init_db, open_db_connection, upsert_session_meta_internal, delete_session_meta_internal};
 use crate::sessions::{
     archive_session_internal, delete_empty_sessions_internal, delete_session_internal,
-    directory_exists, get_sessions_internal, open_terminal_internal, unarchive_session_internal,
+    directory_exists, find_session_by_cwd_internal, get_sessions_internal, open_terminal_internal,
+    unarchive_session_internal,
 };
 use crate::settings::resolve_copilot_root;
 use crate::stats::get_session_stats_internal;
@@ -94,4 +95,13 @@ pub fn delete_session_meta(session_id: String) -> Result<(), String> {
     let connection = open_db_connection()?;
     init_db(&connection)?;
     delete_session_meta_internal(&connection, &session_id)
+}
+
+#[tauri::command]
+pub fn get_session_by_cwd(
+    cwd: String,
+    root_dir: Option<String>,
+) -> Result<Option<SessionInfo>, String> {
+    let copilot_root = resolve_copilot_root(root_dir.as_deref())?;
+    find_session_by_cwd_internal(&copilot_root, &cwd)
 }

@@ -10,6 +10,7 @@ import { marked } from "marked";
 import { useI18n } from "./i18n/I18nProvider";
 import type {
   AppSettings,
+  BridgeEventLogEntry,
   ConfirmDialogState,
   EditDialogState,
   IdeLauncherType,
@@ -19,17 +20,20 @@ import type {
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
+  SessionTargetedPayload,
   SisyphusData,
   ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
+import { StatusBar } from "./components/StatusBar";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -186,6 +190,11 @@ function App() {
   const [forceFull, setForceFull] = useState(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
+  const [bridgeEventLog, setBridgeEventLog] = useState<BridgeEventLogEntry[]>([]);
+  const [lastBridgeEvent, setLastBridgeEvent] = useState<{ entry: BridgeEventLogEntry; receivedAt: Date } | null>(null);
+  const [showEventMonitor, setShowEventMonitor] = useState(false);
+  const lastBridgeEventTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const hasShownOutdatedToast = useRef(false);
   const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
   const lastInterventionSessionRef = useRef<string | null>(null);
@@ -200,6 +209,7 @@ function App() {
     providerIntegrations: [],
     enableInterventionNotification: true,
     enableSessionEndNotification: false,
+    showStatusBar: true,
   });
 
   const settingsQuery = useQuery({
@@ -256,6 +266,7 @@ function App() {
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
         enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
         enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
+        showStatusBar: settingsQuery.data.showStatusBar ?? true,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
@@ -318,6 +329,38 @@ function App() {
       const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
       const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
 
+      const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
+        "copilot-session-targeted",
+        async (event) => {
+          const { cwd } = event.payload;
+          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
+            cwd,
+            rootDir: settingsQuery.data?.copilotRoot,
+          }).catch(() => null);
+
+          if (!mounted) return;
+
+          if (updated) {
+            queryClient.setQueriesData<SessionInfo[]>(
+              { queryKey: ["sessions"], exact: false },
+              (old) => {
+                if (!old) return old;
+                const idx = old.findIndex((s) => s.id === updated.id);
+                if (idx === -1) return [...old, updated];
+                const next = [...old];
+                next[idx] = updated;
+                return next;
+              }
+            );
+          } else {
+            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          }
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
+        }
+      );
+
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
         if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
         await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
@@ -327,13 +370,39 @@ function App() {
         }
       });
 
-      return () => { unlistenCopilot(); unlistenOpencode(); unlistenPlan(); };
+      return () => { unlistenCopilot(); unlistenOpencode(); unlistenCopilotTargeted(); unlistenPlan(); };
     };
 
     let cleanup: (() => void) | undefined;
     void setup().then((dispose) => { cleanup = dispose; });
     return () => { mounted = false; cleanup?.(); };
-  }, [activePlanSession, queryClient, t]);
+  }, [activePlanSession, queryClient, settingsQuery.data, t]);
+
+  useEffect(() => {
+    const MAX_LOG = 100;
+    const LAST_EVENT_TTL_MS = 5 * 60 * 1000;
+
+    const unlisten = listen<BridgeEventLogEntry>("provider-bridge-event-logged", (event) => {
+      const entry = event.payload;
+
+      setBridgeEventLog((prev) => {
+        const next = [...prev, entry];
+        return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next;
+      });
+
+      setLastBridgeEvent({ entry, receivedAt: new Date() });
+
+      if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+      lastBridgeEventTimerRef.current = setTimeout(() => {
+        setLastBridgeEvent(null);
+      }, LAST_EVENT_TTL_MS);
+    });
+
+    return () => {
+      void unlisten.then((fn) => fn());
+      if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!toastMessage) return undefined;
@@ -623,6 +692,28 @@ function App() {
     ) as Record<string, boolean | undefined>,
     [sessionStatsQueries, sessionsQuery.data],
   );
+
+  const { activeSessions, waitingSessions } = useMemo(() => {
+    const sessions = sessionsQuery.data ?? [];
+    const now = Date.now();
+    const THIRTY_MIN = 30 * 60 * 1000;
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    let active = 0;
+    let waiting = 0;
+    for (const s of sessions) {
+      if (s.isArchived) continue;
+      const stats = sessionStatsMap[s.id];
+      if (stats?.isLive) {
+        active++;
+        continue;
+      }
+      const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+      const elapsed = now - updatedAt;
+      if (elapsed <= THIRTY_MIN) active++;
+      else if (elapsed <= TWO_HOURS) waiting++;
+    }
+    return { activeSessions: active, waitingSessions: waiting };
+  }, [sessionsQuery.data, sessionStatsMap]);
 
   const sisyphusQuery = useQuery({
     queryKey: ["project_plans", activeProject?.pathLabel ?? ""],
@@ -1124,6 +1215,7 @@ function App() {
               onOpenProviderPath={(integration) => void handleOpenProviderPath(integration)}
               onEditProviderPath={(integration) => void handleEditProviderPath(integration)}
               pendingProviderAction={pendingProviderAction}
+              onOpenEventMonitor={() => setShowEventMonitor(true)}
             />
           ) : null}
 
@@ -1172,6 +1264,16 @@ function App() {
             />
           ) : null}
         </div>
+
+        {(settingsForm.showStatusBar ?? true) ? (
+          <StatusBar
+            lastBridgeEvent={lastBridgeEvent}
+            onOpenEventMonitor={() => setShowEventMonitor(true)}
+            activeSessions={activeSessions}
+            waitingSessions={waitingSessions}
+            isLoadingSessions={sessionsQuery.isLoading}
+          />
+        ) : null}
       </section>
 
       {confirmDialog ? (
@@ -1186,6 +1288,14 @@ function App() {
             editDialog.onConfirm(value);
             setEditDialog(null);
           }}
+        />
+      ) : null}
+
+      {showEventMonitor ? (
+        <BridgeEventMonitorDialog
+          events={bridgeEventLog}
+          onClose={() => setShowEventMonitor(false)}
+          onClear={() => setBridgeEventLog([])}
         />
       ) : null}
 

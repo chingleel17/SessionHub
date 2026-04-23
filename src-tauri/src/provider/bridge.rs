@@ -1,14 +1,18 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 
 use tauri::Emitter;
 
-use crate::settings::resolve_provider_bridge_path;
+use crate::sessions::find_session_by_cwd_internal;
+use crate::settings::{resolve_copilot_root, resolve_provider_bridge_path};
 use crate::types::*;
+
+static EVENT_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ── 路徑輔助 ────────────────────────────────────────────────────────────────
 
@@ -82,6 +86,29 @@ pub(crate) fn should_emit_provider_refresh_at(
 
     tracked.insert(provider.to_string(), now);
     Ok(true)
+}
+
+fn make_log_entry(record: &ProviderBridgeRecord, status: &str) -> BridgeEventLogEntry {
+    let seq = EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    BridgeEventLogEntry {
+        id: format!("{ms}-{seq}"),
+        provider: record.provider.clone(),
+        event_type: record.event_type.clone(),
+        timestamp: record.timestamp.clone(),
+        cwd: record.cwd.clone(),
+        session_id: record.session_id.clone(),
+        title: record.title.clone(),
+        error: record.error.clone(),
+        status: status.to_string(),
+    }
+}
+
+fn emit_event_log(app: &tauri::AppHandle, entry: BridgeEventLogEntry) {
+    let _ = app.emit("provider-bridge-event-logged", entry);
 }
 
 pub(crate) fn emit_provider_refresh(
@@ -302,10 +329,47 @@ pub(crate) fn process_provider_bridge_event(
     }
 
     if !register_provider_bridge_record(last_bridge_records, provider, &record)? {
+        emit_event_log(app, make_log_entry(&record, "skipped_dedup"));
         return Ok(false);
     }
 
-    emit_provider_refresh(app, refresh_state, provider)
+    if provider == COPILOT_PROVIDER {
+        if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
+            let copilot_root = resolve_copilot_root(None)?;
+            let rate_ok = should_emit_provider_refresh_at(refresh_state, COPILOT_PROVIDER, Instant::now())?;
+            if !rate_ok {
+                emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+                return Ok(false);
+            }
+
+            match find_session_by_cwd_internal(&copilot_root, cwd)? {
+                Some(session) => {
+                    let payload = SessionTargetedPayload {
+                        session_id: session.id.clone(),
+                        cwd: cwd.to_string(),
+                        event_type: record.event_type.clone(),
+                    };
+                    app.emit("copilot-session-targeted", payload)
+                        .map_err(|e| format!("failed to emit copilot-session-targeted: {e}"))?;
+                    emit_event_log(app, make_log_entry(&record, "targeted"));
+                }
+                None => {
+                    app.emit("copilot-sessions-updated", ())
+                        .map_err(|e| format!("failed to emit copilot-sessions-updated fallback: {e}"))?;
+                    emit_event_log(app, make_log_entry(&record, "fallback"));
+                }
+            }
+            return Ok(true);
+        }
+    }
+
+    let rate_ok = emit_provider_refresh(app, refresh_state, provider)?;
+    if rate_ok {
+        emit_event_log(app, make_log_entry(&record, "full_refresh"));
+    } else {
+        emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+    }
+    Ok(rate_ok)
 }
 
 // ── Bridge 記錄讀寫 ──────────────────────────────────────────────────────────

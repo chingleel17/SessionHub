@@ -27,6 +27,7 @@ export type AppSettings = {
     defaultLauncher?: string | null;
     enableInterventionNotification?: boolean;
     enableSessionEndNotification?: boolean;
+    showStatusBar?: boolean;
 };
 
 export type SessionActivityStatus = {
@@ -184,4 +185,23 @@ export type TreeNode = {
     defaultOpen?: boolean;
     filePath?: string;
     filePathType?: "absolute" | "openspec";
+};
+
+export type SessionTargetedPayload = {
+    sessionId: string;
+    cwd: string;
+    eventType: string;
+};
+
+export type BridgeEventLogEntry = {
+    id: string;
+    provider: string;
+    eventType: string;
+    timestamp: string;
+    cwd: string | null;
+    sessionId: string | null;
+    title: string | null;
+    error: string | null;
+    /** "targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit" */
+    status: string;
 };

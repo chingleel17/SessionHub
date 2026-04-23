@@ -268,6 +268,22 @@ export const zhTwMessages = {
   "plansSpecs.explorer.collapsePanel": "收折面板",
   "plansSpecs.explorer.expandPanel": "展開面板",
   "plansSpecs.explorer.title": "Explorer",
+  "eventMonitor.title": "Provider Bridge 事件監視器",
+  "eventMonitor.openButton": "開啟事件監視器",
+  "eventMonitor.clearButton": "清除",
+  "eventMonitor.closeButton": "關閉",
+  "eventMonitor.noEvents": "尚未收到任何事件。請觸發 Copilot/OpenCode 動作以查看事件。",
+  "eventMonitor.status.targeted": "精確定位",
+  "eventMonitor.status.fallback": "降級全量",
+  "eventMonitor.status.full_refresh": "全量刷新",
+  "eventMonitor.status.skipped_dedup": "略過（重複）",
+  "eventMonitor.status.skipped_rate_limit": "略過（頻率限制）",
+  "eventMonitor.lastEvent": "最後事件",
+  "eventMonitor.lastEvent.noEvent": "尚未收到事件",
+  "statusBar.noEvent": "尚未收到 Bridge 事件",
+  "statusBar.active": "進行中",
+  "statusBar.waiting": "等待回應",
+  "statusBar.showStatusBar": "顯示底部狀態列",
 } as const;
 
 export type MessageKey = keyof typeof zhTwMessages;

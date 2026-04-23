@@ -66,6 +66,7 @@ pub fn run() {
             open_plan_external,
             upsert_session_meta,
             delete_session_meta,
+            get_session_by_cwd,
             get_project_plans,
             get_project_specs,
             read_plan_content,

@@ -202,7 +202,65 @@ pub(crate) fn scan_copilot_incremental_internal(
     Ok(())
 }
 
-// ── Session 操作 ─────────────────────────────────────────────────────────────
+pub(crate) fn find_session_by_cwd_internal(
+    copilot_root: &Path,
+    target_cwd: &str,
+) -> Result<Option<SessionInfo>, String> {
+    let normalize = |p: &str| p.replace('\\', "/").to_lowercase();
+    let normalized_target = normalize(target_cwd);
+
+    let connection = open_db_connection()?;
+    init_db(&connection)?;
+
+    for (dir, is_archived) in [
+        (copilot_root.join("session-state"), false),
+        (copilot_root.join("session-state-archive"), true),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
+            let session_dir = entry.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let workspace_path = session_dir.join("workspace.yaml");
+            if !workspace_path.exists() {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&workspace_path) {
+                if let Ok(workspace) = serde_yaml::from_str::<WorkspaceYaml>(&content) {
+                    if workspace
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|c| normalize(c) == normalized_target)
+                    {
+                        let session_id = session_dir
+                            .file_name()
+                            .map(|v| v.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let meta = read_session_meta(&connection, &session_id)?;
+                        return Ok(Some(parse_workspace_file(
+                            &session_dir,
+                            &workspace_path,
+                            is_archived,
+                            meta,
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+
 
 pub(crate) fn archive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     let source_dir = root_dir.join("session-state").join(session_id);

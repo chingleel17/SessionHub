@@ -20,6 +20,7 @@ type Props = {
   onOpenProviderPath: (integration: ProviderIntegrationStatus) => void;
   onEditProviderPath: (integration: ProviderIntegrationStatus) => void;
   pendingProviderAction: string | null;
+  onOpenEventMonitor: () => void;
 };
 
 function getProviderLabel(
@@ -120,6 +121,7 @@ export function SettingsView({
   onOpenProviderPath,
   onEditProviderPath,
   pendingProviderAction,
+  onOpenEventMonitor,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
@@ -291,6 +293,17 @@ export function SettingsView({
             </span>
           </label>
 
+          <label className="field-group field-group--checkbox">
+            <input
+              type="checkbox"
+              checked={settingsForm.showStatusBar ?? true}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, showStatusBar: event.currentTarget.checked })
+              }
+            />
+            <span>{t("statusBar.showStatusBar")}</span>
+          </label>
+
           <div className="settings-field">
             <label htmlFor="default-launcher-select">{t("settings.fields.defaultLauncher")}</label>
             <select
@@ -340,7 +353,16 @@ export function SettingsView({
       <article className="info-card">
         <div className="section-heading">
           <h3>{t("settings.integrations.title")}</h3>
-          <span>{t("settings.integrations.subtitle")}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span>{t("settings.integrations.subtitle")}</span>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={onOpenEventMonitor}
+            >
+              {t("eventMonitor.openButton")}
+            </button>
+          </div>
         </div>
 
         {providerIntegrations.length === 0 ? (

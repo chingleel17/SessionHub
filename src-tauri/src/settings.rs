@@ -143,6 +143,7 @@ impl AppSettings {
             default_launcher: None,
             enable_intervention_notification: true,
             enable_session_end_notification: false,
+            show_status_bar: true,
         })
     }
 }

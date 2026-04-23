@@ -37,6 +37,7 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         default_launcher: None,
         enable_intervention_notification: true,
         enable_session_end_notification: false,
+        show_status_bar: true,
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

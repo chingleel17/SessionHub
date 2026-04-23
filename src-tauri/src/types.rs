@@ -54,6 +54,10 @@ pub(crate) fn default_notification_enabled() -> bool {
     true
 }
 
+pub(crate) fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionActivityStatus {
@@ -63,6 +67,31 @@ pub(crate) struct SessionActivityStatus {
     /// "thinking" | "tool_call" | "file_op" | "sub_agent" | "working" | "completed"
     pub(crate) detail: Option<String>,
     pub(crate) last_activity_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionTargetedPayload {
+    pub(crate) session_id: String,
+    pub(crate) cwd: String,
+    pub(crate) event_type: String,
+}
+
+/// 每次 provider bridge 收到事件時發送給前端的 debug log 記錄。
+/// status 可能值："targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit"
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BridgeEventLogEntry {
+    pub(crate) id: String,
+    pub(crate) provider: String,
+    pub(crate) event_type: String,
+    pub(crate) timestamp: String,
+    pub(crate) cwd: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) error: Option<String>,
+    /// "targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit"
+    pub(crate) status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +115,8 @@ pub(crate) struct AppSettings {
     pub(crate) enable_intervention_notification: bool,
     #[serde(default)]
     pub(crate) enable_session_end_notification: bool,
+    #[serde(default = "default_true")]
+    pub(crate) show_status_bar: bool,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
