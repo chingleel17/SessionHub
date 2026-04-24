@@ -415,3 +415,77 @@ pub(crate) fn watch_plan_file_internal(
     *plan_watcher = Some(watcher);
     Ok(())
 }
+
+pub(crate) fn is_relevant_project_event(event: &notify::Event, project_dir: &Path) -> bool {
+    let sisyphus_dir = project_dir.join(".sisyphus");
+    let openspec_dir = project_dir.join("openspec");
+
+    event.paths.iter().any(|path| {
+        path == &sisyphus_dir
+            || path.starts_with(&sisyphus_dir)
+            || path == &openspec_dir
+            || path.starts_with(&openspec_dir)
+    })
+}
+
+pub(crate) fn watch_project_files_internal(
+    app: &tauri::AppHandle,
+    watcher_state: &WatcherState,
+    project_dir: &str,
+) -> Result<(), String> {
+    let project_path = PathBuf::from(project_dir);
+    if !project_path.is_dir() {
+        return Err(format!("project directory not found: {}", project_path.display()));
+    }
+
+    let app_handle = app.clone();
+    let watched_project_dir = project_dir.to_string();
+    let relevant_root = project_path.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if let Ok(event) = result {
+            if !is_relevant_project_event(&event, &relevant_root) {
+                return;
+            }
+
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            let payload = watched_project_dir.clone();
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(PROJECT_FILES_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(PROJECT_FILES_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    let _ = handle.emit("project-files-changed", payload.clone());
+                    break;
+                }
+            });
+        }
+    })
+    .map_err(|error| format!("failed to create project watcher: {error}"))?;
+
+    watcher
+        .watch(&project_path, RecursiveMode::Recursive)
+        .map_err(|error| format!("failed to watch {}: {error}", project_path.display()))?;
+
+    let mut project_watcher = watcher_state
+        .project
+        .lock()
+        .map_err(|_| "failed to lock project watcher state".to_string())?;
+    *project_watcher = Some(watcher);
+    Ok(())
+}

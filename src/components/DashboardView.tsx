@@ -304,6 +304,7 @@ function KanbanBoard({
 
   useEffect(() => { widthsRef.current = columnWidths; }, [columnWidths]);
   useEffect(() => { saveColumnWidths(columnWidths); }, [columnWidths]);
+  useEffect(() => { setDoneLimit(DONE_INITIAL_LIMIT); }, [groupedProjects]);
 
   const handleToggleMenu = useCallback((sessionId: string, rect: DOMRect) => {
     setOpenMenu((prev) => prev?.sessionId === sessionId ? null : { sessionId, rect });
@@ -597,38 +598,42 @@ export function DashboardView({
               <span>{t("dashboard.projects.subtitle")}</span>
             </div>
 
-            <div className="project-list">
-              {groupedProjects.map((project) => {
-                const lastSession = project.sessions[0];
-                const lastSessionTitle = lastSession?.summary?.trim() || null;
-                return (
-                  <button
-                    key={project.key}
-                    type="button"
-                    className="project-item"
-                    onClick={() => onOpenProject(project.key)}
-                  >
-                    <div className="project-item-info">
-                      <strong>{project.title}</strong>
-                      <p>{project.pathLabel}</p>
-                      {lastSessionTitle ? (
-                        <p className="project-last-session-title">
-                          {truncate(lastSessionTitle, PROJECT_LAST_SESSION_MAX_LEN)}
-                        </p>
-                      ) : null}
-                    </div>
+             <div className="project-list">
+               {groupedProjects.length > 0 ? (
+                 groupedProjects.map((project) => {
+                   const lastSession = project.sessions[0];
+                   const lastSessionTitle = lastSession?.summary?.trim() || null;
+                   return (
+                     <button
+                       key={project.key}
+                       type="button"
+                       className="project-item"
+                       onClick={() => onOpenProject(project.key)}
+                     >
+                       <div className="project-item-info">
+                         <strong>{project.title}</strong>
+                         <p>{project.pathLabel}</p>
+                         {lastSessionTitle ? (
+                           <p className="project-last-session-title">
+                             {truncate(lastSessionTitle, PROJECT_LAST_SESSION_MAX_LEN)}
+                           </p>
+                         ) : null}
+                       </div>
 
-                    <div className="project-meta">
-                      <span>
-                        {project.sessions.length} {t("dashboard.projects.sessionCountSuffix")}
-                      </span>
-                      <span>{project.updatedAtLabel}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </article>
+                       <div className="project-meta">
+                         <span>
+                           {project.sessions.length} {t("dashboard.projects.sessionCountSuffix")}
+                         </span>
+                         <span>{project.updatedAtLabel}</span>
+                       </div>
+                     </button>
+                   );
+                 })
+               ) : (
+                 <p className="dashboard-empty-state">{t("dashboard.projects.empty")}</p>
+               )}
+             </div>
+           </article>
 
           <article className="info-card">
             <div className="section-heading">
@@ -639,27 +644,33 @@ export function DashboardView({
             </div>
 
             <ul className="feature-list feature-list-tight">
-              {recentSessions.map((session) => {
-                const fullTitle = getSessionTitle(session);
-                const projectName = getProjectShortName(session.cwd);
-                return (
-                  <li key={session.id}>
-                    <div className="recent-session-item">
-                      <button
-                        type="button"
-                        className="inline-link"
-                        title={fullTitle}
-                        onClick={() => onOpenRecentSession(session)}
-                      >
-                        {truncate(fullTitle, RECENT_TITLE_MAX_LEN)}
-                      </button>
-                      {projectName ? (
-                        <span className="recent-session-project">{projectName}</span>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
+              {recentSessions.length > 0 ? (
+                recentSessions.map((session) => {
+                  const fullTitle = getSessionTitle(session);
+                  const projectName = getProjectShortName(session.cwd);
+                  return (
+                    <li key={session.id}>
+                      <div className="recent-session-item">
+                        <button
+                          type="button"
+                          className="inline-link"
+                          title={fullTitle}
+                          onClick={() => onOpenRecentSession(session)}
+                        >
+                          {truncate(fullTitle, RECENT_TITLE_MAX_LEN)}
+                        </button>
+                        {projectName ? (
+                          <span className="recent-session-project">{projectName}</span>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })
+              ) : (
+                <li className="dashboard-empty-state dashboard-empty-state--list">
+                  {t("dashboard.recent.empty")}
+                </li>
+              )}
             </ul>
           </article>
         </section>

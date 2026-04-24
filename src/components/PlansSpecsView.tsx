@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { OpenSpecData, SisyphusData, TreeNode } from "../types";
 import { buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
@@ -9,19 +9,25 @@ type Props = {
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
   isLoading: boolean;
+  isRefreshing: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
   onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+  onRefresh: () => Promise<void>;
+  refreshToken: string;
   projectCwd: string;
 };
 
-const DEFAULT_EXPLORER_WIDTH = 260;
+const DEFAULT_EXPLORER_WIDTH = 215;
 
 export function PlansSpecsView({
   sisyphusData,
   openspecData,
   isLoading,
+  isRefreshing,
   onReadFileContent,
   onReadOpenspecFile,
+  onRefresh,
+  refreshToken,
   projectCwd,
 }: Props) {
   const { t } = useI18n();
@@ -35,6 +41,7 @@ export function PlansSpecsView({
   const isDragging = useRef(false);
   const resizerRef = useRef<HTMLDivElement>(null);
   const cleanupDragRef = useRef<(() => void) | null>(null);
+  const lastHandledRefreshTokenRef = useRef(refreshToken);
 
   useEffect(() => {
     return () => {
@@ -42,21 +49,19 @@ export function PlansSpecsView({
     };
   }, []);
 
-  const handleSelect = useCallback(
-    async (node: TreeNode) => {
+  const loadNodeContent = useCallback(
+    async (node: TreeNode, resetContent: boolean) => {
       if (!node.filePath) return;
-      setSelectedNode(node);
       setContentLoading(true);
       setContentError(null);
-      setContent(null);
+      if (resetContent) {
+        setContent(null);
+      }
       setContentFilePath(node.filePath);
       try {
-        let text: string;
-        if (node.filePathType === "openspec") {
-          text = await onReadOpenspecFile(projectCwd, node.filePath);
-        } else {
-          text = await onReadFileContent(node.filePath);
-        }
+        const text = node.filePathType === "openspec"
+          ? await onReadOpenspecFile(projectCwd, node.filePath)
+          : await onReadFileContent(node.filePath);
         setContent(text);
       } catch (e) {
         setContentError(e instanceof Error ? e.message : String(e));
@@ -64,7 +69,16 @@ export function PlansSpecsView({
         setContentLoading(false);
       }
     },
-    [onReadFileContent, onReadOpenspecFile, projectCwd]
+    [onReadFileContent, onReadOpenspecFile, projectCwd],
+  );
+
+  const handleSelect = useCallback(
+    async (node: TreeNode) => {
+      if (!node.filePath) return;
+      setSelectedNode(node);
+      await loadNodeContent(node, true);
+    },
+    [loadNodeContent],
   );
 
   const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -99,12 +113,6 @@ export function PlansSpecsView({
     document.addEventListener("mouseup", onMouseUp);
   }, [explorerWidth]);
 
-  if (isLoading) {
-    return (
-      <div className="plans-specs-empty">{t("plansSpecs.loading")}</div>
-    );
-  }
-
   const hasSisyphus =
     sisyphusData &&
     (sisyphusData.plans.length > 0 ||
@@ -119,37 +127,81 @@ export function PlansSpecsView({
       openspecData.archivedChanges.length > 0 ||
       openspecData.specs.length > 0);
 
+  const rootNodes = useMemo<TreeNode[]>(() => {
+    const sisyphusNodes = hasSisyphus && sisyphusData ? buildSisyphusTree(sisyphusData, t) : [];
+    const openspecNodes = hasOpenSpec && openspecData ? buildOpenSpecTree(openspecData, t) : [];
+
+    return [
+      ...(sisyphusNodes.length > 0
+        ? [
+            {
+              id: "root:sisyphus",
+              label: t("plansSpecs.sisyphus.title"),
+              defaultOpen: true,
+              children: sisyphusNodes,
+            },
+          ]
+        : []),
+      ...(openspecNodes.length > 0
+        ? [
+            {
+              id: "root:openspec",
+              label: t("plansSpecs.openspec.title"),
+              defaultOpen: true,
+              children: openspecNodes,
+            },
+          ]
+        : []),
+    ];
+  }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t]);
+
+  useEffect(() => {
+    if (!selectedNode?.id) return;
+    if (lastHandledRefreshTokenRef.current === refreshToken) return;
+    lastHandledRefreshTokenRef.current = refreshToken;
+
+    const stack = [...rootNodes];
+    let matchedNode: TreeNode | null = null;
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (node.id === selectedNode.id) {
+        matchedNode = node;
+        break;
+      }
+      if (node.children) {
+        stack.push(...node.children);
+      }
+    }
+
+    if (!matchedNode?.filePath) {
+      setSelectedNode(null);
+      setContent(null);
+      setContentFilePath(null);
+      setContentError(null);
+      return;
+    }
+
+    if (
+      selectedNode.filePath !== matchedNode.filePath ||
+      selectedNode.filePathType !== matchedNode.filePathType
+    ) {
+      setSelectedNode(matchedNode);
+    }
+
+    void loadNodeContent(matchedNode, false);
+  }, [loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
+
+  if (isLoading) {
+    return (
+      <div className="plans-specs-empty">{t("plansSpecs.loading")}</div>
+    );
+  }
+
   if (!hasSisyphus && !hasOpenSpec) {
     return (
       <div className="plans-specs-empty">{t("plansSpecs.empty")}</div>
     );
   }
-
-  const sisyphusNodes = hasSisyphus && sisyphusData ? buildSisyphusTree(sisyphusData, t) : [];
-  const openspecNodes = hasOpenSpec && openspecData ? buildOpenSpecTree(openspecData, t) : [];
-
-  const rootNodes: TreeNode[] = [
-    ...(sisyphusNodes.length > 0
-      ? [
-          {
-            id: "root:sisyphus",
-            label: t("plansSpecs.sisyphus.title"),
-            defaultOpen: true,
-            children: sisyphusNodes,
-          },
-        ]
-      : []),
-    ...(openspecNodes.length > 0
-      ? [
-          {
-            id: "root:openspec",
-            label: t("plansSpecs.openspec.title"),
-            defaultOpen: true,
-            children: openspecNodes,
-          },
-        ]
-      : []),
-  ];
 
   return (
     <div
@@ -163,7 +215,19 @@ export function PlansSpecsView({
       >
         <div className="explorer-panel-header">
           {!isCollapsed ? (
-            <span className="explorer-panel-title">{t("plansSpecs.explorer.title")}</span>
+            <div className="explorer-panel-heading">
+              <span className="explorer-panel-title">{t("plansSpecs.explorer.title")}</span>
+              <button
+                type="button"
+                className="explorer-refresh-btn"
+                onClick={() => { void onRefresh(); }}
+                title={t("app.actions.refresh")}
+                aria-label={t("app.actions.refresh")}
+                disabled={isRefreshing}
+              >
+                ↻
+              </button>
+            </div>
           ) : null}
           <button
             type="button"

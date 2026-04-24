@@ -41,8 +41,8 @@
 
 ## 8. 測試驗收
 
-- [ ] 8.1 手動測試：觸發 Copilot session 進入 `waiting` 狀態，確認 SessionHub 發出 Toast
-- [ ] 8.2 確認關閉設定開關後不再發送通知
-- [ ] 8.3 確認同一 session 持續 `waiting` 時只有一筆通知出現在通知中心
-- [ ] 8.4 確認點擊 Toast 後視窗前景化並聚焦到正確 project tab
+- [x] 8.1 手動測試：觸發 Copilot session 進入 `waiting` 狀態，確認 SessionHub 發出 Toast
+- [x] 8.2 確認關閉設定開關後不再發送通知
+- [x] 8.3 確認同一 session 持續 `waiting` 時只有一筆通知出現在通知中心
+- [x] 8.4 確認點擊 Toast 後視窗前景化並聚焦到正確 project tab
 - [x] 8.5 `cargo test` 通過，`bun run build` 無 TypeScript 錯誤

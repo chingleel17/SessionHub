@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -46,6 +46,24 @@ function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string
   const raw = session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
   return normalizePath(raw);
+}
+
+function getDashboardPeriodStart(period: "week" | "month"): number {
+  const now = new Date();
+  if (period === "week") {
+    const start = new Date(now);
+    start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    start.setHours(0, 0, 0, 0);
+    return start.getTime();
+  }
+
+  return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+}
+
+function isSessionInUpdatedRange(session: SessionInfo, periodStartTime: number): boolean {
+  if (!session.updatedAt) return false;
+  const updatedAtTime = Date.parse(session.updatedAt);
+  return !Number.isNaN(updatedAtTime) && updatedAtTime >= periodStartTime;
 }
 
 function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string, locale: string): ProjectGroup[] {
@@ -147,6 +165,10 @@ function resolveErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+function getRealtimeSyncLabel(): string {
+  return new Date().toLocaleTimeString("zh-TW", { hour12: false });
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -312,71 +334,6 @@ function App() {
     void invoke("watch_plan_file", { sessionDir: activePlanSession.sessionDir });
     return () => { void invoke("stop_plan_watch"); };
   }, [activePlanSession]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const onSessionsRefresh = async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      if (mounted) {
-        setRealtimeStatus("active");
-        setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
-        showToast(t("toast.sessionsUpdated"));
-      }
-    };
-
-    const setup = async () => {
-      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
-      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
-
-      const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
-        "copilot-session-targeted",
-        async (event) => {
-          const { cwd } = event.payload;
-          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
-            cwd,
-            rootDir: settingsQuery.data?.copilotRoot,
-          }).catch(() => null);
-
-          if (!mounted) return;
-
-          if (updated) {
-            queryClient.setQueriesData<SessionInfo[]>(
-              { queryKey: ["sessions"], exact: false },
-              (old) => {
-                if (!old) return old;
-                const idx = old.findIndex((s) => s.id === updated.id);
-                if (idx === -1) return [...old, updated];
-                const next = [...old];
-                next[idx] = updated;
-                return next;
-              }
-            );
-          } else {
-            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          }
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
-        }
-      );
-
-      const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
-        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
-        await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
-        if (mounted) {
-          setRealtimeStatus("active");
-          showToast(t("toast.planReloaded"));
-        }
-      });
-
-      return () => { unlistenCopilot(); unlistenOpencode(); unlistenCopilotTargeted(); unlistenPlan(); };
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((dispose) => { cleanup = dispose; });
-    return () => { mounted = false; cleanup?.(); };
-  }, [activePlanSession, queryClient, settingsQuery.data, t]);
 
   useEffect(() => {
     const MAX_LOG = 100;
@@ -654,13 +611,104 @@ function App() {
     [activeView, groupedProjects],
   );
 
-  const recentSessions = useMemo(
-    () =>
-      [...(sessionsQuery.data ?? [])]
-        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
-        .slice(0, 10),
-    [sessionsQuery.data],
+  const refreshProjectPlansSpecs = useCallback(
+    async (projectDir: string) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
+        queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] }),
+      ]);
+    },
+    [queryClient],
   );
+
+  useEffect(() => {
+    if (!activeProject?.pathLabel) {
+      void invoke("stop_project_watch");
+      return undefined;
+    }
+    void invoke("watch_project_files", { projectDir: activeProject.pathLabel });
+    return () => { void invoke("stop_project_watch"); };
+  }, [activeProject?.pathLabel]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const onSessionsRefresh = async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      if (mounted) {
+        setRealtimeStatus("active");
+        setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        showToast(t("toast.sessionsUpdated"));
+      }
+    };
+
+    const setup = async () => {
+      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
+      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
+
+      const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
+        "copilot-session-targeted",
+        async (event) => {
+          const { cwd } = event.payload;
+          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
+            cwd,
+            rootDir: settingsQuery.data?.copilotRoot,
+          }).catch(() => null);
+
+          if (!mounted) return;
+
+          if (updated) {
+            queryClient.setQueriesData<SessionInfo[]>(
+              { queryKey: ["sessions"], exact: false },
+              (old) => {
+                if (!old) return old;
+                const idx = old.findIndex((s) => s.id === updated.id);
+                if (idx === -1) return [...old, updated];
+                const next = [...old];
+                next[idx] = updated;
+                return next;
+              }
+            );
+          } else {
+            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          }
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
+        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
+        await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
+        if (mounted) {
+          setRealtimeStatus("active");
+          showToast(t("toast.planReloaded"));
+        }
+      });
+
+      const unlistenProjectFiles = await listen<string>("project-files-changed", async (event) => {
+        if (!activeProject || event.payload !== activeProject.pathLabel) return;
+        await refreshProjectPlansSpecs(activeProject.pathLabel);
+        if (mounted) {
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      });
+
+      return () => {
+        unlistenCopilot();
+        unlistenOpencode();
+        unlistenCopilotTargeted();
+        unlistenPlan();
+        unlistenProjectFiles();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => { cleanup = dispose; });
+    return () => { mounted = false; cleanup?.(); };
+  }, [activePlanSession, activeProject, queryClient, refreshProjectPlansSpecs, settingsQuery.data, t]);
 
   const deletableEmptySessionCount = useMemo(
     () =>
@@ -822,6 +870,13 @@ function App() {
     return invoke<string>("read_openspec_file", { projectCwd, relativePath });
   };
 
+  const handleRefreshPlansSpecs = async (): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
+    setRealtimeStatus("active");
+    setLastRealtimeSyncAt(getRealtimeSyncLabel());
+  };
+
   const handleOpenInTool = async (session: SessionInfo, toolType: IdeLauncherType) => {
     if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
     const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
@@ -851,25 +906,32 @@ function App() {
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
   const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
 
-  const filteredDashboardTotals = useMemo(() => {
-    const now = new Date();
-    let periodStart: Date;
-    if (dashboardPeriod === "week") {
-      // 週一 00:00:00（ISO week）
-      periodStart = new Date(now);
-      periodStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-      periodStart.setHours(0, 0, 0, 0);
-    } else {
-      // 當月 1 日 00:00:00
-      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    }
-    const periodStartTime = periodStart.getTime();
+  const dashboardPeriodStart = useMemo(
+    () => getDashboardPeriodStart(dashboardPeriod),
+    [dashboardPeriod],
+  );
 
-    return (sessionsQuery.data ?? []).reduce(
+  const filteredDashboardSessions = useMemo(
+    () => (sessionsQuery.data ?? []).filter((session) => isSessionInUpdatedRange(session, dashboardPeriodStart)),
+    [dashboardPeriodStart, sessionsQuery.data],
+  );
+
+  const filteredDashboardProjects = useMemo(
+    () => buildProjectGroups(filteredDashboardSessions, uncategorizedLabel, locale),
+    [filteredDashboardSessions, locale, uncategorizedLabel],
+  );
+
+  const filteredRecentSessions = useMemo(
+    () =>
+      [...filteredDashboardSessions]
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+        .slice(0, 10),
+    [filteredDashboardSessions],
+  );
+
+  const filteredDashboardTotals = useMemo(() => {
+    return filteredDashboardSessions.reduce(
       (acc, session) => {
-        if (!session.updatedAt) return acc;
-        const updatedAtTime = Date.parse(session.updatedAt);
-        if (Number.isNaN(updatedAtTime) || updatedAtTime < periodStartTime) return acc;
         const stats = sessionStatsMap[session.id];
         if (!stats) return acc;
         acc.totalOutputTokens += stats.outputTokens;
@@ -882,7 +944,7 @@ function App() {
       },
       { totalOutputTokens: 0, totalInteractions: 0, totalCost: 0 },
     );
-  }, [dashboardPeriod, sessionsQuery.data, sessionStatsMap]);
+  }, [filteredDashboardSessions, sessionStatsMap]);
 
   const planPreviewHtml = useMemo(
     () =>
@@ -1181,8 +1243,8 @@ function App() {
               sessionsIsFetching={sessionsQuery.isFetching}
               sessionsIsError={sessionsQuery.isError}
               sessionsError={sessionsQuery.error}
-              groupedProjects={groupedProjects}
-              recentSessions={recentSessions}
+              groupedProjects={filteredDashboardProjects}
+              recentSessions={filteredRecentSessions}
               dashboardPeriod={dashboardPeriod}
               onPeriodChange={setDashboardPeriod}
               filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
@@ -1244,8 +1306,11 @@ function App() {
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecQuery.data}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
+              plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
               onReadFileContent={handleReadFileContent}
               onReadOpenspecFile={handleReadOpenspecFile}
+              onRefreshPlansSpecs={handleRefreshPlansSpecs}
+              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}

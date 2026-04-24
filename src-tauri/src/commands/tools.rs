@@ -4,10 +4,13 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+use tauri::State;
+
 use crate::openspec_scan::{read_openspec_file_internal, scan_openspec_internal};
 use crate::sessions::open_terminal_internal;
 use crate::sisyphus::scan_sisyphus_internal;
 use crate::types::*;
+use crate::watcher::watch_project_files_internal;
 
 fn which_exists(cmd: &str) -> bool {
     let mut c = std::process::Command::new("where");
@@ -157,4 +160,23 @@ pub fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
 #[tauri::command]
 pub fn read_openspec_file(project_cwd: String, relative_path: String) -> Result<String, String> {
     read_openspec_file_internal(&project_cwd, &relative_path)
+}
+
+#[tauri::command]
+pub fn watch_project_files(
+    app: tauri::AppHandle,
+    watcher_state: State<'_, WatcherState>,
+    project_dir: String,
+) -> Result<(), String> {
+    watch_project_files_internal(&app, &watcher_state, &project_dir)
+}
+
+#[tauri::command]
+pub fn stop_project_watch(watcher_state: State<'_, WatcherState>) -> Result<(), String> {
+    let mut project_watcher = watcher_state
+        .project
+        .lock()
+        .map_err(|_| "failed to lock project watcher state".to_string())?;
+    *project_watcher = None;
+    Ok(())
 }

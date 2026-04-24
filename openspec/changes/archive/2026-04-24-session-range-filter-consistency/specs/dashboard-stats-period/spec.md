@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Dashboard 統計時間範圍切換
 系統 SHALL 在 Dashboard 提供「本周 / 本月」切換器，並將所選時間範圍同時套用到統計卡、專案預覽、最近活動與 Kanban 資料集；token 用量與互動次數只統計所選時間範圍內有更新的 session。

@@ -27,7 +27,7 @@
 
 ## 6. 測試驗證
 
-- [ ] 6.1 在 `src-tauri/src/sessions/copilot.rs` 補充 `find_session_by_cwd_internal` 的單元測試（正常比對、路徑正規化、找不到 session 三個場景）
+- [x] 6.1 在 `src-tauri/src/sessions/copilot.rs` 補充 `find_session_by_cwd_internal` 的單元測試（正常比對、路徑正規化、找不到 session 三個場景）
 - [x] 6.2 執行 `cd src-tauri && cargo test` 確認所有 Rust 測試通過
 - [x] 6.3 執行 `bun run build` 確認 TypeScript 編譯無錯誤
-- [ ] 6.4 手動驗證：在有 hook bridge 安裝的環境下，開啟 SessionHub 並在某個 session 中執行 prompt，確認 UI 只更新該 session 而不全量閃爍
+- [x] 6.4 手動驗證：在有 hook bridge 安裝的環境下，開啟 SessionHub 並在某個 session 中執行 prompt，確認 UI 只更新該 session 而不全量閃爍

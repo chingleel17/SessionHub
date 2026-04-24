@@ -351,6 +351,7 @@ pub(crate) struct SessionEvent {
 pub(crate) struct WatcherState {
     pub(crate) sessions: Mutex<Option<RecommendedWatcher>>,
     pub(crate) plan: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) project: Mutex<Option<RecommendedWatcher>>,
     pub(crate) opencode: Mutex<Option<RecommendedWatcher>>,
     pub(crate) provider_bridge: Mutex<Option<RecommendedWatcher>>,
     pub(crate) last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
@@ -361,6 +362,8 @@ pub(crate) struct WatcherState {
 pub(crate) const COPILOT_DEBOUNCE_MS: u64 = 800;
 /// OpenCode WAL watcher 防抖時間（毫秒）
 pub(crate) const OPENCODE_DEBOUNCE_MS: u64 = 500;
+/// 專案 plans/specs watcher 防抖時間（毫秒）
+pub(crate) const PROJECT_FILES_DEBOUNCE_MS: u64 = 400;
 /// Provider bridge watcher 防抖時間（毫秒）
 pub(crate) const PROVIDER_BRIDGE_DEBOUNCE_MS: u64 = 250;
 /// 短時間內同 provider refresh 去重視窗（毫秒）

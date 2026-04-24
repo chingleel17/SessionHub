@@ -74,6 +74,8 @@ pub fn run() {
             open_in_tool,
             focus_terminal_window,
             read_openspec_file,
+            watch_project_files,
+            stop_project_watch,
             check_tool_availability,
             send_intervention_notification
         ])

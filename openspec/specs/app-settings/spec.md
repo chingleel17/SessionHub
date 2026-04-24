@@ -22,10 +22,12 @@ AppSettings SHALL 包含以下欄位：
   - `terminal_path: String` — 終端機執行檔路徑
   - `external_editor_path: String` — 外部編輯器路徑
   - `show_archived: bool` — 是否顯示封存 session
+  - `show_status_bar: bool` — 是否顯示全域底部狀態列（預設 `true`）
   - `pinned_projects: Vec<String>` — 釘選專案的 cwd 列表
   - `enabled_providers: Vec<String>` — 啟用的 provider（`"copilot"` / `"opencode"`）
   - `provider_integrations: HashMap<String, ProviderIntegration>` — provider bridge 設定
   - `default_launcher: Option<String>` — 預設啟動工具（`"terminal"` / `"opencode"` / `"gh-copilot"` / `"gemini"` / `"explorer"`）
+  - `enable_intervention_notification: bool` — 是否啟用 Windows 介入通知（預設 `true`）
 
 ### Requirement: 設定對話框權限判斷
 
@@ -102,3 +104,39 @@ AppSettings SHALL 包含以下欄位：
 
 - **WHEN** 使用者在設定頁選擇預設啟動工具並儲存
 - **THEN** 系統將選擇的工具類型字串寫入 settings.json 的 `default_launcher` 欄位
+
+### Requirement: 狀態列開關設定
+
+系統 SHALL 在設定頁一般設定區塊提供開關，讓使用者啟用或停用全域狀態列。
+
+#### Scenario: 關閉狀態列
+
+- **WHEN** 使用者在設定頁將「顯示狀態列」切換為關閉並儲存
+- **THEN** `settings.showStatusBar` 設為 `false`
+- **AND** 全域狀態列立即從畫面消失
+
+#### Scenario: 預設啟用
+
+- **WHEN** 使用者首次安裝或 settings.json 尚未包含 `show_status_bar` 欄位
+- **THEN** 系統預設 `show_status_bar` 為 `true`，狀態列顯示
+
+### Requirement: 介入通知設定開關
+
+系統 SHALL 在設定頁提供「介入通知」開關，讓使用者控制是否接收 Windows Toast 通知。
+
+#### Scenario: 開啟通知設定
+
+- **WHEN** 使用者在設定頁將「介入通知」toggle 切換為啟用並儲存
+- **THEN** 系統將 `enable_intervention_notification: true` 寫入 settings.json
+- **AND** 後續 session 進入 `waiting` 狀態時發送 Toast 通知
+
+#### Scenario: 關閉通知設定
+
+- **WHEN** 使用者在設定頁將「介入通知」toggle 切換為停用並儲存
+- **THEN** 系統將 `enable_intervention_notification: false` 寫入 settings.json
+- **AND** 後續即使 session 進入 `waiting` 狀態也不發送通知
+
+#### Scenario: 設定預設值
+
+- **WHEN** settings.json 不存在 `enable_intervention_notification` 欄位（舊版升級）
+- **THEN** 系統將其視為 `true`（預設啟用通知）
