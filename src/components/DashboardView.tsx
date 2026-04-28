@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
-import type { IdeLauncherType, ProjectGroup, SessionActivityStatus, SessionInfo, ToolAvailability } from "../types";
+import type {
+  AnalyticsDataPoint,
+  IdeLauncherType,
+  ProjectGroup,
+  SessionActivityStatus,
+  SessionInfo,
+  ToolAvailability,
+} from "../types";
+import { DashboardAnalyticsPanel } from "./DashboardAnalyticsPanel";
 
 type Props = {
   sessionsIsLoading: boolean;
@@ -24,6 +32,14 @@ type Props = {
   toolAvailability: ToolAvailability | null;
   viewMode: "list" | "kanban";
   onViewModeChange: (mode: "list" | "kanban") => void;
+  analyticsData: AnalyticsDataPoint[];
+  analyticsProjectSlices: { label: string; value: number; color: string }[];
+  analyticsCollapsed: boolean;
+  analyticsLoading: boolean;
+  analyticsRefreshing: boolean;
+  analyticsError: string | null;
+  onAnalyticsRetry: () => void;
+  onAnalyticsToggleCollapsed: () => void;
 };
 
 const RECENT_TITLE_MAX_LEN = 80;
@@ -478,6 +494,14 @@ export function DashboardView({
   toolAvailability,
   viewMode,
   onViewModeChange,
+  analyticsData,
+  analyticsProjectSlices,
+  analyticsCollapsed,
+  analyticsLoading,
+  analyticsRefreshing,
+  analyticsError,
+  onAnalyticsRetry,
+  onAnalyticsToggleCollapsed,
 }: Props) {
   const { t } = useI18n();
 
@@ -675,6 +699,17 @@ export function DashboardView({
           </article>
         </section>
       )}
+
+      <DashboardAnalyticsPanel
+        data={analyticsData}
+        projectSlices={analyticsProjectSlices}
+        collapsed={analyticsCollapsed}
+        isLoading={analyticsLoading}
+        isRefreshing={analyticsRefreshing}
+        errorMessage={analyticsError}
+        onRetry={onAnalyticsRetry}
+        onToggleCollapsed={onAnalyticsToggleCollapsed}
+      />
     </section>
   );
 }

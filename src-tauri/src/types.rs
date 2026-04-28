@@ -117,6 +117,10 @@ pub(crate) struct AppSettings {
     pub(crate) enable_session_end_notification: bool,
     #[serde(default = "default_true")]
     pub(crate) show_status_bar: bool,
+    #[serde(default = "default_analytics_refresh_interval")]
+    pub(crate) analytics_refresh_interval: u32,
+    #[serde(default)]
+    pub(crate) analytics_panel_collapsed: bool,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
@@ -128,6 +132,10 @@ pub(crate) const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider
 
 pub(crate) fn default_provider_bridge_version() -> u32 {
     PROVIDER_INTEGRATION_VERSION
+}
+
+pub(crate) fn default_analytics_refresh_interval() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -241,6 +249,18 @@ pub(crate) struct SessionStats {
     pub(crate) tool_breakdown: BTreeMap<String, u32>,
     pub(crate) model_metrics: BTreeMap<String, ModelMetricsEntry>,
     pub(crate) is_live: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnalyticsDataPoint {
+    pub(crate) label: String,
+    pub(crate) output_tokens: u64,
+    pub(crate) input_tokens: u64,
+    pub(crate) interaction_count: u32,
+    pub(crate) cost_points: f64,
+    pub(crate) session_count: u32,
+    pub(crate) missing_count: u32,
 }
 
 impl Default for SessionStats {

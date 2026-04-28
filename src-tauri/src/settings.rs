@@ -144,6 +144,8 @@ impl AppSettings {
             enable_intervention_notification: true,
             enable_session_end_notification: false,
             show_status_bar: true,
+            analytics_refresh_interval: 30,
+            analytics_panel_collapsed: false,
         })
     }
 }

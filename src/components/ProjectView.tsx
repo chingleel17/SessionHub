@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type {
+  AnalyticsDataPoint,
+  AnalyticsGroupBy,
   IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
@@ -11,6 +13,7 @@ import type {
   SortKey,
   ToolAvailability,
 } from "../types";
+import { ProjectAnalyticsTab } from "./ProjectAnalyticsTab";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
 import { PlansSpecsView } from "./PlansSpecsView";
@@ -92,6 +95,12 @@ type Props = {
   openPlanKeys: string[];
   activeSubTab: string;
   onSubTabStateChange: (state: SubTabState) => void;
+  onFetchAnalytics: (
+    cwd: string | null,
+    startDate: string,
+    endDate: string,
+    groupBy: AnalyticsGroupBy,
+  ) => Promise<AnalyticsDataPoint[] | null>;
 };
 
 function filterAndSortSessions(
@@ -183,6 +192,7 @@ export function ProjectView({
   openPlanKeys,
   activeSubTab,
   onSubTabStateChange,
+  onFetchAnalytics,
   activityStatusMap,
   onOpenInTool,
   onFocusTerminal,
@@ -318,6 +328,13 @@ export function ProjectView({
               onClick={() => setActiveSubTab("plans-specs")}
             >
               {t("project.subTab.plansSpecs")}
+            </button>
+            <button
+              type="button"
+              className={`sub-tab-item ${activeSubTab === "analytics" ? "sub-tab-item--active" : ""}`}
+              onClick={() => setActiveSubTab("analytics")}
+            >
+              {t("project.subTab.analytics")}
             </button>
             {openPlanKeys.map((planKey) => {
               const sessionId = planKey.replace("plan:", "");
@@ -584,6 +601,12 @@ export function ProjectView({
           )}
           </div>
         </div>
+      ) : activeSubTab === "analytics" ? (
+        <ProjectAnalyticsTab
+          sessions={project.sessions}
+          sessionStats={sessionStats}
+          onFetchAnalytics={onFetchAnalytics}
+        />
       ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView
           sisyphusData={sisyphusData}

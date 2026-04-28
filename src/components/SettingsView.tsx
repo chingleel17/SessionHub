@@ -324,6 +324,26 @@ export function SettingsView({
           </div>
 
           <div className="settings-field">
+            <label htmlFor="analytics-refresh-interval-select">
+              {t("settings.fields.analyticsRefreshInterval")}
+            </label>
+            <select
+              id="analytics-refresh-interval-select"
+              className="settings-select"
+              value={settingsForm.analyticsRefreshInterval ?? 30}
+              onChange={(event) =>
+                onFormChange({
+                  ...settingsForm,
+                  analyticsRefreshInterval: Number(event.currentTarget.value) as 10 | 30,
+                })
+              }
+            >
+              <option value="10">{t("settings.fields.analyticsRefreshInterval.10")}</option>
+              <option value="30">{t("settings.fields.analyticsRefreshInterval.30")}</option>
+            </select>
+          </div>
+
+          <div className="settings-field">
             <label htmlFor="language-select">{t("sidebar.language.label")}</label>
             <select
               id="language-select"

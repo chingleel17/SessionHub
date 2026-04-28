@@ -1,10 +1,12 @@
 pub mod notifications;
+pub mod analytics;
 pub mod plan;
 pub mod provider;
 pub mod sessions;
 pub mod settings;
 pub mod tools;
 
+pub(crate) use analytics::*;
 pub(crate) use notifications::*;
 pub(crate) use plan::*;
 pub(crate) use provider::*;
@@ -38,6 +40,8 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         enable_intervention_notification: true,
         enable_session_end_notification: false,
         show_status_bar: true,
+        analytics_refresh_interval: 30,
+        analytics_panel_collapsed: false,
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

@@ -9,6 +9,8 @@ import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
 import type {
+  AnalyticsDataPoint,
+  AnalyticsGroupBy,
   AppSettings,
   BridgeEventLogEntry,
   ConfirmDialogState,
@@ -58,6 +60,10 @@ function getDashboardPeriodStart(period: "week" | "month"): number {
   }
 
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+}
+
+function formatDateInput(value: Date): string {
+  return value.toISOString().slice(0, 10);
 }
 
 function isSessionInUpdatedRange(session: SessionInfo, periodStartTime: number): boolean {
@@ -229,9 +235,12 @@ function App() {
     showArchived: false,
     enabledProviders: ["copilot", "opencode"],
     providerIntegrations: [],
+    defaultLauncher: "terminal",
     enableInterventionNotification: true,
     enableSessionEndNotification: false,
     showStatusBar: true,
+    analyticsRefreshInterval: 30,
+    analyticsPanelCollapsed: false,
   });
 
   const settingsQuery = useQuery({
@@ -286,9 +295,12 @@ function App() {
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
+        defaultLauncher: settingsQuery.data.defaultLauncher ?? "terminal",
         enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
         enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
         showStatusBar: settingsQuery.data.showStatusBar ?? true,
+        analyticsRefreshInterval: settingsQuery.data.analyticsRefreshInterval ?? 30,
+        analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
@@ -534,20 +546,39 @@ function App() {
     },
   });
 
+  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => ({
+    copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
+    opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
+    terminalPath: (overrides.terminalPath ?? settingsForm.terminalPath)?.trim() || null,
+    externalEditorPath:
+      (overrides.externalEditorPath ?? settingsForm.externalEditorPath)?.trim() || null,
+    showArchived: overrides.showArchived ?? settingsForm.showArchived,
+    pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
+    enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
+    providerIntegrations: overrides.providerIntegrations ?? settingsForm.providerIntegrations ?? [],
+    defaultLauncher: overrides.defaultLauncher ?? settingsForm.defaultLauncher ?? null,
+    enableInterventionNotification:
+      overrides.enableInterventionNotification ?? settingsForm.enableInterventionNotification ?? true,
+    enableSessionEndNotification:
+      overrides.enableSessionEndNotification ?? settingsForm.enableSessionEndNotification ?? false,
+    showStatusBar: overrides.showStatusBar ?? settingsForm.showStatusBar ?? true,
+    analyticsRefreshInterval:
+      overrides.analyticsRefreshInterval ?? settingsForm.analyticsRefreshInterval ?? 30,
+    analyticsPanelCollapsed:
+      overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
+  });
+
+  const persistSettingsSilently = async (next: AppSettings) => {
+    await invoke("save_settings", { settings: next });
+    await queryClient.invalidateQueries({ queryKey: ["settings"] });
+  };
+
   const togglePinProject = async (projectKey: string) => {
     const next = pinnedProjects.includes(projectKey)
       ? pinnedProjects.filter((k) => k !== projectKey)
       : [...pinnedProjects, projectKey];
     setPinnedProjects(next);
-    const settings: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: settingsForm.showArchived,
-      pinnedProjects: next,
-      enabledProviders: settingsForm.enabledProviders,
-    };
+    const settings = buildSettingsPayload({ pinnedProjects: next });
     await invoke("save_settings", { settings });
     await queryClient.invalidateQueries({ queryKey: ["settings"] });
   };
@@ -905,6 +936,11 @@ function App() {
 
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
   const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
+  const [dashboardAnalyticsData, setDashboardAnalyticsData] = useState<AnalyticsDataPoint[]>([]);
+  const [dashboardAnalyticsLoading, setDashboardAnalyticsLoading] = useState(false);
+  const [dashboardAnalyticsRefreshing, setDashboardAnalyticsRefreshing] = useState(false);
+  const [dashboardAnalyticsError, setDashboardAnalyticsError] = useState<string | null>(null);
+  const [dashboardAnalyticsFetchedAt, setDashboardAnalyticsFetchedAt] = useState<number | null>(null);
 
   const dashboardPeriodStart = useMemo(
     () => getDashboardPeriodStart(dashboardPeriod),
@@ -946,6 +982,74 @@ function App() {
     );
   }, [filteredDashboardSessions, sessionStatsMap]);
 
+  const dashboardProjectSlices = useMemo(() => {
+    const palette = ["#6366f1", "#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
+    return filteredDashboardProjects
+      .map((project, index) => {
+        const total = project.sessions.reduce((sum, session) => {
+          const stats = sessionStatsMap[session.id];
+          return sum + (stats?.outputTokens ?? 0) + (stats?.inputTokens ?? 0);
+        }, 0);
+        return {
+          label: project.title,
+          value: total,
+          color: palette[index % palette.length],
+        };
+      })
+      .filter((slice) => slice.value > 0);
+  }, [filteredDashboardProjects, sessionStatsMap]);
+
+  const fetchAnalyticsData = useCallback(
+    async (
+      cwd: string | null,
+      startDate: string,
+      endDate: string,
+      groupBy: AnalyticsGroupBy,
+    ): Promise<AnalyticsDataPoint[] | null> => {
+      try {
+        return await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
+          cwd,
+          startDate,
+          endDate,
+          groupBy,
+        });
+      } catch (error) {
+        showToast(resolveErrorMessage(error, t("analytics.error.loadFailed")));
+        return null;
+      }
+    },
+    [t],
+  );
+
+  const fetchDashboardAnalytics = useCallback(async () => {
+    const startDate = formatDateInput(new Date(dashboardPeriodStart));
+    const endDate = formatDateInput(new Date());
+    const hasExistingData = dashboardAnalyticsData.length > 0;
+
+    setDashboardAnalyticsError(null);
+    if (hasExistingData) {
+      setDashboardAnalyticsRefreshing(true);
+    } else {
+      setDashboardAnalyticsLoading(true);
+    }
+
+    try {
+      const result = await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
+        cwd: null,
+        startDate,
+        endDate,
+        groupBy: "day",
+      });
+      setDashboardAnalyticsData(result);
+      setDashboardAnalyticsFetchedAt(Date.now());
+    } catch (error) {
+      setDashboardAnalyticsError(resolveErrorMessage(error, t("analytics.error.loadFailed")));
+    } finally {
+      setDashboardAnalyticsLoading(false);
+      setDashboardAnalyticsRefreshing(false);
+    }
+  }, [dashboardAnalyticsData.length, dashboardPeriodStart, t]);
+
   const planPreviewHtml = useMemo(
     () =>
       DOMPurify.sanitize(
@@ -965,16 +1069,7 @@ function App() {
   };
 
   const handleSaveSettings = async () => {
-    const next: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: settingsForm.showArchived,
-      pinnedProjects,
-      enabledProviders: settingsForm.enabledProviders,
-      defaultLauncher: settingsForm.defaultLauncher ?? null,
-    };
+    const next = buildSettingsPayload();
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
     const requiresOpencodeRoot = next.enabledProviders.includes("opencode");
@@ -1011,17 +1106,19 @@ function App() {
   };
 
   const handleToggleArchived = async (nextValue: boolean) => {
-    const next: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: nextValue,
-      pinnedProjects,
-      enabledProviders: settingsForm.enabledProviders,
-    };
+    const next = buildSettingsPayload({ showArchived: nextValue });
     setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
     settingsMutation.mutate(next);
+  };
+
+  const handleToggleAnalyticsPanel = async () => {
+    const nextCollapsed = !(settingsForm.analyticsPanelCollapsed ?? false);
+    setSettingsForm((current) => ({ ...current, analyticsPanelCollapsed: nextCollapsed }));
+    await persistSettingsSilently(buildSettingsPayload({ analyticsPanelCollapsed: nextCollapsed }));
+    const refreshIntervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
+    if (!nextCollapsed && (!dashboardAnalyticsFetchedAt || Date.now() - dashboardAnalyticsFetchedAt >= refreshIntervalMs)) {
+      await fetchDashboardAnalytics();
+    }
   };
 
   const handleOpenTerminal = async (session: SessionInfo) => {
@@ -1193,6 +1290,25 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return;
+    void fetchDashboardAnalytics();
+  }, [activeView, dashboardPeriod, settingsForm.analyticsPanelCollapsed, fetchDashboardAnalytics]);
+
+  useEffect(() => {
+    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return undefined;
+    const intervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
+    const timer = window.setInterval(() => {
+      void fetchDashboardAnalytics();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [
+    activeView,
+    settingsForm.analyticsPanelCollapsed,
+    settingsForm.analyticsRefreshInterval,
+    fetchDashboardAnalytics,
+  ]);
+
   return (
     <main className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Sidebar
@@ -1261,6 +1377,14 @@ function App() {
               toolAvailability={toolAvailabilityQuery.data ?? null}
               viewMode={dashboardViewMode}
               onViewModeChange={setDashboardViewMode}
+              analyticsData={dashboardAnalyticsData}
+              analyticsError={dashboardAnalyticsError}
+              analyticsLoading={dashboardAnalyticsLoading}
+              analyticsRefreshing={dashboardAnalyticsRefreshing}
+              analyticsProjectSlices={dashboardProjectSlices}
+              analyticsCollapsed={settingsForm.analyticsPanelCollapsed ?? false}
+              onAnalyticsRetry={() => void fetchDashboardAnalytics()}
+              onAnalyticsToggleCollapsed={() => void handleToggleAnalyticsPanel()}
             />
           ) : null}
 
@@ -1321,6 +1445,9 @@ function App() {
               openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
+              onFetchAnalytics={(cwd, startDate, endDate, groupBy) =>
+                fetchAnalyticsData(cwd, startDate, endDate, groupBy)
+              }
               activityStatusMap={activityStatusMap}
               onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}

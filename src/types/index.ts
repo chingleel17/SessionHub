@@ -28,6 +28,20 @@ export type AppSettings = {
     enableInterventionNotification?: boolean;
     enableSessionEndNotification?: boolean;
     showStatusBar?: boolean;
+    analyticsRefreshInterval?: 10 | 30;
+    analyticsPanelCollapsed?: boolean;
+};
+
+export type AnalyticsGroupBy = "day" | "week" | "month";
+
+export type AnalyticsDataPoint = {
+    label: string;
+    outputTokens: number;
+    inputTokens: number;
+    interactionCount: number;
+    costPoints: number;
+    sessionCount: number;
+    missingCount: number;
 };
 
 export type SessionActivityStatus = {
