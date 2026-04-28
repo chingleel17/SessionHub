@@ -1,8 +1,4 @@
-## Purpose
-
-定義 SessionHub 在 AI session 轉為 `waiting` 時的 Windows 介入通知行為、去重規則與通知點擊聚焦流程。
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: 介入通知發送
 

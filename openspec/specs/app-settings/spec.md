@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義 SessionHub 應用程式設定的持久化格式、預設值與設定頁應提供的管理能力。
+
+## Requirements
 
 ### Requirement: 設定持久化
 
