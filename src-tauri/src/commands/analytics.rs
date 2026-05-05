@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection};
 
-use crate::db::{init_db, open_db_connection};
+use tauri::State;
+
+use crate::db::DbState;
 use crate::types::{AnalyticsDataPoint, ModelMetricsEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,11 +150,11 @@ pub fn get_analytics_data(
     start_date: String,
     end_date: String,
     group_by: String,
+    db: State<'_, DbState>,
 ) -> Result<Vec<AnalyticsDataPoint>, String> {
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
     get_analytics_data_internal(
-        &connection,
+        &*conn,
         cwd.as_deref().map(str::trim).filter(|value| !value.is_empty()),
         &start_date,
         &end_date,

@@ -9,9 +9,7 @@ use std::os::windows::process::CommandExt;
 
 use rusqlite::Connection;
 
-use crate::db::{
-    delete_session_meta_internal, ensure_parent_dir, init_db, open_db_connection, read_session_meta,
-};
+use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_meta};
 use crate::settings::detect_vscode_path;
 use crate::types::*;
 
@@ -205,12 +203,10 @@ pub(crate) fn scan_copilot_incremental_internal(
 pub(crate) fn find_session_by_cwd_internal(
     copilot_root: &Path,
     target_cwd: &str,
+    connection: &Connection,
 ) -> Result<Option<SessionInfo>, String> {
     let normalize = |p: &str| p.replace('\\', "/").to_lowercase();
     let normalized_target = normalize(target_cwd);
-
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
 
     for (dir, is_archived) in [
         (copilot_root.join("session-state"), false),
@@ -306,7 +302,7 @@ pub(crate) fn unarchive_session_internal(
     Ok(())
 }
 
-pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
+pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str, connection: &Connection) -> Result<(), String> {
     for candidate in [
         root_dir.join("session-state").join(session_id),
         root_dir.join("session-state-archive").join(session_id),
@@ -315,9 +311,7 @@ pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Resu
             fs::remove_dir_all(&candidate)
                 .map_err(|error| format!("failed to delete session {}: {error}", session_id))?;
 
-            let connection = open_db_connection()?;
-            init_db(&connection)?;
-            delete_session_meta_internal(&connection, session_id)?;
+            delete_session_meta_internal(connection, session_id)?;
 
             return Ok(());
         }
@@ -326,7 +320,7 @@ pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Resu
     Err(format!("session {} does not exist", session_id))
 }
 
-pub(crate) fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String> {
+pub(crate) fn delete_empty_sessions_internal(copilot_root: &str, connection: &Connection) -> Result<usize, String> {
     let root = PathBuf::from(copilot_root);
     let session_state_dir = root.join("session-state");
 
@@ -368,10 +362,7 @@ pub(crate) fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize
 
         match fs::remove_dir_all(&session_dir) {
             Ok(_) => {
-                if let Ok(connection) = open_db_connection() {
-                    let _ = init_db(&connection);
-                    let _ = delete_session_meta_internal(&connection, &session_id);
-                }
+                let _ = delete_session_meta_internal(connection, &session_id);
                 deleted_count += 1;
             }
             Err(error) => {

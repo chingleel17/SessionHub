@@ -24,13 +24,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(WatcherState::default())
         .manage(ScanCache::default())
+        .manage(DbState::new().expect("failed to init metadata db"))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
-            open_db_connection_and_init()
-                .map_err(|e| tauri::Error::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(
                 app.handle(),
@@ -347,7 +346,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -397,7 +399,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -425,7 +430,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -981,6 +989,8 @@ mod tests {
         let scan_cache = ScanCache::default();
 
         with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
             let copilot_only = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
@@ -988,6 +998,7 @@ mod tests {
                 Some(vec![COPILOT_PROVIDER.to_string()]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan copilot only");
             assert_eq!(copilot_only.len(), 1);
@@ -1000,6 +1011,7 @@ mod tests {
                 Some(vec![OPENCODE_PROVIDER.to_string()]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan opencode only");
             assert_eq!(opencode_only.len(), 1);
@@ -1015,6 +1027,7 @@ mod tests {
                 ]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan all providers");
             assert_eq!(all_providers.len(), 2);

@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::activity::get_session_activity_statuses_internal;
-use crate::db::{init_db, open_db_connection, upsert_session_meta_internal, delete_session_meta_internal};
+use crate::db::{DbState, upsert_session_meta_internal, delete_session_meta_internal};
 use crate::sessions::{
     archive_session_internal, delete_empty_sessions_internal, delete_session_internal,
     directory_exists, find_session_by_cwd_internal, get_sessions_internal, open_terminal_internal,
@@ -19,7 +19,9 @@ pub fn get_sessions(
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
     scan_cache: State<'_, ScanCache>,
+    db: State<'_, DbState>,
 ) -> Result<Vec<SessionInfo>, String> {
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
     get_sessions_internal(
         root_dir,
         opencode_root,
@@ -27,6 +29,7 @@ pub fn get_sessions(
         enabled_providers,
         force_full,
         scan_cache.inner(),
+        &*conn,
     )
 }
 
@@ -43,15 +46,17 @@ pub fn unarchive_session(root_dir: Option<String>, session_id: String) -> Result
 }
 
 #[tauri::command]
-pub fn delete_session(root_dir: Option<String>, session_id: String) -> Result<(), String> {
+pub fn delete_session(root_dir: Option<String>, session_id: String, db: State<'_, DbState>) -> Result<(), String> {
     let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
-    delete_session_internal(&resolved_root, &session_id)
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    delete_session_internal(&resolved_root, &session_id, &*conn)
 }
 
 #[tauri::command]
-pub fn delete_empty_sessions(root_dir: Option<String>) -> Result<usize, String> {
+pub fn delete_empty_sessions(root_dir: Option<String>, db: State<'_, DbState>) -> Result<usize, String> {
     let resolved_root = resolve_copilot_root(root_dir.as_deref())?;
-    delete_empty_sessions_internal(&resolved_root.to_string_lossy())
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    delete_empty_sessions_internal(&resolved_root.to_string_lossy(), &*conn)
 }
 
 #[tauri::command]
@@ -73,10 +78,9 @@ pub fn get_session_activity_statuses(
 }
 
 #[tauri::command]
-pub fn get_session_stats(session_dir: String) -> Result<SessionStats, String> {
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
-    get_session_stats_internal(&connection, &session_dir)
+pub fn get_session_stats(session_dir: String, db: State<'_, DbState>) -> Result<SessionStats, String> {
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    get_session_stats_internal(&*conn, &session_dir)
 }
 
 #[tauri::command]
@@ -84,24 +88,25 @@ pub fn upsert_session_meta(
     session_id: String,
     notes: Option<String>,
     tags: Vec<String>,
+    db: State<'_, DbState>,
 ) -> Result<(), String> {
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
-    upsert_session_meta_internal(&connection, &session_id, notes, tags)
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    upsert_session_meta_internal(&*conn, &session_id, notes, tags)
 }
 
 #[tauri::command]
-pub fn delete_session_meta(session_id: String) -> Result<(), String> {
-    let connection = open_db_connection()?;
-    init_db(&connection)?;
-    delete_session_meta_internal(&connection, &session_id)
+pub fn delete_session_meta(session_id: String, db: State<'_, DbState>) -> Result<(), String> {
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    delete_session_meta_internal(&*conn, &session_id)
 }
 
 #[tauri::command]
 pub fn get_session_by_cwd(
     cwd: String,
     root_dir: Option<String>,
+    db: State<'_, DbState>,
 ) -> Result<Option<SessionInfo>, String> {
     let copilot_root = resolve_copilot_root(root_dir.as_deref())?;
-    find_session_by_cwd_internal(&copilot_root, &cwd)
+    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    find_session_by_cwd_internal(&copilot_root, &cwd, &*conn)
 }

@@ -189,11 +189,47 @@ pub(crate) fn is_live_session(session_dir: &Path) -> Result<bool, String> {
         let entry = entry.map_err(|error| format!("failed to read session dir entry: {error}"))?;
         let file_name = entry.file_name().to_string_lossy().to_string();
         if file_name.starts_with("inuse.") && file_name.ends_with(".lock") {
-            return Ok(true);
+            // 從 inuse.<pid>.lock 取出 PID 並驗證程序是否仍在執行
+            let mid = &file_name["inuse.".len()..file_name.len() - ".lock".len()];
+            if let Ok(pid) = mid.parse::<u32>() {
+                if is_pid_alive(pid) {
+                    return Ok(true);
+                }
+                // PID 已不存在 → 殭屍 lock 檔，繼續找下一個
+            } else {
+                // 非 PID 格式的 lock 檔 → 保守判定為 live
+                return Ok(true);
+            }
         }
     }
 
     Ok(false)
+}
+
+/// 檢查指定 PID 的程序是否仍在執行
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == std::ptr::null_mut() {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(windows))]
+fn is_pid_alive(pid: u32) -> bool {
+    // Unix: kill -0 不送訊號，只檢查程序是否存在
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 // ── Copilot: 解析 events.jsonl ───────────────────────────────────────────────

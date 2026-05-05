@@ -9,6 +9,7 @@ import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
 import type {
+  ActivityHintPayload,
   AnalyticsDataPoint,
   AnalyticsGroupBy,
   AppSettings,
@@ -227,6 +228,8 @@ function App() {
   const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
   const lastInterventionSessionRef = useRef<string | null>(null);
   const lastNotificationSessionRef = useRef<{ id: string; type: string } | null>(null);
+  // sessionsDataRef 讓事件 listener 不因 stale closure 而讀到舊的 sessionsQuery.data
+  const sessionsDataRef = useRef<SessionInfo[]>([]);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
@@ -276,6 +279,11 @@ function App() {
     () => sessionsQuery.data?.find((s) => s.id === activePlanSessionId) ?? null,
     [activePlanSessionId, sessionsQuery.data],
   );
+
+  // 保持 sessionsDataRef 與最新 sessions 同步，供事件 listener 讀取（避免 stale closure）
+  useEffect(() => {
+    sessionsDataRef.current = sessionsQuery.data ?? [];
+  }, [sessionsQuery.data]);
 
   const planQuery = useQuery({
     queryKey: ["plan", activePlanSession?.sessionDir ?? ""],
@@ -669,7 +677,6 @@ function App() {
       if (mounted) {
         setRealtimeStatus("active");
         setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        showToast(t("toast.sessionsUpdated"));
       }
     };
 
@@ -709,6 +716,54 @@ function App() {
         }
       );
 
+      // copilot-activity-hint：輕量活動通知，不做任何 IPC 或 session 掃描。
+      // 只更新 activityStatusQuery 快取中對應 session 的狀態，並刷新 status bar。
+      const unlistenActivityHint = await listen<ActivityHintPayload>(
+        "copilot-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, eventType, title } = event.payload;
+          const normalizedCwd = normalizePath(cwd);
+          const session = sessionsDataRef.current.find(
+            (s) => normalizePath(s.cwd ?? "") === normalizedCwd,
+          );
+          if (!session) return;
+
+          // 依 eventType 計算 activity detail
+          let detail: SessionActivityStatus["detail"] = "tool_call";
+          if (eventType === "prompt.submitted") {
+            detail = "thinking";
+          } else if (eventType === "tool.pre" && title) {
+            const lowerTitle = title.toLowerCase();
+            if (/edit|write|patch|create/.test(lowerTitle)) {
+              detail = "file_op";
+            } else if (/task|subtask|agent/.test(lowerTitle)) {
+              detail = "sub_agent";
+            }
+          }
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id, provider: session.provider }),
+                status: "active",
+                detail,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
         if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
         await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
@@ -731,6 +786,7 @@ function App() {
         unlistenCopilot();
         unlistenOpencode();
         unlistenCopilotTargeted();
+        unlistenActivityHint();
         unlistenPlan();
         unlistenProjectFiles();
       };
@@ -776,7 +832,6 @@ function App() {
     const sessions = sessionsQuery.data ?? [];
     const now = Date.now();
     const THIRTY_MIN = 30 * 60 * 1000;
-    const TWO_HOURS = 2 * 60 * 60 * 1000;
     let active = 0;
     let waiting = 0;
     for (const s of sessions) {
@@ -786,10 +841,11 @@ function App() {
         active++;
         continue;
       }
-      const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
-      const elapsed = now - updatedAt;
-      if (elapsed <= THIRTY_MIN) active++;
-      else if (elapsed <= TWO_HOURS) waiting++;
+      // 只有 stats 已載入且明確非 live，才用時間判斷「最近活動」
+      if (stats !== undefined) {
+        const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+        if (updatedAt > 0 && now - updatedAt <= THIRTY_MIN) waiting++;
+      }
     }
     return { activeSessions: active, waitingSessions: waiting };
   }, [sessionsQuery.data, sessionStatsMap]);

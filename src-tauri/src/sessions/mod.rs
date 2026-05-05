@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rusqlite::Connection;
+
 use crate::db::{
     instant_from_unix_secs, load_scan_state_from_db, load_session_mtimes_from_db,
-    load_sessions_cache_from_db, open_db_connection_and_init, persist_provider_cache,
+    load_sessions_cache_from_db, persist_provider_cache,
 };
 use crate::settings::{resolve_copilot_root, resolve_opencode_root};
 use crate::types::*;
@@ -22,14 +24,13 @@ pub(crate) fn get_sessions_internal(
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
     scan_cache: &ScanCache,
+    connection: &Connection,
 ) -> Result<Vec<SessionInfo>, String> {
     let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
     let show_archived = show_archived.unwrap_or(false);
     let force = force_full.unwrap_or(false);
-
-    let connection = open_db_connection_and_init()?;
 
     let mut all_sessions: Vec<SessionInfo> = Vec::new();
 

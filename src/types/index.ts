@@ -207,6 +207,13 @@ export type SessionTargetedPayload = {
     eventType: string;
 };
 
+export type ActivityHintPayload = {
+    cwd: string;
+    eventType: string;
+    title: string | null;
+    error: string | null;
+};
+
 export type BridgeEventLogEntry = {
     id: string;
     provider: string;

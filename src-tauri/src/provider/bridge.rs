@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
+use crate::db::DbState;
 use crate::sessions::find_session_by_cwd_internal;
 use crate::settings::{resolve_copilot_root, resolve_provider_bridge_path};
 use crate::types::*;
@@ -285,6 +286,12 @@ pub(crate) fn is_relevant_opencode_event(
 
 // ── Bridge Provider 比對 ─────────────────────────────────────────────────────
 
+/// 判斷事件是否為純活動提示：不改變 session 元數據，只需更新 activity status。
+/// 這類事件改走輕量 copilot-activity-hint，避免不必要的 workspace.yaml 掃描。
+fn is_activity_only_event(event_type: &str) -> bool {
+    matches!(event_type, "tool.pre" | "tool.post" | "prompt.submitted")
+}
+
 pub(crate) fn matched_bridge_providers(
     event: &notify::Event,
     provider_bridge_paths: &HashMap<String, PathBuf>,
@@ -335,6 +342,21 @@ pub(crate) fn process_provider_bridge_event(
 
     if provider == COPILOT_PROVIDER {
         if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
+            // tool.pre / tool.post / prompt.submitted 不會更改 session 元數據（summary/updatedAt）。
+            // 只需告知前端活動狀態即可，不做任何檔案 I/O 或 session 掃描。
+            if is_activity_only_event(&record.event_type) {
+                let payload = ActivityHintPayload {
+                    cwd: cwd.to_string(),
+                    event_type: record.event_type.clone(),
+                    title: record.title.clone(),
+                    error: record.error.clone(),
+                };
+                app.emit("copilot-activity-hint", &payload)
+                    .map_err(|e| format!("failed to emit copilot-activity-hint: {e}"))?;
+                emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                return Ok(true);
+            }
+
             let copilot_root = resolve_copilot_root(None)?;
             let rate_ok = should_emit_provider_refresh_at(refresh_state, COPILOT_PROVIDER, Instant::now())?;
             if !rate_ok {
@@ -342,7 +364,9 @@ pub(crate) fn process_provider_bridge_event(
                 return Ok(false);
             }
 
-            match find_session_by_cwd_internal(&copilot_root, cwd)? {
+            let db_state = app.state::<DbState>();
+            let conn = db_state.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+            match find_session_by_cwd_internal(&copilot_root, cwd, &*conn)? {
                 Some(session) => {
                     let payload = SessionTargetedPayload {
                         session_id: session.id.clone(),

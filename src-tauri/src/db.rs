@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::fs;
 
@@ -23,20 +23,26 @@ pub(crate) fn open_db_connection() -> Result<Connection, String> {
     Connection::open(db_path).map_err(|error| format!("failed to open metadata db: {error}"))
 }
 
-/// 全域旗標：DB schema 是否已初始化過（`init_db` 只需執行一次）
-static DB_SCHEMA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+pub(crate) struct DbState {
+    pub(crate) conn: Mutex<Connection>,
+}
 
-/// 開啟 DB 連線，並在第一次呼叫時執行 `init_db` 初始化 schema。
-pub(crate) fn open_db_connection_and_init() -> Result<Connection, String> {
-    let conn = open_db_connection()?;
-    if !DB_SCHEMA_INITIALIZED.load(Ordering::Acquire) {
+impl DbState {
+    pub(crate) fn new() -> Result<Self, String> {
+        let db_path = metadata_db_path()?;
+        ensure_parent_dir(&db_path)?;
+        let conn = Connection::open(&db_path)
+            .map_err(|e| format!("failed to open metadata db: {e}"))?;
         init_db(&conn)?;
-        DB_SCHEMA_INITIALIZED.store(true, Ordering::Release);
+        Ok(Self { conn: Mutex::new(conn) })
     }
-    Ok(conn)
 }
 
 pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL;")
+        .map_err(|e| format!("failed to set WAL mode: {e}"))?;
+
     connection
         .execute(
             "
