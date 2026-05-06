@@ -74,6 +74,7 @@ pub fn run() {
             open_in_tool,
             focus_terminal_window,
             read_openspec_file,
+            write_openspec_file,
             watch_project_files,
             stop_project_watch,
             check_tool_availability,
@@ -111,7 +112,9 @@ mod tests {
         calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal,
         upsert_session_stats_cache,
     };
-    use crate::openspec_scan::scan_openspec_internal;
+    use crate::openspec_scan::{
+        read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
+    };
     use crate::sisyphus::scan_sisyphus_internal;
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {
@@ -1231,11 +1234,25 @@ mod tests {
         assert!(!data.active_changes[0].has_design);
         assert!(data.active_changes[0].has_tasks);
         assert_eq!(data.active_changes[0].specs_count, 1);
+        assert_eq!(data.active_changes[0].specs.len(), 1);
+        assert_eq!(data.active_changes[0].specs[0].name, "auth");
+        assert_eq!(
+            data.active_changes[0].specs[0].path,
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("specs")
+                .join("auth")
+                .join("spec.md")
+                .to_string_lossy()
+                .to_string()
+        );
         assert_eq!(data.archived_changes.len(), 1);
         assert_eq!(data.archived_changes[0].name, "legacy-a");
         assert!(!data.archived_changes[0].has_proposal);
         assert!(data.archived_changes[0].has_design);
         assert!(!data.archived_changes[0].has_tasks);
+        assert!(data.archived_changes[0].specs.is_empty());
         assert_eq!(data.specs.len(), 2);
         assert_eq!(data.specs[0].name, "api");
         assert_eq!(
@@ -1278,6 +1295,41 @@ mod tests {
         assert!(openspec_data.active_changes.is_empty());
         assert!(openspec_data.archived_changes.is_empty());
         assert!(openspec_data.specs.is_empty());
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
+    fn openspec_file_roundtrip_enforces_scope() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-file-roundtrip");
+        let openspec_dir = project_dir.join("openspec");
+        let tasks_path = openspec_dir.join("changes").join("feature-a").join("tasks.md");
+        fs::create_dir_all(tasks_path.parent().expect("tasks parent")).expect("create tasks parent");
+        fs::write(&tasks_path, "- [ ] first task\n").expect("write tasks");
+
+        let original = read_openspec_file_internal(&project_dir.to_string_lossy(), "changes/feature-a/tasks.md")
+            .expect("read openspec file");
+        assert_eq!(original, "- [ ] first task\n");
+
+        write_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+            "- [x] first task\n",
+        )
+        .expect("write openspec file");
+
+        let updated = read_openspec_file_internal(&project_dir.to_string_lossy(), "changes/feature-a/tasks.md")
+            .expect("read updated openspec file");
+        assert_eq!(updated, "- [x] first task\n");
+
+        let traversal_error = write_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "../README.md",
+            "denied",
+        )
+        .expect_err("path traversal should fail");
+        assert!(traversal_error.contains("File not found") || traversal_error.contains("Access denied"));
 
         fs::remove_dir_all(&project_dir).expect("cleanup project dir");
     }

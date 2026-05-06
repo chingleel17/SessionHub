@@ -12,12 +12,33 @@ type Props = {
   isRefreshing: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
   onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+  onWriteOpenspecFile: (projectCwd: string, relativePath: string, content: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   refreshToken: string;
   projectCwd: string;
 };
 
 const DEFAULT_EXPLORER_WIDTH = 215;
+const TASK_LINE_PATTERN = /^(\s*(?:[-*+]|\d+\.)\s+\[)( |x|X)(\].*)$/;
+
+function toggleMarkdownTask(content: string, taskIndex: number, checked: boolean): string {
+  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
+  const taskLineIndexes = lines.flatMap((line, index) => (
+    TASK_LINE_PATTERN.test(line) ? [index] : []
+  ));
+  const lineIndex = taskLineIndexes[taskIndex];
+  if (lineIndex === undefined) {
+    throw new Error("Task item not found");
+  }
+
+  lines[lineIndex] = lines[lineIndex].replace(
+    TASK_LINE_PATTERN,
+    (_, prefix: string, __state: string, suffix: string) => `${prefix}${checked ? "x" : " "}${suffix}`,
+  );
+
+  return lines.join(lineEnding);
+}
 
 export function PlansSpecsView({
   sisyphusData,
@@ -26,6 +47,7 @@ export function PlansSpecsView({
   isRefreshing,
   onReadFileContent,
   onReadOpenspecFile,
+  onWriteOpenspecFile,
   onRefresh,
   refreshToken,
   projectCwd,
@@ -34,8 +56,10 @@ export function PlansSpecsView({
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [contentFilePath, setContentFilePath] = useState<string | null>(null);
+  const [contentFilePathType, setContentFilePathType] = useState<TreeNode["filePathType"] | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
+  const [taskSaving, setTaskSaving] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const isDragging = useRef(false);
@@ -58,6 +82,7 @@ export function PlansSpecsView({
         setContent(null);
       }
       setContentFilePath(node.filePath);
+      setContentFilePathType(node.filePathType ?? null);
       try {
         const text = node.filePathType === "openspec"
           ? await onReadOpenspecFile(projectCwd, node.filePath)
@@ -79,6 +104,31 @@ export function PlansSpecsView({
       await loadNodeContent(node, true);
     },
     [loadNodeContent],
+  );
+
+  const handleToggleTask = useCallback(
+    async (filePath: string, taskIndex: number, checked: boolean) => {
+      if (content === null || contentFilePath !== filePath || contentFilePathType !== "openspec") {
+        throw new Error("Task file is not loaded");
+      }
+
+      const previousContent = content;
+      const nextContent = toggleMarkdownTask(content, taskIndex, checked);
+      setTaskSaving(true);
+      setContentError(null);
+      setContent(nextContent);
+
+      try {
+        await onWriteOpenspecFile(projectCwd, filePath, nextContent);
+        void onRefresh();
+      } catch (error) {
+        setContent(previousContent);
+        throw error;
+      } finally {
+        setTaskSaving(false);
+      }
+    },
+    [content, contentFilePath, contentFilePathType, onRefresh, onWriteOpenspecFile, projectCwd],
   );
 
   const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -173,13 +223,14 @@ export function PlansSpecsView({
       }
     }
 
-    if (!matchedNode?.filePath) {
-      setSelectedNode(null);
-      setContent(null);
-      setContentFilePath(null);
-      setContentError(null);
-      return;
-    }
+      if (!matchedNode?.filePath) {
+        setSelectedNode(null);
+        setContent(null);
+        setContentFilePath(null);
+        setContentFilePathType(null);
+        setContentError(null);
+        return;
+      }
 
     if (
       selectedNode.filePath !== matchedNode.filePath ||
@@ -260,8 +311,11 @@ export function PlansSpecsView({
       <ContentViewer
         content={content}
         filePath={contentFilePath}
+        filePathType={contentFilePathType}
         isLoading={contentLoading}
         error={contentError}
+        isTaskSaving={taskSaving}
+        onToggleTask={handleToggleTask}
       />
     </div>
   );

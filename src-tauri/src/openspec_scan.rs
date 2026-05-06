@@ -3,6 +3,39 @@ use std::path::{Path, PathBuf};
 
 use crate::types::*;
 
+fn scan_openspec_specs(specs_dir: &Path) -> Vec<OpenSpecSpec> {
+    if !specs_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(specs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let spec_md_path = path.join("spec.md");
+                let spec_path = if spec_md_path.is_file() {
+                    spec_md_path.to_string_lossy().to_string()
+                } else {
+                    path.to_string_lossy().to_string()
+                };
+                result.push(OpenSpecSpec {
+                    name,
+                    path: spec_path,
+                });
+            }
+        }
+    }
+
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
 pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let name = change_dir
         .file_name()
@@ -15,13 +48,8 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let has_tasks = change_dir.join("tasks.md").is_file();
 
     let specs_dir = change_dir.join("specs");
-    let specs_count = if specs_dir.is_dir() {
-        fs::read_dir(&specs_dir)
-            .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).count())
-            .unwrap_or(0)
-    } else {
-        0
-    };
+    let specs = scan_openspec_specs(&specs_dir);
+    let specs_count = specs.len();
 
     OpenSpecChange {
         name,
@@ -29,6 +57,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
         has_design,
         has_tasks,
         specs_count,
+        specs,
     }
 }
 
@@ -104,35 +133,7 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
 
     let specs = {
         let specs_dir = openspec_dir.join("specs");
-        if specs_dir.is_dir() {
-            let mut result = Vec::new();
-            if let Ok(entries) = fs::read_dir(&specs_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let name = path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        let spec_md_path = path.join("spec.md");
-                        let spec_path = if spec_md_path.is_file() {
-                            spec_md_path.to_string_lossy().to_string()
-                        } else {
-                            path.to_string_lossy().to_string()
-                        };
-                        result.push(OpenSpecSpec {
-                            name,
-                            path: spec_path,
-                        });
-                    }
-                }
-            }
-            result.sort_by(|a, b| a.name.cmp(&b.name));
-            result
-        } else {
-            Vec::new()
-        }
+        scan_openspec_specs(&specs_dir)
     };
 
     OpenSpecData {
@@ -147,6 +148,22 @@ pub(crate) fn read_openspec_file_internal(
     project_cwd: &str,
     relative_path: &str,
 ) -> Result<String, String> {
+    let canonical_target = resolve_openspec_file_internal(project_cwd, relative_path)?;
+
+    fs::read_to_string(&canonical_target).map_err(|e| format!("Failed to read file: {e}"))
+}
+
+pub(crate) fn write_openspec_file_internal(
+    project_cwd: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let canonical_target = resolve_openspec_file_internal(project_cwd, relative_path)?;
+
+    fs::write(&canonical_target, content).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+fn resolve_openspec_file_internal(project_cwd: &str, relative_path: &str) -> Result<PathBuf, String> {
     let base = PathBuf::from(project_cwd).join("openspec");
     let canonical_base = base
         .canonicalize()
@@ -166,5 +183,5 @@ pub(crate) fn read_openspec_file_internal(
         return Err(format!("Not a file: {}", canonical_target.display()));
     }
 
-    fs::read_to_string(&canonical_target).map_err(|e| format!("Failed to read file: {e}"))
+    Ok(canonical_target)
 }

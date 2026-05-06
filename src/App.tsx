@@ -957,6 +957,19 @@ function App() {
     return invoke<string>("read_openspec_file", { projectCwd, relativePath });
   };
 
+  const handleWriteOpenspecFile = async (
+    projectCwd: string,
+    relativePath: string,
+    content: string,
+  ): Promise<void> => {
+    try {
+      await invoke("write_openspec_file", { projectCwd, relativePath, content });
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.openspecWriteFailed")));
+      throw error;
+    }
+  };
+
   const handleRefreshPlansSpecs = async (): Promise<void> => {
     if (!activeProject?.pathLabel) return;
     await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
@@ -1489,6 +1502,7 @@ function App() {
               plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
               onReadFileContent={handleReadFileContent}
               onReadOpenspecFile={handleReadOpenspecFile}
+              onWriteOpenspecFile={handleWriteOpenspecFile}
               onRefreshPlansSpecs={handleRefreshPlansSpecs}
               plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
               activePlanSessionId={activePlanSessionId}

@@ -608,6 +608,7 @@ pub(crate) struct OpenSpecChange {
     pub(crate) has_design: bool,
     pub(crate) has_tasks: bool,
     pub(crate) specs_count: usize,
+    pub(crate) specs: Vec<OpenSpecSpec>,
 }
 
 #[derive(Debug, Clone, Serialize)]

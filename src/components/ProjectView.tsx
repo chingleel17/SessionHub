@@ -76,6 +76,7 @@ type Props = {
   plansSpecsRefreshing: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
   onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
+  onWriteOpenspecFile: (projectCwd: string, relativePath: string, content: string) => Promise<void>;
   onRefreshPlansSpecs: () => Promise<void>;
   plansSpecsRefreshToken: string;
   activityStatusMap: Map<string, SessionActivityStatus>;
@@ -180,6 +181,7 @@ export function ProjectView({
   plansSpecsRefreshing,
   onReadFileContent,
   onReadOpenspecFile,
+  onWriteOpenspecFile,
   onRefreshPlansSpecs,
   plansSpecsRefreshToken,
   activePlanSessionId,
@@ -615,6 +617,7 @@ export function ProjectView({
           isRefreshing={plansSpecsRefreshing}
           onReadFileContent={onReadFileContent}
           onReadOpenspecFile={onReadOpenspecFile}
+          onWriteOpenspecFile={onWriteOpenspecFile}
           onRefresh={onRefreshPlansSpecs}
           refreshToken={plansSpecsRefreshToken}
           projectCwd={project.pathLabel}

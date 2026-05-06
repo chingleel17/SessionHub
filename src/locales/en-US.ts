@@ -257,6 +257,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "toast.providerPathEditFailed": "Failed to open provider integration in an editor",
   "toast.providerOutdatedOnStartup": "Provider integration update available. Go to Settings to install or update.",
   "toast.planSaved": "Plan saved",
+  "toast.openspecWriteFailed": "Failed to update OpenSpec file",
   "toast.planOpenedExternal": "Plan opened in external editor",
   "toast.planOpenFailed": "Failed to open plan",
   "toast.sessionsUpdated": "Session changes detected, refreshed",

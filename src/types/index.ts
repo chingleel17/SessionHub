@@ -177,6 +177,7 @@ export type OpenSpecChange = {
     hasDesign: boolean;
     hasTasks: boolean;
     specsCount: number;
+    specs: OpenSpecSpec[];
 };
 
 export type OpenSpecSpec = {

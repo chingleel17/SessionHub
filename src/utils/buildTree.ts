@@ -3,7 +3,7 @@ import type { MessageKey } from "../locales/zh-TW";
 
 type TranslateFn = (key: MessageKey) => string;
 
-function changeToNodes(change: OpenSpecChange, basePath: string): TreeNode[] {
+function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn): TreeNode[] {
   const artifacts: TreeNode[] = [];
   if (change.hasProposal) {
     artifacts.push({
@@ -27,6 +27,19 @@ function changeToNodes(change: OpenSpecChange, basePath: string): TreeNode[] {
       label: "tasks.md",
       filePath: `${basePath}/tasks.md`,
       filePathType: "openspec",
+    });
+  }
+  if (change.specs.length > 0) {
+    artifacts.push({
+      id: `change:${change.name}:specs`,
+      label: `${t("plansSpecs.openspec.specs")} (${change.specs.length})`,
+      defaultOpen: false,
+      children: change.specs.map((spec) => ({
+        id: `change:${change.name}:spec:${spec.name}`,
+        label: spec.name,
+        filePath: spec.path,
+        filePathType: "absolute" as const,
+      })),
     });
   }
   return artifacts;
@@ -107,7 +120,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
         id: `openspec:change:${change.name}`,
         label: change.name,
         defaultOpen: false,
-        children: changeToNodes(change, `changes/${change.name}`),
+        children: changeToNodes(change, `changes/${change.name}`, t),
       })),
     });
   }
@@ -121,7 +134,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
         id: `openspec:archived:${change.name}`,
         label: change.name,
         defaultOpen: false,
-        children: changeToNodes(change, `changes/archive/${change.name}`),
+        children: changeToNodes(change, `changes/archive/${change.name}`, t),
       })),
     });
   }

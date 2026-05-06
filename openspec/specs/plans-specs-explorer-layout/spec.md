@@ -55,13 +55,19 @@
 
 ## Requirement: 右側內容檢視面板
 
-系統 SHALL 在右側面板以純文字方式顯示選取文件的完整內容。
+系統 SHALL 在右側面板以 markdown 方式顯示選取文件的完整內容；若選取的是 `tasks.md`，其 checkbox 應可直接互動。
 
 ### Scenario: 顯示選取文件內容
 
 - **WHEN** 使用者在左側選取葉節點
-- **THEN** 右側面板顯示該文件的完整文字內容
+- **THEN** 右側面板顯示該文件的完整 markdown 內容
 - **AND** 文件路徑顯示於面板頂部作為標題列
+
+### Scenario: 互動勾選 tasks.md
+
+- **WHEN** 使用者在右側面板查看 `tasks.md`
+- **THEN** task list checkbox 可直接點擊切換
+- **AND** 切換後的內容會寫回原始文件
 
 ### Scenario: 文件載入中狀態
 

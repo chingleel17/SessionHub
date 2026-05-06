@@ -14,7 +14,7 @@
 
 - **WHEN** 使用者點擊展開的文件子節點（如 proposal.md）
 - **THEN** 系統呼叫 `read_openspec_file` command 讀取文件內容
-- **AND** 以純文字方式顯示文件內容於右側面板中
+- **AND** 以 markdown 方式顯示文件內容於右側面板中
 - **AND** 左側節點高亮顯示為已選取狀態
 
 ### Scenario: 文件讀取中顯示載入狀態
@@ -29,8 +29,24 @@
 ### Scenario: 點擊 Spec 節點查看內容
 
 - **WHEN** 使用者點擊左側 Specs 群組中的某個 spec 節點
-- **THEN** 系統在右側面板顯示該 spec 的 spec.md 內容（純文字）
+- **THEN** 系統在右側面板顯示該 spec 的 spec.md 內容（markdown）
 - **AND** 左側節點高亮為已選取狀態
+
+## Requirement: OpenSpec tasks 互動勾選
+
+系統 SHALL 在右側面板顯示 `tasks.md` 時，以可互動的 task list 呈現 markdown checkbox，讓使用者可直接勾選或取消勾選。
+
+### Scenario: 勾選 tasks.md 項目
+
+- **WHEN** 使用者在右側面板點擊 `tasks.md` 內的未完成 task checkbox
+- **THEN** 系統立即更新畫面中的勾選狀態
+- **AND** 將變更寫回原始 `tasks.md` 檔案
+
+### Scenario: 取消勾選 tasks.md 項目
+
+- **WHEN** 使用者在右側面板點擊 `tasks.md` 內的已完成 task checkbox
+- **THEN** 系統立即更新畫面中的勾選狀態
+- **AND** 將變更寫回原始 `tasks.md` 檔案
 
 ### Scenario: 展開/折疊切換
 
