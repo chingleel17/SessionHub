@@ -350,3 +350,106 @@ fn has_all_managed_codex_events(root: &Value, bridge_path: &Path) -> bool {
             })
     })
 }
+
+pub(crate) fn uninstall_codex_integration(
+    codex_root: Option<&str>,
+) -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(CODEX_PROVIDER);
+    let codex_root = match resolve_codex_root(codex_root) {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                CODEX_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                None,
+                Some(error),
+            );
+        }
+    };
+    let config_path = resolve_codex_integration_path(&codex_root);
+
+    if !config_path.exists() {
+        return build_provider_integration_status(
+            CODEX_PROVIDER,
+            ProviderIntegrationState::Missing,
+            Some(config_path),
+            diagnostics,
+            None,
+            None,
+        );
+    }
+
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(error) => {
+            return build_install_failure_status(
+                CODEX_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to read Codex integration file: {error}"),
+            );
+        }
+    };
+
+    let mut root: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(error) => {
+            return build_install_failure_status(
+                CODEX_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to parse Codex integration file: {error}"),
+            );
+        }
+    };
+
+    if let Some(obj) = root.as_object_mut() {
+        obj.remove("sessionHub");
+    }
+    if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+        for event_name in CODEX_MANAGED_EVENTS {
+            if let Some(groups) = hooks.get_mut(event_name).and_then(Value::as_array_mut) {
+                groups.retain(|g| {
+                    !g.get("hooks").and_then(Value::as_array).is_some_and(|inner| {
+                        inner.iter().any(|h| {
+                            h.get("commandWindows")
+                                .or_else(|| h.get("command"))
+                                .and_then(Value::as_str)
+                                .is_some_and(|cmd| cmd.contains("provider = 'codex'"))
+                        })
+                    })
+                });
+                if groups.is_empty() {
+                    hooks.remove(event_name);
+                }
+            }
+        }
+    }
+
+    let new_content = match serde_json::to_string_pretty(&root) {
+        Ok(c) => c,
+        Err(error) => {
+            return build_install_failure_status(
+                CODEX_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to serialize Codex integration: {error}"),
+            );
+        }
+    };
+
+    if let Err(error) = write_provider_integration_file(&config_path, &new_content) {
+        return build_install_failure_status(CODEX_PROVIDER, Some(config_path), diagnostics, error);
+    }
+
+    build_provider_integration_status(
+        CODEX_PROVIDER,
+        ProviderIntegrationState::Missing,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
+}

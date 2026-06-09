@@ -6,13 +6,13 @@ import type {
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 
-type ProviderIntegrationAction = "install" | "update" | "recheck";
+type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
 type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -28,6 +28,7 @@ function getProviderLabel(
   providerCopilotLabel: string,
   providerOpencodeLabel: string,
   providerCodexLabel: string,
+  providerClaudeLabel: string,
 ): string {
   switch (provider) {
     case "copilot":
@@ -36,6 +37,8 @@ function getProviderLabel(
       return providerOpencodeLabel;
     case "codex":
       return providerCodexLabel;
+    case "claude":
+      return providerClaudeLabel;
     default:
       return provider;
   }
@@ -132,6 +135,7 @@ export function SettingsView({
     copilot: t("settings.fields.providerCopilot"),
     opencode: t("settings.fields.providerOpencode"),
     codex: t("settings.fields.providerCodex"),
+    claude: t("settings.fields.providerClaude"),
   };
   const statusLabels: Record<ProviderIntegrationState, string> = {
     installed: t("settings.integrations.status.installed"),
@@ -150,105 +154,47 @@ export function SettingsView({
         </div>
 
         <div className="settings-form">
-          <label className="field-group">
-            <span>{t("settings.fields.copilotRoot")}</span>
-            <div className="field-with-action">
-              <input
-                value={settingsForm.copilotRoot}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, copilotRoot: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onBrowseDirectory("copilotRoot")}
-              >
-                {t("settings.actions.browseDirectory")}
-              </button>
-            </div>
-          </label>
-
-          <label className="field-group">
-            <span>{t("settings.fields.opencodeRoot")}</span>
-            <div className="field-with-action">
-              <input
-                value={settingsForm.opencodeRoot}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, opencodeRoot: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onBrowseDirectory("opencodeRoot")}
-              >
-                {t("settings.actions.browseDirectory")}
-              </button>
-            </div>
-          </label>
-
-          <label className="field-group">
-            <span>{t("settings.fields.codexRoot")}</span>
-            <div className="field-with-action">
-              <input
-                value={settingsForm.codexRoot}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, codexRoot: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onBrowseDirectory("codexRoot")}
-              >
-                {t("settings.actions.browseDirectory")}
-              </button>
-            </div>
-          </label>
-
           <div className="field-group">
             <span>{t("settings.fields.enabledProviders")}</span>
             <div className="checkbox-list">
-              <label className="checkbox-group">
-                <input
-                  type="checkbox"
-                  checked={settingsForm.enabledProviders.includes("copilot")}
-                  onChange={(event) => {
-                    const next = event.currentTarget.checked
-                      ? [...settingsForm.enabledProviders, "copilot"]
-                      : settingsForm.enabledProviders.filter((p) => p !== "copilot");
-                    onFormChange({ ...settingsForm, enabledProviders: next });
-                  }}
-                />
-                <span>{t("settings.fields.providerCopilot")}</span>
-              </label>
-              <label className="checkbox-group">
-                <input
-                  type="checkbox"
-                  checked={settingsForm.enabledProviders.includes("opencode")}
-                  onChange={(event) => {
-                    const next = event.currentTarget.checked
-                      ? [...settingsForm.enabledProviders, "opencode"]
-                      : settingsForm.enabledProviders.filter((p) => p !== "opencode");
-                    onFormChange({ ...settingsForm, enabledProviders: next });
-                  }}
-                />
-                <span>{t("settings.fields.providerOpencode")}</span>
-              </label>
-              <label className="checkbox-group">
-                <input
-                  type="checkbox"
-                  checked={settingsForm.enabledProviders.includes("codex")}
-                  onChange={(event) => {
-                    const next = event.currentTarget.checked
-                      ? [...settingsForm.enabledProviders, "codex"]
-                      : settingsForm.enabledProviders.filter((p) => p !== "codex");
-                    onFormChange({ ...settingsForm, enabledProviders: next });
-                  }}
-                />
-                <span>{t("settings.fields.providerCodex")}</span>
-              </label>
+              {(
+                [
+                  { id: "copilot", labelKey: "settings.fields.providerCopilot", field: "copilotRoot", path: settingsForm.copilotRoot },
+                  { id: "opencode", labelKey: "settings.fields.providerOpencode", field: "opencodeRoot", path: settingsForm.opencodeRoot },
+                  { id: "codex", labelKey: "settings.fields.providerCodex", field: "codexRoot", path: settingsForm.codexRoot },
+                  { id: "claude", labelKey: "settings.fields.providerClaude", field: "claudeRoot", path: settingsForm.claudeRoot ?? "" },
+                ] as const
+              ).map(({ id, labelKey, field, path }) => (
+                <div key={id} className="checkbox-group">
+                  <label className="checkbox-group-label">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.enabledProviders.includes(id)}
+                      onChange={(event) => {
+                        const next = event.currentTarget.checked
+                          ? [...settingsForm.enabledProviders, id]
+                          : settingsForm.enabledProviders.filter((p) => p !== id);
+                        onFormChange({ ...settingsForm, enabledProviders: next });
+                        if (event.currentTarget.checked) {
+                          onProviderAction(id, "install");
+                        }
+                      }}
+                    />
+                    <span>{t(labelKey)}</span>
+                  </label>
+                  <span className="checkbox-group-path" title={path}>{path}</span>
+                  <button
+                    type="button"
+                    className="checkbox-group-edit"
+                    onClick={() => onBrowseDirectory(field)}
+                    title={t("settings.actions.browseDirectory")}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -340,6 +286,20 @@ export function SettingsView({
             <span>{t("statusBar.showStatusBar")}</span>
           </label>
 
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.minimizeToTray ?? false}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, minimizeToTray: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.minimizeToTray")}
+              <small className="settings-field-desc">{t("settings.fields.minimizeToTrayDesc")}</small>
+            </span>
+          </label>
+
           <div className="settings-field">
             <label htmlFor="default-launcher-select">{t("settings.fields.defaultLauncher")}</label>
             <select
@@ -421,16 +381,17 @@ export function SettingsView({
           </div>
         </div>
 
-        {providerIntegrations.length === 0 ? (
+        {providerIntegrations.filter(i => settingsForm.enabledProviders.includes(i.provider)).length === 0 ? (
           <div className="provider-integration-empty">{t("settings.integrations.empty")}</div>
         ) : (
           <div className="provider-integrations-list">
-            {providerIntegrations.map((integration) => {
+            {providerIntegrations.filter(i => settingsForm.enabledProviders.includes(i.provider)).map((integration) => {
               const providerLabel = getProviderLabel(
                 integration.provider,
                 providerLabels.copilot,
                 providerLabels.opencode,
                 providerLabels.codex,
+                providerLabels.claude,
               );
               const providerBusy = pendingProviderAction?.startsWith(`${integration.provider}:`);
               const primaryAction = getProviderPrimaryAction(integration.status);
@@ -486,20 +447,39 @@ export function SettingsView({
                       </button>
                       <button
                         type="button"
-                        className="ghost-button"
+                        className="icon-button"
                         disabled={!targetPath || Boolean(providerBusy)}
                         onClick={() => onOpenProviderPath(integration)}
+                        title={t("settings.integrations.actions.open")}
                       >
-                        {t("settings.integrations.actions.open")}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/>
+                        </svg>
                       </button>
                       <button
                         type="button"
-                        className="ghost-button"
+                        className="icon-button"
                         disabled={!targetPath || Boolean(providerBusy)}
                         onClick={() => onEditProviderPath(integration)}
+                        title={t("settings.integrations.actions.edit")}
                       >
-                        {t("settings.integrations.actions.edit")}
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z"/>
+                        </svg>
                       </button>
+                      {integration.status === "installed" ? (
+                        <button
+                          type="button"
+                          className="icon-button icon-button--danger"
+                          disabled={Boolean(providerBusy)}
+                          onClick={() => onProviderAction(integration.provider, "uninstall")}
+                          title={t("settings.integrations.actions.uninstall")}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.576l-.66-6.6a.75.75 0 1 1 1.492-.149ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
+                          </svg>
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 

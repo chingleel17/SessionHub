@@ -283,3 +283,43 @@ pub(crate) fn detect_copilot_integration_status(
         ),
     }
 }
+
+pub(crate) fn uninstall_copilot_integration(
+    copilot_root: Option<&str>,
+) -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(COPILOT_PROVIDER);
+    let copilot_root = match resolve_copilot_root(copilot_root) {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                None,
+                Some(error),
+            );
+        }
+    };
+    let config_path = resolve_copilot_integration_path(&copilot_root);
+
+    if config_path.exists() {
+        if let Err(error) = fs::remove_file(&config_path) {
+            return build_install_failure_status(
+                COPILOT_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to remove Copilot integration file: {error}"),
+            );
+        }
+    }
+
+    build_provider_integration_status(
+        COPILOT_PROVIDER,
+        ProviderIntegrationState::Missing,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
+}

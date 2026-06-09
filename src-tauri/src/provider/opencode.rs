@@ -261,3 +261,40 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
         ),
     }
 }
+
+pub(crate) fn uninstall_opencode_integration() -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(OPENCODE_PROVIDER);
+    let config_path = match resolve_opencode_integration_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                None,
+                Some(error),
+            );
+        }
+    };
+
+    if config_path.exists() {
+        if let Err(error) = fs::remove_file(&config_path) {
+            return build_install_failure_status(
+                OPENCODE_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to remove OpenCode plugin file: {error}"),
+            );
+        }
+    }
+
+    build_provider_integration_status(
+        OPENCODE_PROVIDER,
+        ProviderIntegrationState::Missing,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
+}

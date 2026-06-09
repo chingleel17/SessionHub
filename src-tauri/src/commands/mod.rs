@@ -16,7 +16,10 @@ pub(crate) use sessions::*;
 pub(crate) use settings::*;
 pub(crate) use tools::*;
 
-use crate::settings::{default_codex_root, default_opencode_root};
+pub mod quota;
+pub(crate) use quota::*;
+
+use crate::settings::{default_claude_root, default_codex_root, default_opencode_root};
 use crate::types::{default_enabled_providers, AppSettings, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
 
@@ -38,6 +41,11 @@ pub(super) fn restart_provider_watchers_after_integration_change(
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_default()
         }),
+        claude_root: default_claude_root()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        claude_quota_reset_day: 1,
+        minimize_to_tray: false,
         terminal_path: None,
         external_editor_path: None,
         show_archived: false,
@@ -59,6 +67,7 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         Some(copilot_root),
         Some(settings.opencode_root.as_str()),
         Some(settings.codex_root.as_str()),
+        Some(settings.claude_root.as_str()),
         &settings.enabled_providers,
     )
 }

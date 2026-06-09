@@ -8,13 +8,17 @@ use crate::db::{
     instant_from_unix_secs, load_scan_state_from_db, load_session_mtimes_from_db,
     load_sessions_cache_from_db, persist_provider_cache,
 };
-use crate::settings::{resolve_codex_root, resolve_copilot_root, resolve_opencode_root};
+use crate::settings::{
+    resolve_claude_root, resolve_codex_root, resolve_copilot_root, resolve_opencode_root,
+};
 use crate::types::*;
 
+pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod opencode;
 
+pub(crate) use claude::*;
 pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use opencode::*;
@@ -23,6 +27,7 @@ pub(crate) fn get_sessions_internal(
     root_dir: Option<String>,
     opencode_root: Option<String>,
     codex_root: Option<String>,
+    claude_root: Option<String>,
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
@@ -32,6 +37,7 @@ pub(crate) fn get_sessions_internal(
     let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
     let resolved_codex = resolve_codex_root(codex_root.as_deref()).ok();
+    let resolved_claude = resolve_claude_root(claude_root.as_deref()).ok();
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
     let show_archived = show_archived.unwrap_or(false);
     let force = force_full.unwrap_or(false);
@@ -242,6 +248,71 @@ pub(crate) fn get_sessions_internal(
             if let Some(cache) = codex_guard.as_ref() {
                 if let Err(error) = persist_provider_cache(&connection, CODEX_PROVIDER, cache) {
                     eprintln!("failed to persist codex cache: {error}");
+                }
+            }
+        }
+    }
+
+    // ── Claude provider ───────────────────────────────────────────────────────
+    if providers.iter().any(|p| p == CLAUDE_PROVIDER) {
+        if let Some(claude_root) = &resolved_claude {
+            let mut claude_guard = scan_cache
+                .claude
+                .lock()
+                .map_err(|_| "failed to lock claude scan cache".to_string())?;
+
+            if claude_guard.is_none() {
+                let sessions = load_sessions_cache_from_db(&connection, Some(CLAUDE_PROVIDER))
+                    .unwrap_or_default();
+                let mtimes =
+                    load_session_mtimes_from_db(&connection, CLAUDE_PROVIDER).unwrap_or_default();
+                let (last_full_scan_at, last_cursor) =
+                    load_scan_state_from_db(&connection, CLAUDE_PROVIDER).unwrap_or((0, 0));
+                *claude_guard = Some(ProviderCache {
+                    sessions,
+                    session_mtimes: mtimes,
+                    last_full_scan_at: instant_from_unix_secs(last_full_scan_at),
+                    last_cursor,
+                });
+            }
+
+            let claude_force_full = force
+                || claude_guard
+                    .as_ref()
+                    .map(|cache| cache.sessions.is_empty())
+                    .unwrap_or(true);
+
+            if should_full_scan(&claude_guard, claude_force_full) {
+                match scan_claude_sessions_internal(claude_root, show_archived, &connection) {
+                    Ok(sessions) => {
+                        let mtimes = build_claude_session_mtimes(&sessions);
+                        *claude_guard = Some(ProviderCache {
+                            sessions: sessions.clone(),
+                            session_mtimes: mtimes,
+                            last_full_scan_at: Instant::now(),
+                            last_cursor: 0,
+                        });
+                        all_sessions.extend(sessions);
+                    }
+                    Err(error) => {
+                        eprintln!("claude provider error (ignored): {error}");
+                    }
+                }
+            } else {
+                let cache = claude_guard
+                    .as_mut()
+                    .expect("cache is Some after should_full_scan check");
+                if let Err(error) =
+                    scan_claude_incremental_internal(claude_root, show_archived, &connection, cache)
+                {
+                    eprintln!("claude incremental scan error (ignored): {error}");
+                }
+                all_sessions.extend(cache.sessions.iter().cloned());
+            }
+
+            if let Some(cache) = claude_guard.as_ref() {
+                if let Err(error) = persist_provider_cache(&connection, CLAUDE_PROVIDER, cache) {
+                    eprintln!("failed to persist claude cache: {error}");
                 }
             }
         }

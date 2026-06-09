@@ -31,6 +31,24 @@ pub(crate) fn default_codex_root() -> Result<PathBuf, String> {
     Ok(PathBuf::from(user_profile).join(".codex"))
 }
 
+pub(crate) fn default_claude_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+
+    Ok(PathBuf::from(user_profile).join(".claude"))
+}
+
+pub(crate) fn resolve_claude_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
+    match root_dir {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        _ => default_claude_root(),
+    }
+}
+
+pub(crate) fn resolve_claude_settings_path() -> Result<PathBuf, String> {
+    Ok(default_claude_root()?.join(CLAUDE_HOOK_FILE_NAME))
+}
+
 pub(crate) fn default_opencode_config_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -149,6 +167,9 @@ impl AppSettings {
             copilot_root: default_copilot_root()?.to_string_lossy().to_string(),
             opencode_root: default_opencode_root()?.to_string_lossy().to_string(),
             codex_root: default_codex_root()?.to_string_lossy().to_string(),
+            claude_root: default_claude_root()?.to_string_lossy().to_string(),
+            claude_quota_reset_day: 1,
+            minimize_to_tray: false,
             terminal_path,
             external_editor_path,
             show_archived: false,
@@ -168,11 +189,13 @@ impl AppSettings {
 pub(crate) fn collect_provider_integration_statuses(
     copilot_root: Option<&str>,
     codex_root: Option<&str>,
+    claude_root: Option<&str>,
 ) -> Vec<ProviderIntegrationStatus> {
     vec![
         crate::provider::detect_copilot_integration_status(copilot_root),
         crate::provider::detect_opencode_integration_status(),
         crate::provider::detect_codex_integration_status(codex_root),
+        crate::provider::detect_claude_integration_status(claude_root),
     ]
 }
 

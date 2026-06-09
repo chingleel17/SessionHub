@@ -9,14 +9,15 @@ use notify::{recommended_watcher, RecursiveMode, Watcher};
 use tauri::Emitter;
 
 use crate::provider::{
-    build_copilot_watch_snapshot, build_opencode_watch_snapshot, detect_codex_integration_status,
-    detect_copilot_integration_status, detect_opencode_integration_status, emit_provider_refresh,
-    is_relevant_copilot_event, is_relevant_opencode_event, matched_bridge_providers,
-    process_provider_bridge_event, should_emit_copilot_refresh, should_emit_opencode_refresh,
+    build_copilot_watch_snapshot, build_opencode_watch_snapshot, detect_claude_integration_status,
+    detect_codex_integration_status, detect_copilot_integration_status,
+    detect_opencode_integration_status, emit_provider_refresh, is_relevant_copilot_event,
+    is_relevant_opencode_event, matched_bridge_providers, process_provider_bridge_event,
+    should_emit_copilot_refresh, should_emit_opencode_refresh,
 };
 use crate::settings::{
-    provider_bridge_dir, resolve_codex_root, resolve_copilot_root, resolve_opencode_root,
-    resolve_provider_bridge_path,
+    provider_bridge_dir, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
+    resolve_opencode_root, resolve_provider_bridge_path,
 };
 use crate::types::*;
 
@@ -252,6 +253,67 @@ pub(crate) fn create_codex_watcher(
     Ok(watcher)
 }
 
+pub(crate) fn create_claude_watcher(
+    app: &tauri::AppHandle,
+    claude_root: &Path,
+    refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
+) -> Result<notify::RecommendedWatcher, String> {
+    let projects_root = claude_root.join("projects");
+    if !projects_root.exists() {
+        return Err(format!(
+            "claude projects root does not exist at {}",
+            projects_root.display()
+        ));
+    }
+
+    let app_handle = app.clone();
+    let watch_root = projects_root.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if let Ok(event) = result {
+            // Only trigger on .jsonl file changes
+            let relevant = event.paths.iter().any(|path| {
+                path.starts_with(&watch_root)
+                    && path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+            });
+            if !relevant {
+                return;
+            }
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            let refreshes = Arc::clone(&refresh_state);
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    let _ = emit_provider_refresh(&handle, &refreshes, CLAUDE_PROVIDER);
+                    break;
+                }
+            });
+        }
+    })
+    .map_err(|error| format!("failed to create claude watcher: {error}"))?;
+
+    watcher
+        .watch(&projects_root, RecursiveMode::Recursive)
+        .map_err(|error| format!("failed to watch {}: {error}", projects_root.display()))?;
+
+    Ok(watcher)
+}
+
 pub(crate) fn create_provider_bridge_watcher(
     app: &tauri::AppHandle,
     providers: Vec<String>,
@@ -365,6 +427,7 @@ pub(crate) fn restart_session_watcher_internal(
     copilot_root: Option<&str>,
     opencode_root: Option<&str>,
     codex_root: Option<&str>,
+    claude_root: Option<&str>,
     enabled_providers: &[String],
 ) -> Result<(), String> {
     let copilot_bridge_active = enabled_providers.iter().any(|p| p == COPILOT_PROVIDER)
@@ -382,6 +445,11 @@ pub(crate) fn restart_session_watcher_internal(
             detect_codex_integration_status(codex_root).status,
             ProviderIntegrationState::Installed
         );
+    let claude_bridge_active = enabled_providers.iter().any(|p| p == CLAUDE_PROVIDER)
+        && matches!(
+            detect_claude_integration_status(claude_root).status,
+            ProviderIntegrationState::Installed
+        );
 
     let mut bridge_providers = Vec::new();
     if copilot_bridge_active {
@@ -392,6 +460,9 @@ pub(crate) fn restart_session_watcher_internal(
     }
     if codex_bridge_active {
         bridge_providers.push(CODEX_PROVIDER.to_string());
+    }
+    if claude_bridge_active {
+        bridge_providers.push(CLAUDE_PROVIDER.to_string());
     }
 
     if bridge_providers.is_empty() {
@@ -492,6 +563,34 @@ pub(crate) fn restart_session_watcher_internal(
             .lock()
             .map_err(|_| "failed to lock codex watcher state".to_string())?;
         *codex_watcher = None;
+    }
+
+    // Claude watcher
+    if enabled_providers.iter().any(|p| p == CLAUDE_PROVIDER) && !claude_bridge_active {
+        if let Ok(cl_root) = resolve_claude_root(claude_root) {
+            match create_claude_watcher(
+                app,
+                &cl_root,
+                Arc::clone(&watcher_state.last_provider_refresh),
+            ) {
+                Ok(watcher) => {
+                    let mut claude_watcher = watcher_state
+                        .claude
+                        .lock()
+                        .map_err(|_| "failed to lock claude watcher state".to_string())?;
+                    *claude_watcher = Some(watcher);
+                }
+                Err(error) => {
+                    eprintln!("failed to start claude watcher: {error}");
+                }
+            }
+        }
+    } else {
+        let mut claude_watcher = watcher_state
+            .claude
+            .lock()
+            .map_err(|_| "failed to lock claude watcher state".to_string())?;
+        *claude_watcher = None;
     }
 
     Ok(())

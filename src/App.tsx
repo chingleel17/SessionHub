@@ -21,6 +21,7 @@ import type {
   ProjectGroup,
   ProjectSubTabState,
   ProviderIntegrationStatus,
+  ProviderQuota,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
@@ -118,13 +119,14 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string,
     .sort((a, b) => b.sessions.length - a.sessions.length);
 }
 
-type ProviderIntegrationAction = "install" | "update" | "recheck";
+type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
 function getProviderLabel(
   provider: string,
   copilotLabel: string,
   opencodeLabel: string,
   codexLabel: string,
+  claudeLabel?: string,
 ): string {
   switch (provider) {
     case "copilot":
@@ -133,6 +135,8 @@ function getProviderLabel(
       return opencodeLabel;
     case "codex":
       return codexLabel;
+    case "claude":
+      return claudeLabel ?? provider;
     default:
       return provider;
   }
@@ -259,6 +263,11 @@ function App() {
     showStatusBar: true,
     analyticsRefreshInterval: 30,
     analyticsPanelCollapsed: false,
+    minimizeToTray: false,
+    claudeRoot: "",
+    claudeQuotaResetDay: 1,
+    claudeMonthlyLimitTokens: null,
+    claudeMonthlyLimitUsd: null,
   });
 
   const settingsQuery = useQuery({
@@ -272,6 +281,7 @@ function App() {
       settingsQuery.data?.copilotRoot ?? "",
       settingsQuery.data?.opencodeRoot ?? "",
       settingsQuery.data?.codexRoot ?? "",
+      settingsQuery.data?.claudeRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
       forceFull,
@@ -282,6 +292,7 @@ function App() {
         rootDir: settingsQuery.data?.copilotRoot,
         opencodeRoot: settingsQuery.data?.opencodeRoot,
         codexRoot: settingsQuery.data?.codexRoot,
+        claudeRoot: settingsQuery.data?.claudeRoot,
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
         forceFull,
@@ -290,6 +301,13 @@ function App() {
         if (forceFull) setForceFull(false);
         return result;
       }),
+  });
+
+  const providerQuotaQuery = useQuery({
+    queryKey: ["provider_quota"],
+    queryFn: () => invoke<ProviderQuota[]>("get_provider_quota"),
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
   });
 
   const activePlanSession = useMemo(
@@ -327,6 +345,11 @@ function App() {
         showStatusBar: settingsQuery.data.showStatusBar ?? true,
         analyticsRefreshInterval: settingsQuery.data.analyticsRefreshInterval ?? 30,
         analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
+        minimizeToTray: settingsQuery.data.minimizeToTray ?? false,
+        claudeRoot: settingsQuery.data.claudeRoot ?? "",
+        claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
+        claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
+        claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
@@ -519,12 +542,15 @@ function App() {
           ? "install_provider_integration"
           : action === "update"
             ? "update_provider_integration"
-            : "recheck_provider_integration";
+            : action === "uninstall"
+              ? "uninstall_provider_integration"
+              : "recheck_provider_integration";
 
       return invoke<ProviderIntegrationStatus>(command, {
         provider,
         copilotRoot: settingsForm.copilotRoot.trim() || null,
         codexRoot: settingsForm.codexRoot.trim() || null,
+        claudeRoot: (settingsForm.claudeRoot ?? "").trim() || null,
       });
     },
     onSuccess: (status, variables) => {
@@ -533,6 +559,7 @@ function App() {
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
         t("settings.fields.providerCodex"),
+        t("settings.fields.providerClaude"),
       );
       setSettingsForm((current) => ({
         ...current,
@@ -558,7 +585,9 @@ function App() {
           ? t("toast.providerInstalled")
           : variables.action === "update"
             ? t("toast.providerUpdated")
-            : t("toast.providerRechecked");
+            : variables.action === "uninstall"
+              ? t("toast.providerUninstalled")
+              : t("toast.providerRechecked");
       showToast(toastMessage.replace("{provider}", providerLabel));
     },
     onError: (error, variables) => {
@@ -567,6 +596,7 @@ function App() {
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
         t("settings.fields.providerCodex"),
+        t("settings.fields.providerClaude"),
       );
       showToast(
         resolveErrorMessage(
@@ -619,6 +649,13 @@ function App() {
       overrides.analyticsRefreshInterval ?? settingsForm.analyticsRefreshInterval ?? 30,
     analyticsPanelCollapsed:
       overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
+    minimizeToTray: overrides.minimizeToTray ?? settingsForm.minimizeToTray ?? false,
+    claudeRoot: overrides.claudeRoot ?? settingsForm.claudeRoot ?? "",
+    claudeQuotaResetDay: overrides.claudeQuotaResetDay ?? settingsForm.claudeQuotaResetDay ?? 1,
+    claudeMonthlyLimitTokens:
+      overrides.claudeMonthlyLimitTokens ?? settingsForm.claudeMonthlyLimitTokens ?? null,
+    claudeMonthlyLimitUsd:
+      overrides.claudeMonthlyLimitUsd ?? settingsForm.claudeMonthlyLimitUsd ?? null,
   });
 
   const persistSettingsSilently = async (next: AppSettings) => {
@@ -901,26 +938,40 @@ function App() {
     [sessionTodoQueries, sessionsQuery.data],
   );
 
-  const { activeSessions, waitingSessions } = useMemo(() => {
+  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
     const sessions = sessionsQuery.data ?? [];
     const now = Date.now();
     const THIRTY_MIN = 30 * 60 * 1000;
+    const ONE_DAY = 24 * 60 * 60 * 1000;
     let active = 0;
     let waiting = 0;
+    let idle = 0;
+    let done = 0;
     for (const s of sessions) {
-      if (s.isArchived) continue;
+      if (s.isArchived) {
+        done++;
+        continue;
+      }
       const stats = sessionStatsMap[s.id];
       if (stats?.isLive) {
         active++;
         continue;
       }
+      const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
       // 只有 stats 已載入且明確非 live，才用時間判斷「最近活動」
       if (stats !== undefined) {
-        const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
-        if (updatedAt > 0 && now - updatedAt <= THIRTY_MIN) waiting++;
+        if (updatedAt > 0 && now - updatedAt <= THIRTY_MIN) {
+          waiting++;
+        } else if (updatedAt > 0 && now - updatedAt <= ONE_DAY) {
+          idle++;
+        }
+      } else {
+        if (updatedAt > 0 && now - updatedAt <= ONE_DAY) {
+          idle++;
+        }
       }
     }
-    return { activeSessions: active, waitingSessions: waiting };
+    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
   }, [sessionsQuery.data, sessionStatsMap]);
 
   const sisyphusQuery = useQuery({
@@ -1243,7 +1294,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -1620,7 +1671,10 @@ function App() {
             onOpenEventMonitor={() => setShowEventMonitor(true)}
             activeSessions={activeSessions}
             waitingSessions={waitingSessions}
+            idleSessions={idleSessions}
+            doneSessions={doneSessions}
             isLoadingSessions={sessionsQuery.isLoading}
+            providerQuotas={providerQuotaQuery.data ?? []}
           />
         ) : null}
       </section>

@@ -23,6 +23,7 @@ pub(crate) fn get_settings_internal() -> Result<AppSettings, String> {
     settings.provider_integrations = collect_provider_integration_statuses(
         Some(settings.copilot_root.as_str()),
         Some(settings.codex_root.as_str()),
+        Some(settings.claude_root.as_str()),
     );
     Ok(settings)
 }
@@ -59,6 +60,7 @@ pub fn restart_session_watcher(
     copilot_root: Option<String>,
     opencode_root: Option<String>,
     codex_root: Option<String>,
+    claude_root: Option<String>,
     enabled_providers: Option<Vec<String>>,
 ) -> Result<(), String> {
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
@@ -68,6 +70,7 @@ pub fn restart_session_watcher(
         copilot_root.as_deref(),
         opencode_root.as_deref(),
         codex_root.as_deref(),
+        claude_root.as_deref(),
         &providers,
     )
 }

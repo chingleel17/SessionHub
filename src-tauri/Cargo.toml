@@ -1,6 +1,6 @@
 [package]
 name = "session-hub"
-version = "0.1.1"
+version = "0.1.2"
 description = "Windows desktop app for managing GitHub Copilot CLI sessions"
 authors = ["ching"]
 edition = "2021"
@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 notify = "8.0"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"

@@ -37,9 +37,68 @@ pub fn run() {
                 Some(&settings.copilot_root),
                 Some(&settings.opencode_root),
                 Some(&settings.codex_root),
+                Some(&settings.claude_root),
                 &settings.enabled_providers,
             )?;
+
+            // Build system tray icon with menu
+            let show_item = tauri::tray::TrayIconBuilder::new()
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
+
+            let show_menu_item = tauri::menu::MenuItemBuilder::new("顯示視窗")
+                .id("show_window")
+                .build(app)?;
+            let quit_menu_item = tauri::menu::MenuItemBuilder::new("退出 SessionHub")
+                .id("quit")
+                .build(app)?;
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .item(&show_menu_item)
+                .separator()
+                .item(&quit_menu_item)
+                .build()?;
+
+            show_item
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show_window" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let minimize = load_settings_internal()
+                    .map(|s| s.minimize_to_tray)
+                    .unwrap_or(false);
+                if minimize {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -48,6 +107,7 @@ pub fn run() {
             install_provider_integration,
             update_provider_integration,
             recheck_provider_integration,
+            uninstall_provider_integration,
             detect_terminal,
             detect_vscode,
             restart_session_watcher,
@@ -81,7 +141,11 @@ pub fn run() {
             watch_project_files,
             stop_project_watch,
             check_tool_availability,
-            send_intervention_notification
+            send_intervention_notification,
+            get_provider_quota,
+            set_provider_quota_settings,
+            get_claude_usage_blocks,
+            refresh_claude_quota
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

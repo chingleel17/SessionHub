@@ -28,6 +28,7 @@ pub(crate) fn provider_refresh_event_name(provider: &str) -> Result<&'static str
         COPILOT_PROVIDER => Ok("copilot-sessions-updated"),
         OPENCODE_PROVIDER => Ok("opencode-sessions-updated"),
         CODEX_PROVIDER => Ok("codex-sessions-updated"),
+        CLAUDE_PROVIDER => Ok("claude-sessions-updated"),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }

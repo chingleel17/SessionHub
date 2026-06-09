@@ -64,6 +64,14 @@ pub(crate) fn default_enabled_providers() -> Vec<String> {
     ]
 }
 
+pub(crate) fn default_claude_quota_reset_day() -> u8 {
+    1
+}
+
+pub(crate) fn default_minimize_to_tray() -> bool {
+    false
+}
+
 pub(crate) fn default_notification_enabled() -> bool {
     true
 }
@@ -148,16 +156,25 @@ pub(crate) struct AppSettings {
     pub(crate) analytics_refresh_interval: u32,
     #[serde(default)]
     pub(crate) analytics_panel_collapsed: bool,
+    #[serde(default)]
+    pub(crate) claude_root: String,
+    #[serde(default = "default_claude_quota_reset_day")]
+    pub(crate) claude_quota_reset_day: u8,
+    #[serde(default = "default_minimize_to_tray")]
+    pub(crate) minimize_to_tray: bool,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
 pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
 pub(crate) const CODEX_PROVIDER: &str = "codex";
+pub(crate) const CLAUDE_PROVIDER: &str = "claude";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
 pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
 pub(crate) const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";
 pub(crate) const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider-event-bridge:";
+pub(crate) const CLAUDE_HOOK_FILE_NAME: &str = "settings.json";
+pub(crate) const SESSIONHUB_CLAUDE_HOOK_MARKER: &str = "sessionhub-provider-event-bridge";
 
 pub(crate) fn default_provider_bridge_version() -> u32 {
     PROVIDER_INTEGRATION_VERSION
@@ -403,6 +420,7 @@ pub(crate) struct WatcherState {
     pub(crate) project: Mutex<Option<RecommendedWatcher>>,
     pub(crate) opencode: Mutex<Option<RecommendedWatcher>>,
     pub(crate) codex: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) claude: Mutex<Option<RecommendedWatcher>>,
     pub(crate) provider_bridge: Mutex<Option<RecommendedWatcher>>,
     pub(crate) last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
     pub(crate) last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
@@ -439,6 +457,7 @@ pub(crate) struct ScanCache {
     pub(crate) copilot: Mutex<Option<ProviderCache>>,
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
     pub(crate) codex: Mutex<Option<ProviderCache>>,
+    pub(crate) claude: Mutex<Option<ProviderCache>>,
 }
 
 // ── OpenCode JSON 儲存格式（session/*.json / project/*.json）────────────────
@@ -688,4 +707,104 @@ pub struct ToolAvailability {
     pub opencode: bool,
     pub gemini: bool,
     pub vscode: bool,
+}
+
+// ── Claude JSONL 解析型別 ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeEntry {
+    #[serde(rename = "type")]
+    pub(crate) entry_type: String,
+    pub(crate) uuid: Option<String>,
+    #[serde(default)]
+    pub(crate) is_sidechain: bool,
+    pub(crate) message: Option<ClaudeMessage>,
+    pub(crate) request_id: Option<String>,
+    pub(crate) timestamp: Option<String>,
+    #[serde(default)]
+    pub(crate) cwd: Option<String>,
+    pub(crate) session_id: Option<String>,
+    #[serde(default)]
+    pub(crate) is_api_error_message: Option<bool>,
+    #[serde(default)]
+    pub(crate) git_branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeMessage {
+    pub(crate) id: Option<String>,
+    pub(crate) role: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) usage: Option<ClaudeUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeUsage {
+    #[serde(default)]
+    pub(crate) input_tokens: u64,
+    #[serde(default)]
+    pub(crate) output_tokens: u64,
+    #[serde(default)]
+    pub(crate) cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub(crate) cache_read_input_tokens: u64,
+    pub(crate) speed: Option<String>,
+    pub(crate) service_tier: Option<String>,
+    pub(crate) cache_creation: Option<ClaudeCacheCreation>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeCacheCreation {
+    #[serde(default)]
+    pub(crate) ephemeral_1h_input_tokens: u64,
+    #[serde(default)]
+    pub(crate) ephemeral_5m_input_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeSessionStats {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens_1h: u64,
+    pub(crate) cache_creation_tokens_5m: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) models_used: Vec<String>,
+    pub(crate) interaction_count: u32,
+    pub(crate) tool_call_count: u32,
+    pub(crate) cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeUsageBlock {
+    pub(crate) start_time: String,
+    pub(crate) end_time: String,
+    pub(crate) is_active: bool,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cost_usd: f64,
+    pub(crate) usage_limit_reset_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderQuota {
+    pub(crate) provider: String,
+    pub(crate) billing_period: String,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cost_usd: f64,
+    pub(crate) monthly_limit_tokens: Option<u64>,
+    pub(crate) monthly_limit_usd: Option<f64>,
+    pub(crate) reset_day: u8,
+    pub(crate) next_reset_date: String,
 }

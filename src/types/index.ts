@@ -46,6 +46,11 @@ export type AppSettings = {
     showStatusBar?: boolean;
     analyticsRefreshInterval?: 10 | 30;
     analyticsPanelCollapsed?: boolean;
+    minimizeToTray?: boolean;
+    claudeRoot?: string;
+    claudeQuotaResetDay?: number;
+    claudeMonthlyLimitTokens?: number | null;
+    claudeMonthlyLimitUsd?: number | null;
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";
@@ -242,4 +247,30 @@ export type BridgeEventLogEntry = {
     error: string | null;
     /** "targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit" */
     status: string;
+};
+
+export type ProviderQuota = {
+    provider: string;
+    billingPeriod: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    costUsd: number;
+    monthlyLimitTokens: number | null;
+    monthlyLimitUsd: number | null;
+    resetDay: number;
+    nextResetDate: string;
+};
+
+export type ClaudeUsageBlock = {
+    startTime: string;
+    endTime: string;
+    isActive: boolean;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    costUsd: number;
+    usageLimitResetTime: string | null;
 };

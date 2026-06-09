@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::Datelike;
 use rusqlite::{params, Connection};
 
 use crate::settings::{legacy_session_cache_path, metadata_db_path};
@@ -150,10 +151,166 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
         }
     }
 
+    // provider_quota: 各 provider 每個帳單週期的累計用量
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS provider_quota (
+                provider TEXT NOT NULL,
+                billing_period TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0.0,
+                PRIMARY KEY (provider, billing_period)
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize provider_quota table: {error}"))?;
+
+    // provider_quota_settings: 各 provider 的方案上限設定
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS provider_quota_settings (
+                provider TEXT NOT NULL PRIMARY KEY,
+                monthly_limit_tokens INTEGER,
+                monthly_limit_usd REAL,
+                reset_day INTEGER NOT NULL DEFAULT 1
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize provider_quota_settings table: {error}"))?;
+
     if let Err(error) = migrate_legacy_session_cache(connection) {
         eprintln!("Warning: failed to migrate legacy session cache: {error}");
     }
 
+    Ok(())
+}
+
+pub(crate) fn billing_period_for(reset_day: u8, now: &chrono::NaiveDate) -> String {
+    let day = reset_day.max(1).min(28) as u32;
+    if now.day() >= day {
+        format!("{}-{:02}", now.format("%Y-%m"), day)
+    } else {
+        let prev = if now.month() == 1 {
+            chrono::NaiveDate::from_ymd_opt(now.year() - 1, 12, day).unwrap_or(*now)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(now.year(), now.month() - 1, day).unwrap_or(*now)
+        };
+        format!("{}-{:02}", prev.format("%Y-%m"), day)
+    }
+}
+
+pub(crate) fn next_reset_date_for(reset_day: u8, now: &chrono::NaiveDate) -> String {
+    let day = reset_day.max(1).min(28) as u32;
+    if now.day() < day {
+        chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), day)
+            .map(|d| d.to_string())
+            .unwrap_or_default()
+    } else {
+        let (year, month) = if now.month() == 12 {
+            (now.year() + 1, 1)
+        } else {
+            (now.year(), now.month() + 1)
+        };
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .map(|d| d.to_string())
+            .unwrap_or_default()
+    }
+}
+
+pub(crate) fn upsert_provider_quota(
+    connection: &Connection,
+    provider: &str,
+    billing_period: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    cost_usd: f64,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO provider_quota (provider, billing_period, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(provider, billing_period) DO UPDATE SET
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cache_creation_tokens = excluded.cache_creation_tokens,
+                cache_read_tokens = excluded.cache_read_tokens,
+                cost_usd = excluded.cost_usd
+            ",
+            rusqlite::params![provider, billing_period, input_tokens as i64, output_tokens as i64, cache_creation_tokens as i64, cache_read_tokens as i64, cost_usd],
+        )
+        .map_err(|e| format!("failed to upsert provider quota: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn get_provider_quota_from_db(
+    connection: &Connection,
+    provider: &str,
+    billing_period: &str,
+) -> Result<Option<(u64, u64, u64, u64, f64)>, String> {
+    let mut stmt = connection
+        .prepare("SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM provider_quota WHERE provider = ?1 AND billing_period = ?2")
+        .map_err(|e| format!("failed to prepare quota query: {e}"))?;
+    let mut rows = stmt.query(rusqlite::params![provider, billing_period])
+        .map_err(|e| format!("failed to query provider quota: {e}"))?;
+    if let Some(row) = rows.next().map_err(|e| format!("failed to read quota row: {e}"))? {
+        Ok(Some((
+            row.get::<_, i64>(0).unwrap_or(0) as u64,
+            row.get::<_, i64>(1).unwrap_or(0) as u64,
+            row.get::<_, i64>(2).unwrap_or(0) as u64,
+            row.get::<_, i64>(3).unwrap_or(0) as u64,
+            row.get::<_, f64>(4).unwrap_or(0.0),
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn get_provider_quota_settings_from_db(
+    connection: &Connection,
+    provider: &str,
+) -> Result<(Option<u64>, Option<f64>, u8), String> {
+    let mut stmt = connection
+        .prepare("SELECT monthly_limit_tokens, monthly_limit_usd, reset_day FROM provider_quota_settings WHERE provider = ?1")
+        .map_err(|e| format!("failed to prepare quota settings query: {e}"))?;
+    let mut rows = stmt.query(rusqlite::params![provider])
+        .map_err(|e| format!("failed to query provider quota settings: {e}"))?;
+    if let Some(row) = rows.next().map_err(|e| format!("failed to read quota settings row: {e}"))? {
+        let limit_tokens: Option<i64> = row.get(0).ok();
+        let limit_usd: Option<f64> = row.get(1).ok();
+        let reset_day: i64 = row.get(2).unwrap_or(1);
+        Ok((
+            limit_tokens.map(|v| v as u64),
+            limit_usd,
+            (reset_day.max(1).min(28)) as u8,
+        ))
+    } else {
+        Ok((None, None, 1))
+    }
+}
+
+pub(crate) fn set_provider_quota_settings_in_db(
+    connection: &Connection,
+    provider: &str,
+    monthly_limit_tokens: Option<u64>,
+    monthly_limit_usd: Option<f64>,
+    reset_day: u8,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO provider_quota_settings (provider, monthly_limit_tokens, monthly_limit_usd, reset_day) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(provider) DO UPDATE SET monthly_limit_tokens=excluded.monthly_limit_tokens, monthly_limit_usd=excluded.monthly_limit_usd, reset_day=excluded.reset_day",
+            rusqlite::params![provider, monthly_limit_tokens.map(|v| v as i64), monthly_limit_usd, reset_day as i64],
+        )
+        .map_err(|e| format!("failed to set provider quota settings: {e}"))?;
     Ok(())
 }
 

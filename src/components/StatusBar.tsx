@@ -1,12 +1,15 @@
 import { useI18n } from "../i18n/I18nProvider";
-import type { BridgeEventLogEntry } from "../types";
+import type { BridgeEventLogEntry, ProviderQuota } from "../types";
 
 type Props = {
   lastBridgeEvent: { entry: BridgeEventLogEntry; receivedAt: Date } | null;
   onOpenEventMonitor: () => void;
   activeSessions: number;
   waitingSessions: number;
+  idleSessions: number;
+  doneSessions: number;
   isLoadingSessions: boolean;
+  providerQuotas?: ProviderQuota[];
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -17,9 +20,66 @@ const STATUS_COLORS: Record<string, string> = {
   skipped_rate_limit: "var(--color-muted, #8b949e)",
 };
 
+const PROVIDER_ABBR: Record<string, string> = {
+  claude: "CC",
+  copilot: "GH",
+  opencode: "OC",
+  codex: "DX",
+};
+
 function truncateCwd(cwd: string, maxLen = 40): string {
   if (cwd.length <= maxLen) return cwd;
   return "…" + cwd.slice(-(maxLen - 1));
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel: string }) {
+  const totalTokens = quota.inputTokens + quota.outputTokens;
+  const abbr = PROVIDER_ABBR[quota.provider] ?? quota.provider.slice(0, 2).toUpperCase();
+  const hasCost = quota.costUsd > 0;
+  const hasLimit = quota.monthlyLimitTokens != null;
+
+  const tooltipLines = [
+    `${quota.provider} — ${quota.billingPeriod}`,
+    `Input: ${formatTokenCount(quota.inputTokens)}`,
+    `Output: ${formatTokenCount(quota.outputTokens)}`,
+    quota.cacheCreationTokens > 0 ? `Cache create: ${formatTokenCount(quota.cacheCreationTokens)}` : null,
+    quota.cacheReadTokens > 0 ? `Cache read: ${formatTokenCount(quota.cacheReadTokens)}` : null,
+    hasCost ? `Cost: $${quota.costUsd.toFixed(4)}` : null,
+    hasLimit
+      ? `Limit: ${formatTokenCount(quota.monthlyLimitTokens!)} (${((totalTokens / quota.monthlyLimitTokens!) * 100).toFixed(1)}%)`
+      : noLimitLabel,
+    `Reset: ${quota.nextResetDate}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return (
+    <span
+      className="global-status-bar-quota-chip"
+      title={tooltipLines}
+    >
+      <span className="global-status-bar-quota-abbr">{abbr}</span>
+      {hasCost && (
+        <span className="global-status-bar-quota-cost">${quota.costUsd.toFixed(2)}</span>
+      )}
+      {hasLimit && (
+        <span className="global-status-bar-quota-bar">
+          <span
+            className="global-status-bar-quota-fill"
+            style={{
+              width: `${Math.min(100, (totalTokens / quota.monthlyLimitTokens!) * 100).toFixed(1)}%`,
+            }}
+          />
+        </span>
+      )}
+    </span>
+  );
 }
 
 export function StatusBar({
@@ -27,12 +87,20 @@ export function StatusBar({
   onOpenEventMonitor,
   activeSessions,
   waitingSessions,
+  idleSessions,
+  doneSessions,
   isLoadingSessions,
+  providerQuotas = [],
 }: Props) {
   const { t } = useI18n();
+  const dash = isLoadingSessions ? "-" : undefined;
+  const activeQuotas = providerQuotas.filter(
+    (q) => q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0,
+  );
 
   return (
     <div className="global-status-bar">
+      {/* Left: bridge events */}
       <button
         type="button"
         className="global-status-bar-event"
@@ -64,18 +132,38 @@ export function StatusBar({
         )}
       </button>
 
-      <div className="global-status-bar-right">
+      {/* Middle: session counts */}
+      <div className="global-status-bar-counts">
         <span
           className={`global-status-bar-count${activeSessions === 0 ? " global-status-bar-count--zero" : ""}`}
         >
-          ▶ {isLoadingSessions ? "-" : activeSessions} {t("statusBar.active")}
+          ▶ {dash ?? activeSessions} {t("statusBar.active")}
         </span>
         <span
           className={`global-status-bar-count${waitingSessions === 0 ? " global-status-bar-count--zero" : ""}`}
         >
-          ⏳ {isLoadingSessions ? "-" : waitingSessions} {t("statusBar.waiting")}
+          ⏳ {dash ?? waitingSessions} {t("statusBar.waiting")}
+        </span>
+        <span
+          className={`global-status-bar-count${idleSessions === 0 ? " global-status-bar-count--zero" : ""}`}
+        >
+          ◌ {dash ?? idleSessions} {t("statusBar.idle")}
+        </span>
+        <span
+          className={`global-status-bar-count${doneSessions === 0 ? " global-status-bar-count--zero" : ""}`}
+        >
+          ✓ {dash ?? doneSessions} {t("statusBar.done")}
         </span>
       </div>
+
+      {/* Right: provider quota */}
+      {activeQuotas.length > 0 && (
+        <div className="global-status-bar-quota">
+          {activeQuotas.map((q) => (
+            <QuotaChip key={q.provider} quota={q} noLimitLabel={t("quota.noLimit")} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

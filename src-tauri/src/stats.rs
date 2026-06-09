@@ -690,11 +690,351 @@ pub(crate) fn get_opencode_session_stats_internal(
     Ok(stats)
 }
 
+// ── Claude JSONL stats 解析 ───────────────────────────────────────────────────
+
+/// Claude 模型定價表（每 1M tokens 美元）
+struct ClaudeModelPricing {
+    input: f64,
+    output: f64,
+    cache_write_1h: f64,
+    cache_write_5m: f64,
+    cache_read: f64,
+}
+
+fn claude_model_pricing(model: &str) -> ClaudeModelPricing {
+    let m = model.to_lowercase();
+    if m.contains("opus-4") || m.contains("opus-3-5") || m.contains("opus-3.5") {
+        ClaudeModelPricing { input: 15.0, output: 75.0, cache_write_1h: 30.0, cache_write_5m: 15.0, cache_read: 1.5 }
+    } else if m.contains("sonnet-4") || m.contains("sonnet-3-7") || m.contains("sonnet-3.7") || m.contains("sonnet-3-5") || m.contains("sonnet-3.5") {
+        ClaudeModelPricing { input: 3.0, output: 15.0, cache_write_1h: 6.0, cache_write_5m: 3.0, cache_read: 0.3 }
+    } else if m.contains("haiku-4") || m.contains("haiku-3-5") || m.contains("haiku-3.5") {
+        ClaudeModelPricing { input: 0.8, output: 4.0, cache_write_1h: 1.6, cache_write_5m: 0.8, cache_read: 0.08 }
+    } else if m.contains("haiku") {
+        ClaudeModelPricing { input: 0.25, output: 1.25, cache_write_1h: 0.3, cache_write_5m: 0.25, cache_read: 0.03 }
+    } else {
+        // fallback: sonnet-level pricing
+        ClaudeModelPricing { input: 3.0, output: 15.0, cache_write_1h: 6.0, cache_write_5m: 3.0, cache_read: 0.3 }
+    }
+}
+
+pub(crate) fn is_claude_session_file(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return false;
+    }
+    let path_str = path.to_string_lossy();
+    path_str.contains(".claude") && path_str.contains("projects")
+}
+
+pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, String> {
+    use std::collections::HashMap as StdHashMap;
+
+    let file = fs::File::open(session_path)
+        .map_err(|e| format!("failed to open Claude session: {e}"))?;
+    let reader = BufReader::new(file);
+
+    let mut dedup: StdHashMap<String, crate::types::ClaudeUsage> = StdHashMap::new();
+    let mut models_used: BTreeSet<String> = BTreeSet::new();
+    let mut interaction_count: u32 = 0;
+    let mut tool_call_count: u32 = 0;
+    let mut first_ts: Option<i64> = None;
+    let mut last_ts: Option<i64> = None;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.contains("\"usage\"") {
+            continue;
+        }
+
+        let Ok(entry) = serde_json::from_str::<crate::types::ClaudeEntry>(trimmed) else {
+            continue;
+        };
+
+        if entry.entry_type != "assistant" || entry.is_sidechain {
+            if entry.entry_type == "user" {
+                interaction_count += 1;
+            }
+            continue;
+        }
+
+        let Some(msg) = &entry.message else { continue };
+        let Some(usage) = &msg.usage else { continue };
+        let Some(msg_id) = &msg.id else { continue };
+
+        // timestamp tracking for duration
+        if let Some(ts_str) = &entry.timestamp {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                let secs = dt.timestamp();
+                if first_ts.is_none() || secs < first_ts.unwrap_or(i64::MAX) {
+                    first_ts = Some(secs);
+                }
+                if last_ts.is_none() || secs > last_ts.unwrap_or(i64::MIN) {
+                    last_ts = Some(secs);
+                }
+            }
+        }
+
+        if let Some(model) = &msg.model {
+            if !model.is_empty() && model != "<synthetic>" {
+                models_used.insert(model.clone());
+            }
+        }
+
+        // dedup: keep entry with highest total tokens
+        let total = usage.input_tokens + usage.output_tokens;
+        let should_insert = dedup
+            .get(msg_id.as_str())
+            .map(|existing| {
+                existing.input_tokens + existing.output_tokens < total
+            })
+            .unwrap_or(true);
+
+        if should_insert {
+            // Check for tool_use in content — approximate via cache pattern
+            // Tool calls tracked as entries that have non-trivial output
+            if usage.output_tokens > 0 {
+                tool_call_count = tool_call_count.saturating_add(1);
+            }
+            dedup.insert(msg_id.clone(), crate::types::ClaudeUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                speed: usage.speed.clone(),
+                service_tier: usage.service_tier.clone(),
+                cache_creation: usage.cache_creation.as_ref().map(|cc| crate::types::ClaudeCacheCreation {
+                    ephemeral_1h_input_tokens: cc.ephemeral_1h_input_tokens,
+                    ephemeral_5m_input_tokens: cc.ephemeral_5m_input_tokens,
+                }),
+            });
+        }
+    }
+
+    // Aggregate
+    let mut total_input: u64 = 0;
+    let mut total_output: u64 = 0;
+    let mut total_cost: f64 = 0.0;
+    let mut model_metrics: BTreeMap<String, ModelMetricsEntry> = BTreeMap::new();
+
+    for (_, usage) in &dedup {
+        total_input += usage.input_tokens;
+        total_output += usage.output_tokens;
+
+        let model_name = models_used.iter().next().cloned().unwrap_or_default();
+        let pricing = claude_model_pricing(&model_name);
+        let fast_multiplier = if usage.speed.as_deref() == Some("fast") { 1.3 } else { 1.0 };
+
+        let cc = usage.cache_creation.as_ref();
+        let tokens_1h = cc.map(|c| c.ephemeral_1h_input_tokens).unwrap_or(0);
+        let tokens_5m = cc.map(|c| c.ephemeral_5m_input_tokens).unwrap_or(
+            usage.cache_creation_input_tokens,
+        );
+
+        let cost = fast_multiplier * (
+            (usage.input_tokens as f64 / 1_000_000.0) * pricing.input
+            + (usage.output_tokens as f64 / 1_000_000.0) * pricing.output
+            + (tokens_1h as f64 / 1_000_000.0) * pricing.cache_write_1h
+            + (tokens_5m as f64 / 1_000_000.0) * pricing.cache_write_5m
+            + (usage.cache_read_input_tokens as f64 / 1_000_000.0) * pricing.cache_read
+        );
+        total_cost += cost;
+
+        let entry = model_metrics.entry(model_name.clone()).or_insert(ModelMetricsEntry {
+            requests_count: 0.0,
+            requests_cost: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
+        });
+        entry.requests_count += 1.0;
+        entry.requests_cost += cost;
+        entry.input_tokens += usage.input_tokens;
+        entry.output_tokens += usage.output_tokens;
+    }
+
+    let duration_minutes = match (first_ts, last_ts) {
+        (Some(start), Some(end)) if end > start => ((end - start) as u64) / 60,
+        _ => 0,
+    };
+
+    Ok(SessionStats {
+        input_tokens: total_input,
+        output_tokens: total_output,
+        interaction_count,
+        tool_call_count: tool_call_count.min(dedup.len() as u32),
+        duration_minutes,
+        models_used: models_used.into_iter().collect(),
+        reasoning_count: 0,
+        tool_breakdown: BTreeMap::new(),
+        model_metrics,
+        is_live: false,
+    })
+}
+
+pub(crate) fn build_claude_usage_blocks(session_path: &Path) -> Result<Vec<ClaudeUsageBlock>, String> {
+    use std::collections::HashMap as StdHashMap;
+
+    let file = fs::File::open(session_path)
+        .map_err(|e| format!("failed to open Claude session for blocks: {e}"))?;
+    let reader = BufReader::new(file);
+
+    struct Entry {
+        ts: i64,
+        usage: crate::types::ClaudeUsage,
+        model: String,
+        is_error: bool,
+        error_text: String,
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut dedup_ids: StdHashMap<String, ()> = StdHashMap::new();
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() { continue; }
+
+        let Ok(entry) = serde_json::from_str::<crate::types::ClaudeEntry>(trimmed) else { continue };
+
+        if entry.entry_type == "assistant" && !entry.is_sidechain {
+            if let Some(msg) = &entry.message {
+                if let (Some(msg_id), Some(usage), Some(ts_str)) =
+                    (&msg.id, &msg.usage, &entry.timestamp)
+                {
+                    if dedup_ids.contains_key(msg_id.as_str()) { continue; }
+                    let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) else { continue };
+                    dedup_ids.insert(msg_id.clone(), ());
+                    let is_error = entry.is_api_error_message.unwrap_or(false);
+                    // Try to extract reset time from content if error
+                    let error_text = if is_error {
+                        // Content is opaque here; we'll parse from raw line
+                        trimmed.to_string()
+                    } else {
+                        String::new()
+                    };
+                    entries.push(Entry {
+                        ts: dt.timestamp(),
+                        usage: crate::types::ClaudeUsage {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                            cache_read_input_tokens: usage.cache_read_input_tokens,
+                            speed: usage.speed.clone(),
+                            service_tier: usage.service_tier.clone(),
+                            cache_creation: usage.cache_creation.as_ref().map(|cc| crate::types::ClaudeCacheCreation {
+                                ephemeral_1h_input_tokens: cc.ephemeral_1h_input_tokens,
+                                ephemeral_5m_input_tokens: cc.ephemeral_5m_input_tokens,
+                            }),
+                        },
+                        model: msg.model.clone().unwrap_or_default(),
+                        is_error,
+                        error_text,
+                    });
+                }
+            }
+        }
+    }
+
+    entries.sort_by_key(|e| e.ts);
+
+    const FIVE_HOURS_SECS: i64 = 5 * 3600;
+    let mut blocks: Vec<ClaudeUsageBlock> = Vec::new();
+
+    for entry in &entries {
+        let needs_new_block = blocks.last().map_or(true, |b: &ClaudeUsageBlock| {
+            let block_end_ts = chrono::DateTime::parse_from_rfc3339(&b.end_time)
+                .map(|dt| dt.timestamp())
+                .unwrap_or(0);
+            entry.ts > block_end_ts
+        });
+
+        if needs_new_block {
+            let start = chrono::DateTime::<chrono::Utc>::from_timestamp(entry.ts, 0)
+                .unwrap_or_default()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let end = chrono::DateTime::<chrono::Utc>::from_timestamp(entry.ts + FIVE_HOURS_SECS, 0)
+                .unwrap_or_default()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            blocks.push(ClaudeUsageBlock {
+                start_time: start,
+                end_time: end,
+                is_active: false,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cost_usd: 0.0,
+                usage_limit_reset_time: None,
+            });
+        }
+
+        if let Some(block) = blocks.last_mut() {
+            block.input_tokens += entry.usage.input_tokens;
+            block.output_tokens += entry.usage.output_tokens;
+            let cc = entry.usage.cache_creation.as_ref();
+            let cc_tokens = cc.map(|c| c.ephemeral_1h_input_tokens + c.ephemeral_5m_input_tokens)
+                .unwrap_or(entry.usage.cache_creation_input_tokens);
+            block.cache_creation_tokens += cc_tokens;
+            block.cache_read_tokens += entry.usage.cache_read_input_tokens;
+
+            let pricing = claude_model_pricing(&entry.model);
+            let fast_mul = if entry.usage.speed.as_deref() == Some("fast") { 1.3 } else { 1.0 };
+            let tokens_1h = cc.map(|c| c.ephemeral_1h_input_tokens).unwrap_or(0);
+            let tokens_5m = cc.map(|c| c.ephemeral_5m_input_tokens).unwrap_or(entry.usage.cache_creation_input_tokens);
+            block.cost_usd += fast_mul * (
+                (entry.usage.input_tokens as f64 / 1_000_000.0) * pricing.input
+                + (entry.usage.output_tokens as f64 / 1_000_000.0) * pricing.output
+                + (tokens_1h as f64 / 1_000_000.0) * pricing.cache_write_1h
+                + (tokens_5m as f64 / 1_000_000.0) * pricing.cache_write_5m
+                + (entry.usage.cache_read_input_tokens as f64 / 1_000_000.0) * pricing.cache_read
+            );
+
+            // Parse reset time from error messages
+            if entry.is_error && block.usage_limit_reset_time.is_none() {
+                // Look for |<unix_seconds> pattern
+                if let Some(pos) = entry.error_text.rfind('|') {
+                    let candidate = entry.error_text[pos + 1..].split('"').next().unwrap_or("").trim();
+                    if let Ok(reset_secs) = candidate.parse::<i64>() {
+                        block.usage_limit_reset_time = chrono::DateTime::<chrono::Utc>::from_timestamp(reset_secs, 0)
+                            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark last block as active if within 5 hours
+    let now = chrono::Utc::now().timestamp();
+    if let Some(last) = blocks.last_mut() {
+        let block_end = chrono::DateTime::parse_from_rfc3339(&last.end_time)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
+        last.is_active = now < block_end;
+    }
+
+    Ok(blocks)
+}
+
 pub(crate) fn get_session_stats_internal(
     connection: &Connection,
     session_dir: &str,
 ) -> Result<SessionStats, String> {
     let session_path = PathBuf::from(session_dir);
+
+    // Claude sessions: .jsonl files under ~/.claude/projects/
+    if session_path.is_file() && is_claude_session_file(&session_path) {
+        let session_id = session_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let current_mtime = session_events_mtime(&session_path)?;
+        if let Some((cached_mtime, cached_stats)) = get_session_stats_cache(connection, &session_id)? {
+            if cached_mtime == current_mtime {
+                return Ok(cached_stats);
+            }
+        }
+        let stats = compute_claude_stats(&session_path)?;
+        upsert_session_stats_cache(connection, &session_id, current_mtime, &stats)?;
+        return Ok(stats);
+    }
+
     if session_path.is_file() {
         return Ok(SessionStats::default());
     }

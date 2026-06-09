@@ -5,11 +5,13 @@ use crate::db::ensure_parent_dir;
 use crate::types::*;
 
 pub mod bridge;
+pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod opencode;
 
 pub(crate) use bridge::*;
+pub(crate) use claude::*;
 pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use opencode::*;
@@ -148,11 +150,13 @@ pub(crate) fn recheck_provider_integration_status(
     provider: &str,
     copilot_root: Option<&str>,
     codex_root: Option<&str>,
+    claude_root: Option<&str>,
 ) -> Result<ProviderIntegrationStatus, String> {
     match provider {
         COPILOT_PROVIDER => Ok(detect_copilot_integration_status(copilot_root)),
         OPENCODE_PROVIDER => Ok(detect_opencode_integration_status()),
         CODEX_PROVIDER => Ok(detect_codex_integration_status(codex_root)),
+        CLAUDE_PROVIDER => Ok(detect_claude_integration_status(claude_root)),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -161,11 +165,28 @@ pub(crate) fn install_or_update_provider_integration(
     provider: &str,
     copilot_root: Option<&str>,
     codex_root: Option<&str>,
+    claude_root: Option<&str>,
 ) -> Result<ProviderIntegrationStatus, String> {
     match provider {
         COPILOT_PROVIDER => Ok(install_or_update_copilot_integration(copilot_root)),
         OPENCODE_PROVIDER => Ok(install_or_update_opencode_integration()),
         CODEX_PROVIDER => Ok(install_or_update_codex_integration(codex_root)),
+        CLAUDE_PROVIDER => Ok(install_or_update_claude_integration(claude_root)),
+        _ => Err(format!("unsupported provider: {provider}")),
+    }
+}
+
+pub(crate) fn uninstall_provider_integration(
+    provider: &str,
+    copilot_root: Option<&str>,
+    codex_root: Option<&str>,
+    claude_root: Option<&str>,
+) -> Result<ProviderIntegrationStatus, String> {
+    match provider {
+        COPILOT_PROVIDER => Ok(uninstall_copilot_integration(copilot_root)),
+        OPENCODE_PROVIDER => Ok(uninstall_opencode_integration()),
+        CODEX_PROVIDER => Ok(uninstall_codex_integration(codex_root)),
+        CLAUDE_PROVIDER => Ok(uninstall_claude_integration(claude_root)),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
