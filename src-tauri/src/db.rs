@@ -1,8 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::fs;
 
 use rusqlite::{params, Connection};
 
@@ -31,10 +31,12 @@ impl DbState {
     pub(crate) fn new() -> Result<Self, String> {
         let db_path = metadata_db_path()?;
         ensure_parent_dir(&db_path)?;
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("failed to open metadata db: {e}"))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("failed to open metadata db: {e}"))?;
         init_db(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 }
 

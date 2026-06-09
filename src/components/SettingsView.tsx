@@ -12,7 +12,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -27,12 +27,15 @@ function getProviderLabel(
   provider: string,
   providerCopilotLabel: string,
   providerOpencodeLabel: string,
+  providerCodexLabel: string,
 ): string {
   switch (provider) {
     case "copilot":
       return providerCopilotLabel;
     case "opencode":
       return providerOpencodeLabel;
+    case "codex":
+      return providerCodexLabel;
     default:
       return provider;
   }
@@ -98,7 +101,7 @@ function getProviderTargetPath(integration: ProviderIntegrationStatus): string |
 function sortProviderIntegrations(
   integrations: ProviderIntegrationStatus[],
 ): ProviderIntegrationStatus[] {
-  const providerOrder = ["copilot", "opencode"];
+  const providerOrder = ["copilot", "opencode", "codex"];
 
   return [...integrations].sort((left, right) => {
     const leftIndex = providerOrder.indexOf(left.provider);
@@ -128,6 +131,7 @@ export function SettingsView({
   const providerLabels = {
     copilot: t("settings.fields.providerCopilot"),
     opencode: t("settings.fields.providerOpencode"),
+    codex: t("settings.fields.providerCodex"),
   };
   const statusLabels: Record<ProviderIntegrationState, string> = {
     installed: t("settings.integrations.status.installed"),
@@ -184,6 +188,25 @@ export function SettingsView({
             </div>
           </label>
 
+          <label className="field-group">
+            <span>{t("settings.fields.codexRoot")}</span>
+            <div className="field-with-action">
+              <input
+                value={settingsForm.codexRoot}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, codexRoot: event.currentTarget.value })
+                }
+              />
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onBrowseDirectory("codexRoot")}
+              >
+                {t("settings.actions.browseDirectory")}
+              </button>
+            </div>
+          </label>
+
           <div className="field-group">
             <span>{t("settings.fields.enabledProviders")}</span>
             <div className="checkbox-list">
@@ -212,6 +235,19 @@ export function SettingsView({
                   }}
                 />
                 <span>{t("settings.fields.providerOpencode")}</span>
+              </label>
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.enabledProviders.includes("codex")}
+                  onChange={(event) => {
+                    const next = event.currentTarget.checked
+                      ? [...settingsForm.enabledProviders, "codex"]
+                      : settingsForm.enabledProviders.filter((p) => p !== "codex");
+                    onFormChange({ ...settingsForm, enabledProviders: next });
+                  }}
+                />
+                <span>{t("settings.fields.providerCodex")}</span>
               </label>
             </div>
           </div>
@@ -394,6 +430,7 @@ export function SettingsView({
                 integration.provider,
                 providerLabels.copilot,
                 providerLabels.opencode,
+                providerLabels.codex,
               );
               const providerBusy = pendingProviderAction?.startsWith(`${integration.provider}:`);
               const primaryAction = getProviderPrimaryAction(integration.status);

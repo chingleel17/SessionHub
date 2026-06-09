@@ -19,10 +19,12 @@ import type {
   IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
+  ProjectSubTabState,
   ProviderIntegrationStatus,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
+  SessionTodo,
   SessionTargetedPayload,
   SisyphusData,
   ToolAvailability,
@@ -65,6 +67,14 @@ function getDashboardPeriodStart(period: "week" | "month"): number {
 
 function formatDateInput(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+function readSessionTodos(sessionDir: string): Promise<SessionTodo[]> {
+  return invoke<SessionTodo[]>("read_session_todos", { sessionDir });
+}
+
+function triggerStatsBackfill(rootDir: string | null | undefined): Promise<number> {
+  return invoke<number>("trigger_stats_backfill", { rootDir: rootDir ?? null });
 }
 
 function isSessionInUpdatedRange(session: SessionInfo, periodStartTime: number): boolean {
@@ -114,12 +124,15 @@ function getProviderLabel(
   provider: string,
   copilotLabel: string,
   opencodeLabel: string,
+  codexLabel: string,
 ): string {
   switch (provider) {
     case "copilot":
       return copilotLabel;
     case "opencode":
       return opencodeLabel;
+    case "codex":
+      return codexLabel;
     default:
       return provider;
   }
@@ -195,15 +208,15 @@ function App() {
 
   // Plan sub-tab state per project — preserved across project switches
   const [projectSubTabStates, setProjectSubTabStates] = useState<
-    Map<string, { openPlanKeys: string[]; activeSubTab: string }>
+    Map<string, ProjectSubTabState>
   >(new Map());
 
   const getProjectSubTabState = (projectKey: string) =>
-    projectSubTabStates.get(projectKey) ?? { openPlanKeys: [], activeSubTab: "sessions" };
+    projectSubTabStates.get(projectKey) ?? { openDetailKeys: [], activeSubTab: "sessions" };
 
   const handleSubTabStateChange = (
     projectKey: string,
-    state: { openPlanKeys: string[]; activeSubTab: string },
+    state: ProjectSubTabState,
   ) => {
     setProjectSubTabStates((prev) => new Map(prev).set(projectKey, state));
   };
@@ -228,15 +241,17 @@ function App() {
   const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
   const lastInterventionSessionRef = useRef<string | null>(null);
   const lastNotificationSessionRef = useRef<{ id: string; type: string } | null>(null);
+  const lastBackfillRequestRef = useRef<string | null>(null);
   // sessionsDataRef 讓事件 listener 不因 stale closure 而讀到舊的 sessionsQuery.data
   const sessionsDataRef = useRef<SessionInfo[]>([]);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
+    codexRoot: "",
     terminalPath: "",
     externalEditorPath: "",
     showArchived: false,
-    enabledProviders: ["copilot", "opencode"],
+    enabledProviders: ["copilot", "opencode", "codex"],
     providerIntegrations: [],
     defaultLauncher: "terminal",
     enableInterventionNotification: true,
@@ -256,6 +271,7 @@ function App() {
       "sessions",
       settingsQuery.data?.copilotRoot ?? "",
       settingsQuery.data?.opencodeRoot ?? "",
+      settingsQuery.data?.codexRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
       forceFull,
@@ -265,6 +281,7 @@ function App() {
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
         opencodeRoot: settingsQuery.data?.opencodeRoot,
+        codexRoot: settingsQuery.data?.codexRoot,
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
         forceFull,
@@ -297,11 +314,12 @@ function App() {
       setSettingsForm({
         copilotRoot: settingsQuery.data.copilotRoot,
         opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
+        codexRoot: settingsQuery.data.codexRoot ?? "",
         terminalPath: settingsQuery.data.terminalPath ?? "",
         externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
         showArchived: settingsQuery.data.showArchived,
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
-        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
+        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode", "codex"],
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
         defaultLauncher: settingsQuery.data.defaultLauncher ?? "terminal",
         enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
@@ -313,6 +331,27 @@ function App() {
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
     }
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    if (!sessionsQuery.isSuccess || !settingsQuery.data?.copilotRoot) return;
+
+    const requestKey = `${settingsQuery.data.copilotRoot}:${sessionsQuery.dataUpdatedAt}`;
+    if (lastBackfillRequestRef.current === requestKey) return;
+    lastBackfillRequestRef.current = requestKey;
+
+    void triggerStatsBackfill(settingsQuery.data.copilotRoot)
+      .then((count) => {
+        if (count > 0) {
+          void queryClient.invalidateQueries({ queryKey: ["session_stats"] });
+        }
+      })
+      .catch((error) => console.warn("[stats-backfill] trigger failed:", error));
+  }, [
+    queryClient,
+    sessionsQuery.dataUpdatedAt,
+    sessionsQuery.isSuccess,
+    settingsQuery.data?.copilotRoot,
+  ]);
 
   // 啟動時偵測 provider integration 版本是否過期，提示使用者前往設定更新
   useEffect(() => {
@@ -339,6 +378,7 @@ function App() {
     void invoke("restart_session_watcher", {
       copilotRoot: settingsQuery.data.copilotRoot,
       opencodeRoot: settingsQuery.data.opencodeRoot,
+      codexRoot: settingsQuery.data.codexRoot,
       enabledProviders: settingsQuery.data.enabledProviders,
     })
       .then(() => setRealtimeStatus("active"))
@@ -399,6 +439,7 @@ function App() {
         await invoke("restart_session_watcher", {
           copilotRoot: settingsForm.copilotRoot.trim(),
           opencodeRoot: settingsForm.opencodeRoot.trim(),
+          codexRoot: settingsForm.codexRoot.trim(),
           enabledProviders: settingsForm.enabledProviders,
         });
         setRealtimeStatus("active");
@@ -483,6 +524,7 @@ function App() {
       return invoke<ProviderIntegrationStatus>(command, {
         provider,
         copilotRoot: settingsForm.copilotRoot.trim() || null,
+        codexRoot: settingsForm.codexRoot.trim() || null,
       });
     },
     onSuccess: (status, variables) => {
@@ -490,6 +532,7 @@ function App() {
         status.provider,
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
+        t("settings.fields.providerCodex"),
       );
       setSettingsForm((current) => ({
         ...current,
@@ -523,6 +566,7 @@ function App() {
         variables.provider,
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
+        t("settings.fields.providerCodex"),
       );
       showToast(
         resolveErrorMessage(
@@ -557,6 +601,7 @@ function App() {
   const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => ({
     copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
     opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
+    codexRoot: (overrides.codexRoot ?? settingsForm.codexRoot).trim(),
     terminalPath: (overrides.terminalPath ?? settingsForm.terminalPath)?.trim() || null,
     externalEditorPath:
       (overrides.externalEditorPath ?? settingsForm.externalEditorPath)?.trim() || null,
@@ -683,6 +728,7 @@ function App() {
     const setup = async () => {
       const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
       const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
+      const unlistenCodex = await listen("codex-sessions-updated", onSessionsRefresh);
 
       const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
         "copilot-session-targeted",
@@ -785,6 +831,7 @@ function App() {
       return () => {
         unlistenCopilot();
         unlistenOpencode();
+        unlistenCodex();
         unlistenCopilotTargeted();
         unlistenActivityHint();
         unlistenPlan();
@@ -810,7 +857,9 @@ function App() {
       queryKey: ["session_stats", session.sessionDir],
       queryFn: () => invoke<SessionStats>("get_session_stats", { sessionDir: session.sessionDir }),
       staleTime: 60_000,
-      enabled: Boolean(session.sessionDir),
+      enabled: session.provider !== "codex" && Boolean(session.sessionDir),
+      refetchInterval: (query: { state: { data?: SessionStats } }) =>
+        query.state.data?.isLive ? 30_000 : false,
     })),
   });
 
@@ -826,6 +875,30 @@ function App() {
       (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.isLoading]),
     ) as Record<string, boolean | undefined>,
     [sessionStatsQueries, sessionsQuery.data],
+  );
+
+  const sessionTodoQueries = useQueries({
+    queries: (sessionsQuery.data ?? []).map((session) => ({
+      queryKey: ["session_todos", session.sessionDir],
+      queryFn: () => readSessionTodos(session.sessionDir),
+      staleTime: 60_000,
+      enabled: session.provider === "copilot" && Boolean(session.sessionDir),
+      refetchInterval: () => (sessionStatsMap[session.id]?.isLive ? 30_000 : false),
+    })),
+  });
+
+  const sessionTodosMap = useMemo(
+    () => Object.fromEntries(
+      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionTodoQueries[index]?.data ?? []]),
+    ) as Record<string, SessionTodo[]>,
+    [sessionTodoQueries, sessionsQuery.data],
+  );
+
+  const sessionTodosLoadingMap = useMemo(
+    () => Object.fromEntries(
+      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionTodoQueries[index]?.isLoading]),
+    ) as Record<string, boolean | undefined>,
+    [sessionTodoQueries, sessionsQuery.data],
   );
 
   const { activeSessions, waitingSessions } = useMemo(() => {
@@ -1142,6 +1215,7 @@ function App() {
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
     const requiresOpencodeRoot = next.enabledProviders.includes("opencode");
+    const requiresCodexRoot = next.enabledProviders.includes("codex");
 
     if (requiresCopilotRoot && !next.copilotRoot) {
       showToast(t("toast.settingsRootRequired"));
@@ -1149,6 +1223,11 @@ function App() {
     }
 
     if (requiresOpencodeRoot && !next.opencodeRoot) {
+      showToast(t("toast.settingsRootRequired"));
+      return;
+    }
+
+    if (requiresCodexRoot && !next.codexRoot) {
       showToast(t("toast.settingsRootRequired"));
       return;
     }
@@ -1164,7 +1243,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -1252,7 +1331,13 @@ function App() {
     const command =
       session.provider === "opencode"
         ? `opencode session ${session.id}`
+        : session.provider === "codex"
+          ? ""
         : `copilot --resume=${session.id}`;
+    if (!command) {
+      showToast(t("toast.commandUnavailable"));
+      return;
+    }
     await navigator.clipboard.writeText(command);
     showToast(t("toast.commandCopied"));
   };
@@ -1495,6 +1580,8 @@ function App() {
               onTogglePin={() => void togglePinProject(activeProject.key)}
               sessionStats={sessionStatsMap}
               sessionStatsLoading={sessionStatsLoadingMap}
+              sessionTodos={sessionTodosMap}
+              sessionTodosLoading={sessionTodosLoadingMap}
               sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecQuery.data}
@@ -1512,7 +1599,7 @@ function App() {
               onPlanDraftChange={setPlanDraft}
               onSavePlan={handleSavePlan}
               onOpenPlanExternal={(s) => void handleOpenPlanExternal(s)}
-              openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
+              openDetailKeys={getProjectSubTabState(activeProject.key).openDetailKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
               onFetchAnalytics={(cwd, startDate, endDate, groupBy) =>

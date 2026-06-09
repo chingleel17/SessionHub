@@ -6,9 +6,11 @@ import type {
   IdeLauncherType,
   OpenSpecData,
   ProjectGroup,
+  ProjectSubTabState,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
+  SessionTodo,
   SisyphusData,
   SortKey,
   ToolAvailability,
@@ -19,8 +21,8 @@ import { PlanEditor } from "./PlanEditor";
 import { PlansSpecsView } from "./PlansSpecsView";
 import { ProjectStatsBanner } from "./ProjectStatsBanner";
 import { SessionCard } from "./SessionCard";
+import { SessionTodosTab } from "./SessionTodosTab";
 
-type SubTabState = { openPlanKeys: string[]; activeSubTab: string };
 type SessionUpdatedRange = "all" | "week" | "month";
 
 const SESSIONS_PAGE_SIZE = 20;
@@ -69,6 +71,8 @@ type Props = {
   onTogglePin: () => void;
   sessionStats: Record<string, SessionStats | undefined>;
   sessionStatsLoading: Record<string, boolean | undefined>;
+  sessionTodos: Record<string, SessionTodo[] | undefined>;
+  sessionTodosLoading: Record<string, boolean | undefined>;
   sessionsLoading: boolean;
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
@@ -93,9 +97,9 @@ type Props = {
   onSavePlan: () => void;
   onOpenPlanExternal: (session: SessionInfo) => void;
   // Controlled sub-tab state (lifted to App.tsx for cross-project persistence)
-  openPlanKeys: string[];
+  openDetailKeys: string[];
   activeSubTab: string;
-  onSubTabStateChange: (state: SubTabState) => void;
+  onSubTabStateChange: (state: ProjectSubTabState) => void;
   onFetchAnalytics: (
     cwd: string | null,
     startDate: string,
@@ -174,6 +178,8 @@ export function ProjectView({
   onTogglePin,
   sessionStats,
   sessionStatsLoading,
+  sessionTodos,
+  sessionTodosLoading,
   sessionsLoading,
   sisyphusData,
   openspecData,
@@ -191,7 +197,7 @@ export function ProjectView({
   onPlanDraftChange,
   onSavePlan,
   onOpenPlanExternal,
-  openPlanKeys,
+  openDetailKeys,
   activeSubTab,
   onSubTabStateChange,
   onFetchAnalytics,
@@ -226,23 +232,40 @@ export function ProjectView({
     return () => document.removeEventListener("mousedown", handler);
   }, [openLauncherSessionId]);
 
+  const buildDetailTabKey = (kind: "plan" | "todos", sessionId: string) => `${kind}:${sessionId}`;
+  const parseDetailTabKey = (value: string): { kind: "plan" | "todos"; sessionId: string } | null => {
+    if (value.startsWith("plan:")) return { kind: "plan", sessionId: value.replace("plan:", "") };
+    if (value.startsWith("todos:")) return { kind: "todos", sessionId: value.replace("todos:", "") };
+    return null;
+  };
+
   const setActiveSubTab = (next: string) => {
-    onSubTabStateChange({ openPlanKeys, activeSubTab: next });
+    onSubTabStateChange({ openDetailKeys, activeSubTab: next });
+    if (!next.startsWith("plan:")) {
+      onActivePlanChange(null);
+    }
   };
 
   const handleOpenPlanSubTab = (session: SessionInfo) => {
-    const planKey = `plan:${session.id}`;
-    const nextKeys = openPlanKeys.includes(planKey) ? openPlanKeys : [...openPlanKeys, planKey];
-    onSubTabStateChange({ openPlanKeys: nextKeys, activeSubTab: planKey });
+    const planKey = buildDetailTabKey("plan", session.id);
+    const nextKeys = openDetailKeys.includes(planKey) ? openDetailKeys : [...openDetailKeys, planKey];
+    onSubTabStateChange({ openDetailKeys: nextKeys, activeSubTab: planKey });
     onOpenPlan(session);
   };
 
-  const handleClosePlanSubTab = (planKey: string) => {
-    const sessionId = planKey.replace("plan:", "");
-    const nextKeys = openPlanKeys.filter((k) => k !== planKey);
-    const nextSubTab = activeSubTab === planKey ? "sessions" : activeSubTab;
-    onSubTabStateChange({ openPlanKeys: nextKeys, activeSubTab: nextSubTab });
-    if (activePlanSessionId === sessionId) {
+  const handleOpenTodosSubTab = (session: SessionInfo) => {
+    const todosKey = buildDetailTabKey("todos", session.id);
+    const nextKeys = openDetailKeys.includes(todosKey) ? openDetailKeys : [...openDetailKeys, todosKey];
+    onSubTabStateChange({ openDetailKeys: nextKeys, activeSubTab: todosKey });
+    onActivePlanChange(null);
+  };
+
+  const handleCloseDetailSubTab = (detailKey: string) => {
+    const detail = parseDetailTabKey(detailKey);
+    const nextKeys = openDetailKeys.filter((k) => k !== detailKey);
+    const nextSubTab = activeSubTab === detailKey ? "sessions" : activeSubTab;
+    onSubTabStateChange({ openDetailKeys: nextKeys, activeSubTab: nextSubTab });
+    if (detail?.kind === "plan" && activePlanSessionId === detail.sessionId) {
       onActivePlanChange(null);
     }
   };
@@ -338,30 +361,32 @@ export function ProjectView({
             >
               {t("project.subTab.analytics")}
             </button>
-            {openPlanKeys.map((planKey) => {
-              const sessionId = planKey.replace("plan:", "");
-              const session = project.sessions.find((s) => s.id === sessionId);
+            {openDetailKeys.map((detailKey) => {
+              const detail = parseDetailTabKey(detailKey);
+              if (!detail) return null;
+              const session = project.sessions.find((s) => s.id === detail.sessionId);
               if (!session) return null;
               const tabTitle = session.summary?.trim() || session.id.slice(0, 8);
+              const prefix = detail.kind === "plan" ? t("plan.tab") : t("session.todos.tab");
               return (
                 <div
-                  key={planKey}
-                  className={`sub-tab-item sub-tab-item--closeable ${activeSubTab === planKey ? "sub-tab-item--active" : ""}`}
+                  key={detailKey}
+                  className={`sub-tab-item sub-tab-item--closeable ${activeSubTab === detailKey ? "sub-tab-item--active" : ""}`}
                 >
                   <button
                     type="button"
                     className="sub-tab-label"
                     onClick={() => {
-                      setActiveSubTab(planKey);
-                      onActivePlanChange(sessionId);
+                      setActiveSubTab(detailKey);
+                      onActivePlanChange(detail.kind === "plan" ? detail.sessionId : null);
                     }}
                   >
-                    {t("plan.tab")} · {tabTitle}
+                    {prefix} · {tabTitle}
                   </button>
                   <button
                     type="button"
                     className="sub-tab-close"
-                    onClick={() => handleClosePlanSubTab(planKey)}
+                    onClick={() => handleCloseDetailSubTab(detailKey)}
                     aria-label={`${t("tabs.close")} ${tabTitle}`}
                   >
                     ×
@@ -465,7 +490,13 @@ export function ProjectView({
                                 })
                               }
                             >
-                              {provider === "copilot" ? "Copilot" : provider === "opencode" ? "OpenCode" : provider}
+                              {provider === "copilot"
+                                ? "Copilot"
+                                : provider === "opencode"
+                                  ? "OpenCode"
+                                  : provider === "codex"
+                                    ? "Codex"
+                                    : provider}
                             </button>
                           );
                         })}
@@ -586,11 +617,14 @@ export function ProjectView({
                 onEditNotes={onEditNotes}
                 onEditTags={onEditTags}
                 onOpenPlan={handleOpenPlanSubTab}
+                onOpenTodos={handleOpenTodosSubTab}
                 onArchive={onArchive}
                 onUnarchive={onUnarchive}
                 onDelete={onDelete}
                 stats={sessionStats[session.id]}
                 statsLoading={Boolean(sessionStatsLoading[session.id])}
+                todos={sessionTodos[session.id] ?? []}
+                todosLoading={Boolean(sessionTodosLoading[session.id])}
                 activityStatus={activityStatusMap.get(session.id)}
                 onOpenInTool={onOpenInTool}
                 onFocusTerminal={onFocusTerminal}
@@ -635,7 +669,21 @@ export function ProjectView({
               onDraftChange={onPlanDraftChange}
               onSave={onSavePlan}
               onOpenExternal={onOpenPlanExternal}
-              onClose={() => handleClosePlanSubTab(activeSubTab)}
+              onClose={() => handleCloseDetailSubTab(activeSubTab)}
+            />
+          );
+        })()
+      ) : activeSubTab.startsWith("todos:") ? (
+        (() => {
+          const sessionId = activeSubTab.replace("todos:", "");
+          const todoSession = project.sessions.find((s) => s.id === sessionId);
+          if (!todoSession) return null;
+          return (
+            <SessionTodosTab
+              session={todoSession}
+              todos={sessionTodos[todoSession.id] ?? []}
+              isLoading={Boolean(sessionTodosLoading[todoSession.id])}
+              onClose={() => handleCloseDetailSubTab(activeSubTab)}
             />
           );
         })()

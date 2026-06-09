@@ -163,7 +163,10 @@ pub(crate) fn write_openspec_file_internal(
     fs::write(&canonical_target, content).map_err(|e| format!("Failed to write file: {e}"))
 }
 
-fn resolve_openspec_file_internal(project_cwd: &str, relative_path: &str) -> Result<PathBuf, String> {
+fn resolve_openspec_file_internal(
+    project_cwd: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     let base = PathBuf::from(project_cwd).join("openspec");
     let canonical_base = base
         .canonicalize()

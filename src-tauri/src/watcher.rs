@@ -9,13 +9,14 @@ use notify::{recommended_watcher, RecursiveMode, Watcher};
 use tauri::Emitter;
 
 use crate::provider::{
-    build_copilot_watch_snapshot, build_opencode_watch_snapshot, detect_copilot_integration_status,
-    detect_opencode_integration_status, emit_provider_refresh, is_relevant_copilot_event,
-    is_relevant_opencode_event, matched_bridge_providers, process_provider_bridge_event,
-    should_emit_copilot_refresh, should_emit_opencode_refresh,
+    build_copilot_watch_snapshot, build_opencode_watch_snapshot, detect_codex_integration_status,
+    detect_copilot_integration_status, detect_opencode_integration_status, emit_provider_refresh,
+    is_relevant_copilot_event, is_relevant_opencode_event, matched_bridge_providers,
+    process_provider_bridge_event, should_emit_copilot_refresh, should_emit_opencode_refresh,
 };
 use crate::settings::{
-    provider_bridge_dir, resolve_copilot_root, resolve_opencode_root, resolve_provider_bridge_path,
+    provider_bridge_dir, resolve_codex_root, resolve_copilot_root, resolve_opencode_root,
+    resolve_provider_bridge_path,
 };
 use crate::types::*;
 
@@ -59,24 +60,21 @@ pub(crate) fn create_sessions_watcher(
             let refreshes = Arc::clone(&refresh_state);
             let watched_root = watch_root.clone();
             let tracked_snapshot = Arc::clone(&snapshot_state);
-            thread::spawn(move || {
-                loop {
-                    thread::sleep(Duration::from_millis(COPILOT_DEBOUNCE_MS));
-                    let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
-                    if elapsed >= Duration::from_millis(COPILOT_DEBOUNCE_MS) {
-                        running.store(false, Ordering::SeqCst);
-                        match should_emit_copilot_refresh(&watched_root, &tracked_snapshot) {
-                            Ok(true) => {
-                                let _ =
-                                    emit_provider_refresh(&handle, &refreshes, COPILOT_PROVIDER);
-                            }
-                            Ok(false) => {}
-                            Err(error) => {
-                                eprintln!("failed to verify copilot watcher refresh: {error}");
-                            }
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(COPILOT_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(COPILOT_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    match should_emit_copilot_refresh(&watched_root, &tracked_snapshot) {
+                        Ok(true) => {
+                            let _ = emit_provider_refresh(&handle, &refreshes, COPILOT_PROVIDER);
                         }
-                        break;
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("failed to verify copilot watcher refresh: {error}");
+                        }
                     }
+                    break;
                 }
             });
         }
@@ -87,9 +85,7 @@ pub(crate) fn create_sessions_watcher(
     if session_state_dir.exists() {
         watcher
             .watch(&session_state_dir, RecursiveMode::Recursive)
-            .map_err(|error| {
-                format!("failed to watch {}: {error}", session_state_dir.display())
-            })?;
+            .map_err(|error| format!("failed to watch {}: {error}", session_state_dir.display()))?;
     }
 
     let archive_dir = root.join("session-state-archive");
@@ -107,13 +103,15 @@ pub(crate) fn create_opencode_watcher(
     opencode_root: &Path,
     refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
 ) -> Result<notify::RecommendedWatcher, String> {
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
     let session_storage = opencode_root.join("storage").join("session");
     let message_storage = opencode_root.join("storage").join("message");
 
-    if !session_storage.exists() {
+    if !db_path.exists() && !session_storage.exists() {
         return Err(format!(
-            "opencode session storage does not exist at {}",
-            session_storage.display()
+            "opencode db or legacy session storage does not exist at {}",
+            opencode_root.display()
         ));
     }
 
@@ -165,13 +163,91 @@ pub(crate) fn create_opencode_watcher(
     .map_err(|error| format!("failed to create opencode watcher: {error}"))?;
 
     watcher
-        .watch(&session_storage, RecursiveMode::Recursive)
-        .map_err(|error| format!("failed to watch {}: {error}", session_storage.display()))?;
+        .watch(opencode_root, RecursiveMode::NonRecursive)
+        .map_err(|error| format!("failed to watch {}: {error}", opencode_root.display()))?;
+    if db_path.exists() {
+        watcher
+            .watch(&db_path, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", db_path.display()))?;
+    }
+    if wal_path.exists() {
+        watcher
+            .watch(&wal_path, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", wal_path.display()))?;
+    }
+    if session_storage.exists() {
+        watcher
+            .watch(&session_storage, RecursiveMode::Recursive)
+            .map_err(|error| format!("failed to watch {}: {error}", session_storage.display()))?;
+    }
     if message_storage.exists() {
         watcher
             .watch(&message_storage, RecursiveMode::NonRecursive)
             .map_err(|error| format!("failed to watch {}: {error}", message_storage.display()))?;
     }
+
+    Ok(watcher)
+}
+
+fn is_relevant_codex_event(event: &notify::Event, sessions_root: &Path) -> bool {
+    event.paths.iter().any(|path| {
+        path.starts_with(sessions_root)
+            && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+    })
+}
+
+pub(crate) fn create_codex_watcher(
+    app: &tauri::AppHandle,
+    codex_root: &Path,
+    refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
+) -> Result<notify::RecommendedWatcher, String> {
+    let sessions_root = codex_root.join("sessions");
+    if !sessions_root.exists() {
+        return Err(format!(
+            "codex sessions root does not exist at {}",
+            sessions_root.display()
+        ));
+    }
+
+    let app_handle = app.clone();
+    let watch_root = sessions_root.clone();
+    let last_event: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    let debounce_running: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let mut watcher = recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if let Ok(event) = result {
+            if !is_relevant_codex_event(&event, &watch_root) {
+                return;
+            }
+            if let Ok(mut ts) = last_event.lock() {
+                *ts = Instant::now();
+            }
+            if debounce_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            let le = Arc::clone(&last_event);
+            let handle = app_handle.clone();
+            let running = Arc::clone(&debounce_running);
+            let refreshes = Arc::clone(&refresh_state);
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(OPENCODE_DEBOUNCE_MS));
+                let elapsed = le.lock().map(|ts| ts.elapsed()).unwrap_or_default();
+                if elapsed >= Duration::from_millis(OPENCODE_DEBOUNCE_MS) {
+                    running.store(false, Ordering::SeqCst);
+                    let _ = emit_provider_refresh(&handle, &refreshes, CODEX_PROVIDER);
+                    break;
+                }
+            });
+        }
+    })
+    .map_err(|error| format!("failed to create codex watcher: {error}"))?;
+
+    watcher
+        .watch(&sessions_root, RecursiveMode::Recursive)
+        .map_err(|error| format!("failed to watch {}: {error}", sessions_root.display()))?;
 
     Ok(watcher)
 }
@@ -288,6 +364,7 @@ pub(crate) fn restart_session_watcher_internal(
     watcher_state: &WatcherState,
     copilot_root: Option<&str>,
     opencode_root: Option<&str>,
+    codex_root: Option<&str>,
     enabled_providers: &[String],
 ) -> Result<(), String> {
     let copilot_bridge_active = enabled_providers.iter().any(|p| p == COPILOT_PROVIDER)
@@ -300,6 +377,11 @@ pub(crate) fn restart_session_watcher_internal(
             detect_opencode_integration_status().status,
             ProviderIntegrationState::Installed
         );
+    let codex_bridge_active = enabled_providers.iter().any(|p| p == CODEX_PROVIDER)
+        && matches!(
+            detect_codex_integration_status(codex_root).status,
+            ProviderIntegrationState::Installed
+        );
 
     let mut bridge_providers = Vec::new();
     if copilot_bridge_active {
@@ -307,6 +389,9 @@ pub(crate) fn restart_session_watcher_internal(
     }
     if opencode_bridge_active {
         bridge_providers.push(OPENCODE_PROVIDER.to_string());
+    }
+    if codex_bridge_active {
+        bridge_providers.push(CODEX_PROVIDER.to_string());
     }
 
     if bridge_providers.is_empty() {
@@ -381,6 +466,34 @@ pub(crate) fn restart_session_watcher_internal(
         *oc_watcher = None;
     }
 
+    // Codex watcher
+    if enabled_providers.iter().any(|p| p == CODEX_PROVIDER) && !codex_bridge_active {
+        if let Ok(cx_root) = resolve_codex_root(codex_root) {
+            match create_codex_watcher(
+                app,
+                &cx_root,
+                Arc::clone(&watcher_state.last_provider_refresh),
+            ) {
+                Ok(watcher) => {
+                    let mut codex_watcher = watcher_state
+                        .codex
+                        .lock()
+                        .map_err(|_| "failed to lock codex watcher state".to_string())?;
+                    *codex_watcher = Some(watcher);
+                }
+                Err(error) => {
+                    eprintln!("failed to start codex watcher: {error}");
+                }
+            }
+        }
+    } else {
+        let mut codex_watcher = watcher_state
+            .codex
+            .lock()
+            .map_err(|_| "failed to lock codex watcher state".to_string())?;
+        *codex_watcher = None;
+    }
+
     Ok(())
 }
 
@@ -435,7 +548,10 @@ pub(crate) fn watch_project_files_internal(
 ) -> Result<(), String> {
     let project_path = PathBuf::from(project_dir);
     if !project_path.is_dir() {
-        return Err(format!("project directory not found: {}", project_path.display()));
+        return Err(format!(
+            "project directory not found: {}",
+            project_path.display()
+        ));
     }
 
     let app_handle = app.clone();

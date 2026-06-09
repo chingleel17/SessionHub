@@ -24,4 +24,4 @@
 
 - [x] 5.1 執行 `cargo test`，確認全部 50 個測試通過（測試仍使用 `open_db_connection()` 或 in-memory connection）
 - [x] 5.2 執行 `bun run build`，確認前端 TypeScript 無錯誤
-- [ ] 5.3 手動驗證：啟動 app，瀏覽 sessions、編輯備註、查看 stats，確認功能正常
+- [x] 5.3 手動驗證：啟動 app，瀏覽 sessions、編輯備註、查看 stats，確認功能正常

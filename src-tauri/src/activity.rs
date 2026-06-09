@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use crate::settings::default_opencode_root;
@@ -25,10 +26,7 @@ pub(crate) fn get_copilot_activity_status(
         Err(_) => return not_started,
     };
 
-    let lines: Vec<&str> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
 
     let tail: Vec<&str> = lines.iter().rev().take(30).copied().collect();
 
@@ -58,13 +56,7 @@ pub(crate) fn get_copilot_activity_status(
 
     let last_activity_at = last_ts.map(|t| t.to_rfc3339());
     let minutes_since = last_ts
-        .map(|t| {
-            if t > now {
-                0
-            } else {
-                (now - t).num_minutes()
-            }
-        })
+        .map(|t| if t > now { 0 } else { (now - t).num_minutes() })
         .unwrap_or(i64::MAX);
 
     let (status, detail) = match last_type {
@@ -141,22 +133,13 @@ pub(crate) fn get_opencode_activity_status(
     };
 
     let now = chrono::Utc::now();
-    let completed_ms = msg
-        .time
-        .as_ref()
-        .and_then(|t| t.completed.or(t.created));
+    let completed_ms = msg.time.as_ref().and_then(|t| t.completed.or(t.created));
     let last_ts = completed_ms.and_then(|ms| {
         chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
     });
     let last_activity_at = last_ts.map(|t| t.to_rfc3339());
     let minutes_since = last_ts
-        .map(|t| {
-            if t > now {
-                0
-            } else {
-                (now - t).num_minutes()
-            }
-        })
+        .map(|t| if t > now { 0 } else { (now - t).num_minutes() })
         .unwrap_or(i64::MAX);
 
     let (status, detail) = match msg.role.as_deref() {
@@ -164,16 +147,72 @@ pub(crate) fn get_opencode_activity_status(
         Some("assistant") if msg.finish.as_deref() == Some("stop") && minutes_since < 120 => {
             ("waiting".to_string(), None)
         }
-        Some("user") if minutes_since < 30 => {
-            ("active".to_string(), Some("working".to_string()))
-        }
-        Some("assistant")
-            if msg.finish.as_deref() == Some("tool-calls") && minutes_since < 30 =>
-        {
+        Some("user") if minutes_since < 30 => ("active".to_string(), Some("working".to_string())),
+        Some("assistant") if msg.finish.as_deref() == Some("tool-calls") && minutes_since < 30 => {
             ("active".to_string(), Some("tool_call".to_string()))
         }
         _ if minutes_since < 30 => ("active".to_string(), Some("working".to_string())),
         _ => ("idle".to_string(), None),
+    };
+
+    SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status,
+        detail,
+        last_activity_at,
+    }
+}
+
+pub(crate) fn get_codex_activity_status(
+    session_file: &Path,
+    session_id: &str,
+) -> SessionActivityStatus {
+    let not_started = SessionActivityStatus {
+        session_id: session_id.to_string(),
+        status: "idle".to_string(),
+        detail: None,
+        last_activity_at: None,
+    };
+
+    if !session_file.is_file() {
+        return not_started;
+    }
+
+    let file = match fs::File::open(session_file) {
+        Ok(file) => file,
+        Err(_) => return not_started,
+    };
+    let reader = BufReader::new(file);
+    let mut last_ts: Option<chrono::DateTime<chrono::Utc>> = None;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let Some(timestamp) = value.get("timestamp").and_then(|item| item.as_str()) else {
+            continue;
+        };
+        if let Ok(parsed) = timestamp.parse::<chrono::DateTime<chrono::Utc>>() {
+            last_ts = Some(parsed);
+        }
+    }
+
+    let now = chrono::Utc::now();
+    let last_activity_at = last_ts.map(|value| value.to_rfc3339());
+    let minutes_since = last_ts
+        .map(|value| {
+            if value > now {
+                0
+            } else {
+                (now - value).num_minutes()
+            }
+        })
+        .unwrap_or(i64::MAX);
+
+    let (status, detail) = if minutes_since < 30 {
+        ("active".to_string(), Some("working".to_string()))
+    } else {
+        ("idle".to_string(), None)
     };
 
     SessionActivityStatus {
@@ -196,14 +235,22 @@ pub(crate) fn get_session_activity_statuses_internal(
         .iter()
         .filter_map(|s| {
             let id = s.get("id")?.as_str()?;
-            let provider = s.get("provider").and_then(|v| v.as_str()).unwrap_or("copilot");
+            let provider = s
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("copilot");
             let session_dir_str = s.get("sessionDir").and_then(|v| v.as_str()).unwrap_or("");
 
-            if provider == "opencode" {
-                Some(get_opencode_activity_status(&oc_root, id))
-            } else {
-                let dir = PathBuf::from(session_dir_str);
-                Some(get_copilot_activity_status(&dir, id))
+            match provider {
+                OPENCODE_PROVIDER => Some(get_opencode_activity_status(&oc_root, id)),
+                CODEX_PROVIDER => {
+                    let path = PathBuf::from(session_dir_str);
+                    Some(get_codex_activity_status(&path, id))
+                }
+                _ => {
+                    let dir = PathBuf::from(session_dir_str);
+                    Some(get_copilot_activity_status(&dir, id))
+                }
             }
         })
         .collect()

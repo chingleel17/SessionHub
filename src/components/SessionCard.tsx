@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
-import type { IdeLauncherType, SessionActivityStatus, SessionInfo, SessionStats, ToolAvailability } from "../types";
+import type {
+  IdeLauncherType,
+  SessionActivityStatus,
+  SessionInfo,
+  SessionStats,
+  SessionTodo,
+  ToolAvailability,
+} from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import {
   ArchiveIcon,
@@ -33,11 +40,14 @@ type Props = {
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
   onOpenPlan: (session: SessionInfo) => void;
+  onOpenTodos: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
   onUnarchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
   stats?: SessionStats;
   statsLoading: boolean;
+  todos: SessionTodo[];
+  todosLoading: boolean;
   activityStatus?: SessionActivityStatus;
   onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
   onFocusTerminal: (session: SessionInfo) => void;
@@ -57,6 +67,8 @@ function getProviderLabel(provider: string): string {
       return "Copilot";
     case "opencode":
       return "OpenCode";
+    case "codex":
+      return "Codex";
     default:
       return provider;
   }
@@ -69,11 +81,14 @@ export function SessionCard({
   onEditNotes,
   onEditTags,
   onOpenPlan,
+  onOpenTodos,
   onArchive,
   onUnarchive,
   onDelete,
   stats,
   statsLoading,
+  todos,
+  todosLoading,
   activityStatus,
   onOpenInTool,
   onFocusTerminal,
@@ -112,6 +127,8 @@ export function SessionCard({
   const activityStatusCls = activityStatus
     ? `activity-badge activity-badge--${activityStatus.status}`
     : null;
+  const supportsCommandCopy = session.provider !== "codex";
+  const supportsPlanEditing = session.provider !== "codex";
   const activityLabel = activityStatus
     ? activityStatus.status === "active"
       ? (t as (k: string) => string)(`dashboard.kanban.detail.${activityStatus.detail ?? "working"}`)
@@ -134,7 +151,13 @@ export function SessionCard({
             <span className="session-chip muted-chip">{t("session.archived")}</span>
           ) : null}
           {session.hasPlan ? (
-            <span className="session-chip">{t("session.hasPlan")}</span>
+            <button
+              type="button"
+              className="session-chip session-chip-button"
+              onClick={() => onOpenPlan(session)}
+            >
+              {t("session.hasPlan")}
+            </button>
           ) : null}
           {session.parseError ? (
             <span className="session-chip error-chip">{t("session.parseError")}</span>
@@ -233,15 +256,17 @@ export function SessionCard({
           ⊙
         </button>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.copyCommand")}
-          aria-label={t("session.actions.copyCommand")}
-          onClick={() => onCopyCommand(session)}
-        >
-          <CopyIcon size={16} />
-        </button>
+        {supportsCommandCopy ? (
+          <button
+            type="button"
+            className="icon-button"
+            title={t("session.actions.copyCommand")}
+            aria-label={t("session.actions.copyCommand")}
+            onClick={() => onCopyCommand(session)}
+          >
+            <CopyIcon size={16} />
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -263,15 +288,17 @@ export function SessionCard({
           <EditTagsIcon size={16} />
         </button>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editPlan")}
-          aria-label={t("session.actions.editPlan")}
-          onClick={() => onOpenPlan(session)}
-        >
-          <PlanIcon size={16} />
-        </button>
+        {supportsPlanEditing ? (
+          <button
+            type="button"
+            className="icon-button"
+            title={t("session.actions.editPlan")}
+            aria-label={t("session.actions.editPlan")}
+            onClick={() => onOpenPlan(session)}
+          >
+            <PlanIcon size={16} />
+          </button>
+        ) : null}
 
         {session.isArchived ? (
           <button
@@ -316,8 +343,19 @@ export function SessionCard({
         </button>
       </div>
 
-      <SessionStatsBadge stats={stats} isLoading={statsLoading} />
-      {showStats && stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
+      <SessionStatsBadge
+        session={session}
+        stats={stats}
+        isLoading={statsLoading}
+        todos={todos}
+        todosLoading={todosLoading}
+        onOpenTodos={onOpenTodos}
+      />
+      {showStats ? (
+        <>
+          {stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
+        </>
+      ) : null}
     </article>
   );
 }

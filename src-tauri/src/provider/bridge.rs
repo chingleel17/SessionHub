@@ -27,6 +27,7 @@ pub(crate) fn provider_refresh_event_name(provider: &str) -> Result<&'static str
     match provider {
         COPILOT_PROVIDER => Ok("copilot-sessions-updated"),
         OPENCODE_PROVIDER => Ok("opencode-sessions-updated"),
+        CODEX_PROVIDER => Ok("codex-sessions-updated"),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -217,10 +218,7 @@ pub(crate) fn should_emit_copilot_refresh(
     Ok(true)
 }
 
-pub(crate) fn is_relevant_copilot_event(
-    event: &notify::Event,
-    session_roots: &[PathBuf],
-) -> bool {
+pub(crate) fn is_relevant_copilot_event(event: &notify::Event, session_roots: &[PathBuf]) -> bool {
     if !is_relevant_watcher_event_kind(&event.kind) {
         return false;
     }
@@ -237,14 +235,16 @@ pub(crate) fn is_relevant_copilot_event(
 // ── OpenCode Watch Snapshot ──────────────────────────────────────────────────
 
 pub(crate) fn build_opencode_watch_snapshot(opencode_root: &Path) -> OpenCodeWatchSnapshot {
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
     let session_storage = opencode_root.join("storage").join("session");
     let message_storage = opencode_root.join("storage").join("message");
 
     OpenCodeWatchSnapshot {
-        db_exists: session_storage.exists(),
-        wal_exists: message_storage.exists(),
-        db_mtime_ms: path_mtime_millis(&session_storage),
-        wal_mtime_ms: path_mtime_millis(&message_storage),
+        db_exists: db_path.exists() || session_storage.exists(),
+        wal_exists: wal_path.exists() || message_storage.exists(),
+        db_mtime_ms: path_mtime_millis(&db_path).max(path_mtime_millis(&session_storage)),
+        wal_mtime_ms: path_mtime_millis(&wal_path).max(path_mtime_millis(&message_storage)),
         max_cursor: None,
     }
 }
@@ -266,19 +266,20 @@ pub(crate) fn should_emit_opencode_refresh(
     Ok(true)
 }
 
-pub(crate) fn is_relevant_opencode_event(
-    event: &notify::Event,
-    opencode_root: &Path,
-) -> bool {
+pub(crate) fn is_relevant_opencode_event(event: &notify::Event, opencode_root: &Path) -> bool {
     if !is_relevant_watcher_event_kind(&event.kind) {
         return false;
     }
 
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
     let session_storage = opencode_root.join("storage").join("session");
     let message_storage = opencode_root.join("storage").join("message");
 
     event.paths.iter().any(|path| {
         path == opencode_root
+            || path == &db_path
+            || path == &wal_path
             || path.starts_with(&session_storage)
             || path.starts_with(&message_storage)
     })
@@ -358,14 +359,18 @@ pub(crate) fn process_provider_bridge_event(
             }
 
             let copilot_root = resolve_copilot_root(None)?;
-            let rate_ok = should_emit_provider_refresh_at(refresh_state, COPILOT_PROVIDER, Instant::now())?;
+            let rate_ok =
+                should_emit_provider_refresh_at(refresh_state, COPILOT_PROVIDER, Instant::now())?;
             if !rate_ok {
                 emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
                 return Ok(false);
             }
 
             let db_state = app.state::<DbState>();
-            let conn = db_state.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+            let conn = db_state
+                .conn
+                .lock()
+                .map_err(|e| format!("db lock poisoned: {e}"))?;
             match find_session_by_cwd_internal(&copilot_root, cwd, &*conn)? {
                 Some(session) => {
                     let payload = SessionTargetedPayload {
@@ -378,8 +383,9 @@ pub(crate) fn process_provider_bridge_event(
                     emit_event_log(app, make_log_entry(&record, "targeted"));
                 }
                 None => {
-                    app.emit("copilot-sessions-updated", ())
-                        .map_err(|e| format!("failed to emit copilot-sessions-updated fallback: {e}"))?;
+                    app.emit("copilot-sessions-updated", ()).map_err(|e| {
+                        format!("failed to emit copilot-sessions-updated fallback: {e}")
+                    })?;
                     emit_event_log(app, make_log_entry(&record, "fallback"));
                 }
             }

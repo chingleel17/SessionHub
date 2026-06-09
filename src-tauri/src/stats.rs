@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 
 use crate::sessions::dir_mtime_secs;
 use crate::types::*;
@@ -48,26 +48,24 @@ pub(crate) fn get_session_stats_cache(
 
             let models_used = serde_json::from_str::<Vec<String>>(&models_used_json)
                 .map_err(|error| format!("failed to deserialize cached models_used: {error}"))?;
-            let tool_breakdown =
-                serde_json::from_str::<BTreeMap<String, u32>>(&tool_breakdown_json)
-                    .map_err(|error| {
-                        format!("failed to deserialize cached tool_breakdown: {error}")
-                    })?;
-            let model_metrics_json: String = row.get(9).unwrap_or_else(|_| "{}".to_string());
-            let model_metrics = serde_json::from_str::<BTreeMap<String, ModelMetricsEntry>>(
-                &model_metrics_json,
+            let tool_breakdown = serde_json::from_str::<BTreeMap<String, u32>>(
+                &tool_breakdown_json,
             )
-            .unwrap_or_default();
+            .map_err(|error| format!("failed to deserialize cached tool_breakdown: {error}"))?;
+            let model_metrics_json: String = row.get(9).unwrap_or_else(|_| "{}".to_string());
+            let model_metrics =
+                serde_json::from_str::<BTreeMap<String, ModelMetricsEntry>>(&model_metrics_json)
+                    .unwrap_or_default();
 
             Ok(Some((
                 events_mtime,
                 SessionStats {
-                    output_tokens: row.get(1).map_err(|error| {
-                        format!("failed to read output_tokens column: {error}")
-                    })?,
-                    input_tokens: row.get(8).map_err(|error| {
-                        format!("failed to read input_tokens column: {error}")
-                    })?,
+                    output_tokens: row
+                        .get(1)
+                        .map_err(|error| format!("failed to read output_tokens column: {error}"))?,
+                    input_tokens: row
+                        .get(8)
+                        .map_err(|error| format!("failed to read input_tokens column: {error}"))?,
                     interaction_count: row.get(2).map_err(|error| {
                         format!("failed to read interaction_count column: {error}")
                     })?,
@@ -407,6 +405,30 @@ fn parse_opencode_message_json(path: &Path) -> Option<OpencodeMessage> {
     serde_json::from_str::<OpencodeMessage>(&content).ok()
 }
 
+fn parse_opencode_message_row(
+    session_id: &str,
+    message_id: &str,
+    content: &str,
+) -> Option<OpencodeMessage> {
+    let mut value = serde_json::from_str::<serde_json::Value>(content).ok()?;
+    let object = value.as_object_mut()?;
+    object
+        .entry("id".to_string())
+        .or_insert_with(|| serde_json::Value::String(message_id.to_string()));
+    object
+        .entry("sessionID".to_string())
+        .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
+    serde_json::from_value::<OpencodeMessage>(value).ok()
+}
+
+fn open_opencode_db_for_stats(storage_root: &Path) -> Option<Connection> {
+    let db_path = storage_root.parent()?.join("opencode.db");
+    if !db_path.exists() {
+        return None;
+    }
+    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+}
+
 /// 掃描 storage/message/ 全量，回傳屬於 session_id 的所有訊息
 fn scan_opencode_messages_for_session(
     storage_root: &Path,
@@ -423,6 +445,27 @@ fn scan_opencode_messages_for_session(
             .flatten()
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .filter_map(|e| parse_opencode_message_json(&e.path()))
+            .collect();
+    }
+
+    if let Some(connection) = open_opencode_db_for_stats(storage_root) {
+        let mut statement = match connection
+            .prepare("SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created ASC")
+        {
+            Ok(statement) => statement,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match statement.query_map([session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            Ok(rows) => rows,
+            Err(_) => return Vec::new(),
+        };
+        return rows
+            .flatten()
+            .filter_map(|(message_id, content)| {
+                parse_opencode_message_row(session_id, &message_id, &content)
+            })
             .collect();
     }
 
@@ -457,6 +500,35 @@ fn scan_opencode_messages_for_session(
 fn scan_opencode_parts_for_message(storage_root: &Path, message_id: &str) -> Vec<String> {
     let part_dir = storage_root.join("part").join(message_id);
     if !part_dir.exists() {
+        if let Some(connection) = open_opencode_db_for_stats(storage_root) {
+            let mut statement = match connection
+                .prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created ASC")
+            {
+                Ok(statement) => statement,
+                Err(_) => return Vec::new(),
+            };
+            let rows = match statement.query_map([message_id], |row| row.get::<_, String>(0)) {
+                Ok(rows) => rows,
+                Err(_) => return Vec::new(),
+            };
+            return rows
+                .flatten()
+                .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                .filter_map(|value| {
+                    if value.get("type").and_then(|v| v.as_str()) != Some("tool") {
+                        return None;
+                    }
+                    Some(
+                        value
+                            .pointer("/state/tool")
+                            .or_else(|| value.get("tool"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                    )
+                })
+                .collect();
+        }
         return Vec::new();
     }
     let Ok(entries) = fs::read_dir(&part_dir) else {
@@ -561,12 +633,41 @@ pub(crate) fn get_opencode_session_stats_internal(
     message_dir: &Path,
     session_id: &str,
 ) -> Result<SessionStats, String> {
-    if !message_dir.exists() {
+    let storage_root = message_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or_else(|| "cannot determine storage root from message_dir".to_string())?;
+    let message_dir_exists = message_dir.exists();
+    let db_mtime_secs = open_opencode_db_for_stats(storage_root)
+        .and_then(|db| {
+            db.query_row(
+                "SELECT COALESCE(MAX(time_updated), 0) FROM message WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(0)
+        / 1000;
+
+    if !message_dir_exists && db_mtime_secs == 0 {
         return Ok(SessionStats::default());
     }
 
-    let is_live = is_opencode_session_live(message_dir);
-    let dir_mtime = dir_mtime_secs(message_dir);
+    let is_live = if message_dir_exists {
+        is_opencode_session_live(message_dir)
+    } else {
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        db_mtime_secs > 0 && db_mtime_secs <= now && now - db_mtime_secs < 300
+    };
+    let dir_mtime = if message_dir_exists {
+        dir_mtime_secs(message_dir).max(db_mtime_secs)
+    } else {
+        db_mtime_secs
+    };
 
     if !is_live {
         if let Some((cached_mtime, mut cached_stats)) =
@@ -594,6 +695,9 @@ pub(crate) fn get_session_stats_internal(
     session_dir: &str,
 ) -> Result<SessionStats, String> {
     let session_path = PathBuf::from(session_dir);
+    if session_path.is_file() {
+        return Ok(SessionStats::default());
+    }
     let session_id = session_id_from_dir(&session_path);
 
     if is_opencode_session_dir(&session_path) {
@@ -628,4 +732,238 @@ pub(crate) fn get_session_stats_internal(
     }
 
     Ok(stats)
+}
+
+pub(crate) fn backfill_missing_stats_internal(
+    connection: &Connection,
+    _copilot_root: &Path,
+) -> Result<usize, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT sc.session_id, sc.session_dir
+            FROM sessions_cache sc
+            LEFT JOIN session_stats ss ON ss.session_id = sc.session_id
+            WHERE sc.provider = 'copilot'
+              AND ss.session_id IS NULL
+              AND sc.has_events = 1
+              AND sc.session_dir IS NOT NULL
+              AND sc.session_dir != ''
+            ORDER BY COALESCE(sc.updated_at, sc.created_at, '') DESC
+            LIMIT 50
+            ",
+        )
+        .map_err(|error| format!("failed to prepare missing stats query: {error}"))?;
+
+    let session_rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| format!("failed to query missing stats rows: {error}"))?;
+
+    let mut session_targets = Vec::new();
+    for row in session_rows {
+        session_targets
+            .push(row.map_err(|error| format!("failed to read missing stats row: {error}"))?);
+    }
+
+    let mut processed_count = 0usize;
+    for (session_id, session_dir) in session_targets {
+        let session_path = PathBuf::from(&session_dir);
+        let events_path = session_path.join("events.jsonl");
+
+        if !events_path.exists() {
+            continue;
+        }
+
+        match is_live_session(&session_path) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!(
+                    "[stats-backfill] failed to inspect live state for {}: {}",
+                    session_path.display(),
+                    error
+                );
+                continue;
+            }
+        }
+
+        let events_mtime = match session_events_mtime(&events_path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "[stats-backfill] failed to read events mtime for {}: {}",
+                    session_path.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        let stats = match parse_session_stats_internal(&session_path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "[stats-backfill] failed to parse {}: {}",
+                    session_path.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        if stats.is_live {
+            continue;
+        }
+
+        if let Err(error) =
+            upsert_session_stats_cache(connection, &session_id, events_mtime, &stats)
+        {
+            eprintln!(
+                "[stats-backfill] failed to cache {}: {}",
+                session_path.display(),
+                error
+            );
+            continue;
+        }
+
+        processed_count += 1;
+    }
+
+    Ok(processed_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use rusqlite::{params, Connection};
+
+    use crate::db::init_db;
+    use crate::types::SessionStats;
+
+    use super::{
+        backfill_missing_stats_internal, session_events_mtime, upsert_session_stats_cache,
+    };
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("sessionhub-{name}-{suffix}"));
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    fn create_session_dir(base_dir: &Path, session_id: &str, with_events: bool) -> PathBuf {
+        let session_dir = base_dir.join(session_id);
+        fs::create_dir_all(&session_dir).expect("session dir should be created");
+        if with_events {
+            fs::write(session_dir.join("events.jsonl"), "").expect("events file should be created");
+        }
+        session_dir
+    }
+
+    fn insert_session_cache_row(
+        connection: &Connection,
+        session_id: &str,
+        session_dir: &Path,
+        updated_at: &str,
+    ) {
+        connection
+            .execute(
+                "
+                INSERT INTO sessions_cache (
+                    session_id, provider, cwd, summary, summary_count, created_at, updated_at,
+                    session_dir, parse_error, is_archived, has_plan, has_events
+                ) VALUES (?1, 'copilot', NULL, NULL, NULL, ?2, ?2, ?3, 0, 0, 0, 1)
+                ",
+                params![
+                    session_id,
+                    updated_at,
+                    session_dir.to_string_lossy().to_string()
+                ],
+            )
+            .expect("session cache row should be inserted");
+    }
+
+    #[test]
+    fn backfill_skips_cached_and_live_sessions() {
+        let temp_root = create_temp_dir("stats-backfill");
+        let database_path = temp_root.join("metadata.db");
+        let connection = Connection::open(&database_path).expect("db should open");
+        init_db(&connection).expect("db should initialize");
+
+        let completed_dir = create_session_dir(&temp_root, "completed-session", true);
+        let cached_dir = create_session_dir(&temp_root, "cached-session", true);
+        let live_dir = create_session_dir(&temp_root, "live-session", true);
+        fs::write(live_dir.join("inuse.invalid.lock"), "").expect("live lock should be created");
+
+        insert_session_cache_row(
+            &connection,
+            "completed-session",
+            &completed_dir,
+            "2026-05-13T10:00:00Z",
+        );
+        insert_session_cache_row(
+            &connection,
+            "cached-session",
+            &cached_dir,
+            "2026-05-13T09:00:00Z",
+        );
+        insert_session_cache_row(
+            &connection,
+            "live-session",
+            &live_dir,
+            "2026-05-13T08:00:00Z",
+        );
+
+        let cached_mtime = session_events_mtime(&cached_dir.join("events.jsonl"))
+            .expect("cached mtime should read");
+        upsert_session_stats_cache(
+            &connection,
+            "cached-session",
+            cached_mtime,
+            &SessionStats::default(),
+        )
+        .expect("cached stats should insert");
+
+        let processed = backfill_missing_stats_internal(&connection, &temp_root)
+            .expect("backfill should succeed");
+
+        assert_eq!(processed, 1);
+
+        let cached_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM session_stats WHERE session_id = 'cached-session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cached stats count should query");
+        let completed_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM session_stats WHERE session_id = 'completed-session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("completed stats count should query");
+        let live_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM session_stats WHERE session_id = 'live-session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("live stats count should query");
+
+        assert_eq!(cached_count, 1);
+        assert_eq!(completed_count, 1);
+        assert_eq!(live_count, 0);
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
 }

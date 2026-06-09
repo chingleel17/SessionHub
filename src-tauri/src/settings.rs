@@ -24,6 +24,13 @@ pub(crate) fn default_opencode_root() -> Result<PathBuf, String> {
         .join("opencode"))
 }
 
+pub(crate) fn default_codex_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+
+    Ok(PathBuf::from(user_profile).join(".codex"))
+}
+
 pub(crate) fn default_opencode_config_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -53,6 +60,13 @@ pub(crate) fn resolve_opencode_root(root_dir: Option<&str>) -> Result<PathBuf, S
     match root_dir {
         Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
         _ => default_opencode_root(),
+    }
+}
+
+pub(crate) fn resolve_codex_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
+    match root_dir {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        _ => default_codex_root(),
     }
 }
 
@@ -134,6 +148,7 @@ impl AppSettings {
         Ok(Self {
             copilot_root: default_copilot_root()?.to_string_lossy().to_string(),
             opencode_root: default_opencode_root()?.to_string_lossy().to_string(),
+            codex_root: default_codex_root()?.to_string_lossy().to_string(),
             terminal_path,
             external_editor_path,
             show_archived: false,
@@ -152,10 +167,12 @@ impl AppSettings {
 
 pub(crate) fn collect_provider_integration_statuses(
     copilot_root: Option<&str>,
+    codex_root: Option<&str>,
 ) -> Vec<ProviderIntegrationStatus> {
     vec![
         crate::provider::detect_copilot_integration_status(copilot_root),
         crate::provider::detect_opencode_integration_status(),
+        crate::provider::detect_codex_integration_status(codex_root),
     ]
 }
 

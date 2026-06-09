@@ -96,6 +96,9 @@ function getDefaultLauncher(
     if (!toolAvailability || toolAvailability.opencode) return "opencode";
     return "terminal";
   }
+  if (session.provider === "codex") {
+    return "terminal";
+  }
   return "terminal";
 }
 
@@ -187,7 +190,7 @@ function KanbanProjectCard({
         <div className="kanban-project-providers">
           {providers.map((p) => (
             <span key={p} className={`provider-tag provider-tag--${p}`}>
-              {p === "opencode" ? "OC" : "CP"}
+              {p === "opencode" ? "OC" : p === "codex" ? "CX" : "CP"}
             </span>
           ))}
         </div>

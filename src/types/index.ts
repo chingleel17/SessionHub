@@ -15,9 +15,25 @@ export type SessionInfo = {
     hasEvents: boolean;
 };
 
+export type SessionTodoStatus = "pending" | "in_progress" | "done" | "blocked" | (string & {});
+
+export type SessionTodo = {
+    id: string;
+    title: string;
+    status: SessionTodoStatus;
+    description?: string | null;
+    updatedAt?: string | null;
+};
+
+export type ProjectSubTabState = {
+    openDetailKeys: string[];
+    activeSubTab: string;
+};
+
 export type AppSettings = {
     copilotRoot: string;
     opencodeRoot: string;
+    codexRoot: string;
     terminalPath?: string | null;
     externalEditorPath?: string | null;
     showArchived: boolean;

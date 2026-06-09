@@ -1,8 +1,9 @@
 use tauri::State;
 
 use crate::settings::{
-    default_opencode_root, detect_terminal_path, detect_vscode_path, load_settings_internal,
-    save_settings_internal, validate_terminal_path_internal, collect_provider_integration_statuses,
+    collect_provider_integration_statuses, default_codex_root, default_opencode_root,
+    detect_terminal_path, detect_vscode_path, load_settings_internal, save_settings_internal,
+    validate_terminal_path_internal,
 };
 use crate::types::{default_enabled_providers, AppSettings, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
@@ -14,8 +15,15 @@ pub(crate) fn get_settings_internal() -> Result<AppSettings, String> {
             settings.opencode_root = default_root.to_string_lossy().to_string();
         }
     }
-    settings.provider_integrations =
-        collect_provider_integration_statuses(Some(settings.copilot_root.as_str()));
+    if settings.codex_root.trim().is_empty() {
+        if let Ok(default_root) = default_codex_root() {
+            settings.codex_root = default_root.to_string_lossy().to_string();
+        }
+    }
+    settings.provider_integrations = collect_provider_integration_statuses(
+        Some(settings.copilot_root.as_str()),
+        Some(settings.codex_root.as_str()),
+    );
     Ok(settings)
 }
 
@@ -50,6 +58,7 @@ pub fn restart_session_watcher(
     watcher_state: State<'_, WatcherState>,
     copilot_root: Option<String>,
     opencode_root: Option<String>,
+    codex_root: Option<String>,
     enabled_providers: Option<Vec<String>>,
 ) -> Result<(), String> {
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
@@ -58,6 +67,7 @@ pub fn restart_session_watcher(
         &watcher_state,
         copilot_root.as_deref(),
         opencode_root.as_deref(),
+        codex_root.as_deref(),
         &providers,
     )
 }

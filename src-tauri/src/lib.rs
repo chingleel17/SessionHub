@@ -1,23 +1,23 @@
-﻿mod types;
-mod settings;
+mod activity;
+mod commands;
 mod db;
+mod openspec_scan;
+mod platform;
 mod provider;
 mod sessions;
-mod stats;
-mod watcher;
-mod activity;
+mod settings;
 mod sisyphus;
-mod openspec_scan;
-mod commands;
-mod platform;
+mod stats;
+mod types;
+mod watcher;
 
 use tauri::Manager;
 
-pub(crate) use types::*;
-pub(crate) use settings::*;
-pub(crate) use db::*;
-pub(crate) use watcher::*;
 pub(crate) use commands::*;
+pub(crate) use db::*;
+pub(crate) use settings::*;
+pub(crate) use types::*;
+pub(crate) use watcher::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +36,7 @@ pub fn run() {
                 &watcher_state,
                 Some(&settings.copilot_root),
                 Some(&settings.opencode_root),
+                Some(&settings.codex_root),
                 &settings.enabled_providers,
             )?;
             Ok(())
@@ -58,6 +59,8 @@ pub fn run() {
             delete_session,
             delete_empty_sessions,
             get_session_stats,
+            trigger_stats_backfill,
+            read_session_todos,
             get_analytics_data,
             open_terminal,
             check_directory_exists,
@@ -87,35 +90,46 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap};
-    use std::env;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, OnceLock};
-    use std::time::{Duration, Instant};
-    use std::ffi::OsString;
-    use rusqlite::Connection;
-    use crate::provider::register_provider_bridge_record;
-    use crate::provider::bridge::{
-        build_opencode_watch_snapshot, resolve_copilot_integration_path,
-        should_emit_provider_refresh_at, should_emit_opencode_refresh,
+    use crate::openspec_scan::{
+        read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
     };
-    use crate::provider::copilot::{detect_copilot_integration_status, install_or_update_copilot_integration};
-    use crate::provider::opencode::{detect_opencode_integration_status, install_or_update_opencode_integration};
+    use crate::provider::bridge::{
+        build_opencode_watch_snapshot, provider_refresh_event_name,
+        resolve_copilot_integration_path, should_emit_opencode_refresh,
+        should_emit_provider_refresh_at,
+    };
+    use crate::provider::codex::{
+        detect_codex_integration_status, install_or_update_codex_integration,
+        resolve_codex_integration_path,
+    };
+    use crate::provider::copilot::{
+        detect_copilot_integration_status, install_or_update_copilot_integration,
+    };
+    use crate::provider::opencode::{
+        detect_opencode_integration_status, install_or_update_opencode_integration,
+    };
+    use crate::provider::register_provider_bridge_record;
     use crate::sessions::copilot::{
         delete_empty_sessions_internal, dir_mtime_secs, scan_copilot_incremental_internal,
         scan_session_dir, should_full_scan,
     };
     use crate::sessions::get_sessions_internal;
-    use crate::sessions::opencode::{scan_opencode_incremental_internal, scan_opencode_sessions_internal};
+    use crate::sessions::opencode::{
+        scan_opencode_incremental_internal, scan_opencode_sessions_internal,
+    };
+    use crate::sisyphus::scan_sisyphus_internal;
     use crate::stats::{
         calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal,
         upsert_session_stats_cache,
     };
-    use crate::openspec_scan::{
-        read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
-    };
-    use crate::sisyphus::scan_sisyphus_internal;
+    use rusqlite::Connection;
+    use std::collections::{BTreeMap, HashMap};
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {
         unsafe {
@@ -229,6 +243,35 @@ mod tests {
             .expect("db change should emit once"));
         assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
             .expect("unchanged snapshot after refresh should not emit"));
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup opencode dir");
+    }
+
+    #[test]
+    fn opencode_refresh_snapshot_emits_after_db_and_wal_change() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let oc_dir = unique_test_dir("oc-refresh-db-snapshot");
+        fs::create_dir_all(&oc_dir).expect("create opencode dir");
+
+        let snapshot_state = Arc::new(Mutex::new(build_opencode_watch_snapshot(&oc_dir)));
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot should not emit"));
+
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-snap",
+            "D:\\repo\\snapshot",
+            &[("ses_db_snap", "Snapshot", 1000, 2000, None)],
+        );
+        assert!(should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("db creation should emit"));
+
+        fs::write(oc_dir.join("opencode.db-wal"), "wal-change").expect("write wal file");
+        assert!(
+            should_emit_opencode_refresh(&oc_dir, &snapshot_state).expect("wal change should emit")
+        );
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot after wal should not emit"));
 
         fs::remove_dir_all(&oc_dir).expect("cleanup opencode dir");
     }
@@ -874,6 +917,139 @@ mod tests {
         }
     }
 
+    fn create_opencode_db_sessions(
+        dir: &Path,
+        project_id: &str,
+        worktree: &str,
+        sessions: &[(&str, &str, i64, i64, Option<i64>)],
+    ) {
+        fs::create_dir_all(dir).expect("create opencode root dir");
+        let db_path = dir.join("opencode.db");
+        let connection = Connection::open(&db_path).expect("open opencode db");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE project (
+                  id TEXT PRIMARY KEY,
+                  worktree TEXT NOT NULL,
+                  name TEXT,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  sandboxes TEXT NOT NULL
+                );
+                CREATE TABLE session (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  parent_id TEXT,
+                  slug TEXT NOT NULL,
+                  directory TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  version TEXT NOT NULL,
+                  share_url TEXT,
+                  summary_additions INTEGER,
+                  summary_deletions INTEGER,
+                  summary_files INTEGER,
+                  summary_diffs TEXT,
+                  revert TEXT,
+                  permission TEXT,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  time_compacting INTEGER,
+                  time_archived INTEGER,
+                  workspace_id TEXT,
+                  path TEXT,
+                  agent TEXT,
+                  model TEXT,
+                  cost REAL DEFAULT 0 NOT NULL,
+                  tokens_input INTEGER DEFAULT 0 NOT NULL,
+                  tokens_output INTEGER DEFAULT 0 NOT NULL,
+                  tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
+                  tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+                  tokens_cache_write INTEGER DEFAULT 0 NOT NULL
+                );
+                CREATE TABLE message (
+                  id TEXT PRIMARY KEY,
+                  session_id TEXT NOT NULL,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  data TEXT NOT NULL
+                );
+                CREATE TABLE part (
+                  id TEXT PRIMARY KEY,
+                  message_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  data TEXT NOT NULL
+                );
+                ",
+            )
+            .expect("create opencode schema");
+        connection
+            .execute(
+                "INSERT INTO project (id, worktree, name, time_created, time_updated, sandboxes) VALUES (?1, ?2, NULL, 1, 1, '[]')",
+                rusqlite::params![project_id, worktree],
+            )
+            .expect("insert project");
+
+        for (id, title, time_created, time_updated, time_archived) in sessions {
+            connection
+                .execute(
+                    "
+                    INSERT INTO session (
+                      id, project_id, parent_id, slug, directory, title, version,
+                      share_url, summary_additions, summary_deletions, summary_files, summary_diffs,
+                      revert, permission, time_created, time_updated, time_compacting, time_archived,
+                      workspace_id, path, agent, model, cost, tokens_input, tokens_output,
+                      tokens_reasoning, tokens_cache_read, tokens_cache_write
+                    ) VALUES (
+                      ?1, ?2, NULL, 'slug', ?3, ?4, '1.1.60',
+                      NULL, 2, 3, 4, NULL,
+                      NULL, NULL, ?5, ?6, NULL, ?7,
+                      NULL, NULL, NULL, NULL, 0, 0, 0,
+                      0, 0, 0
+                    )",
+                    rusqlite::params![id, project_id, worktree, title, time_created, time_updated, time_archived],
+                )
+                .expect("insert session");
+        }
+    }
+
+    fn insert_opencode_db_message(
+        dir: &Path,
+        session_id: &str,
+        message_id: &str,
+        time_created: i64,
+        time_updated: i64,
+        data: &str,
+    ) {
+        let connection = Connection::open(dir.join("opencode.db")).expect("open opencode db");
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![message_id, session_id, time_created, time_updated, data],
+            )
+            .expect("insert message");
+    }
+
+    fn insert_opencode_db_part(
+        dir: &Path,
+        session_id: &str,
+        message_id: &str,
+        part_id: &str,
+        time_created: i64,
+        time_updated: i64,
+        data: &str,
+    ) {
+        let connection = Connection::open(dir.join("opencode.db")).expect("open opencode db");
+        connection
+            .execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![part_id, message_id, session_id, time_created, time_updated, data],
+            )
+            .expect("insert part");
+    }
+
     #[test]
     fn scan_opencode_sessions_reads_json_files_and_maps_metadata() {
         let _guard = test_lock().lock().expect("lock");
@@ -958,6 +1134,60 @@ mod tests {
     }
 
     #[test]
+    fn scan_opencode_sessions_reads_db_rows_and_maps_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-db-full-scan");
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-001",
+            "D:\\repo\\db-demo",
+            &[(
+                "ses_db_001",
+                "DB Session",
+                1710000000000,
+                1710000300000,
+                None,
+            )],
+        );
+        insert_opencode_db_message(
+            &oc_dir,
+            "ses_db_001",
+            "msg_db_001",
+            1710000000000,
+            1710000300000,
+            r#"{"role":"assistant","time":{"created":1710000000000,"completed":1710000300000},"modelID":"gpt-5","tokens":{"input":10,"output":20,"reasoning":2,"cache":{"write":0,"read":0}}}"#,
+        );
+
+        let metadata_conn = Connection::open_in_memory().expect("open metadata db");
+        init_db(&metadata_conn).expect("init metadata db");
+        upsert_session_meta_internal(
+            &metadata_conn,
+            "ses_db_001",
+            Some("DB 備註".to_string()),
+            vec!["db".to_string()],
+        )
+        .expect("insert metadata");
+
+        let sessions = scan_opencode_sessions_internal(&oc_dir, false, &metadata_conn)
+            .expect("scan db sessions");
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.id, "ses_db_001");
+        assert_eq!(session.provider, OPENCODE_PROVIDER);
+        assert_eq!(session.cwd.as_deref(), Some("D:\\repo\\db-demo"));
+        assert_eq!(session.summary.as_deref(), Some("DB Session"));
+        assert_eq!(session.summary_count, Some(9));
+        assert_eq!(session.created_at.as_deref(), Some("2024-03-09T16:00:00Z"));
+        assert_eq!(session.updated_at.as_deref(), Some("2024-03-09T16:05:00Z"));
+        assert_eq!(session.notes.as_deref(), Some("DB 備註"));
+        assert_eq!(session.tags, vec!["db".to_string()]);
+        assert!(session.has_events);
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+    }
+
+    #[test]
     fn get_sessions_filters_by_enabled_providers() {
         let _guard = test_lock().lock().expect("lock");
         let appdata_dir = unique_test_dir("providers-appdata");
@@ -997,6 +1227,7 @@ mod tests {
             let copilot_only = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![COPILOT_PROVIDER.to_string()]),
                 Some(true),
@@ -1010,6 +1241,7 @@ mod tests {
             let opencode_only = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![OPENCODE_PROVIDER.to_string()]),
                 Some(true),
@@ -1023,6 +1255,7 @@ mod tests {
             let all_providers = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![
                     COPILOT_PROVIDER.to_string(),
@@ -1304,12 +1537,19 @@ mod tests {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("openspec-file-roundtrip");
         let openspec_dir = project_dir.join("openspec");
-        let tasks_path = openspec_dir.join("changes").join("feature-a").join("tasks.md");
-        fs::create_dir_all(tasks_path.parent().expect("tasks parent")).expect("create tasks parent");
+        let tasks_path = openspec_dir
+            .join("changes")
+            .join("feature-a")
+            .join("tasks.md");
+        fs::create_dir_all(tasks_path.parent().expect("tasks parent"))
+            .expect("create tasks parent");
         fs::write(&tasks_path, "- [ ] first task\n").expect("write tasks");
 
-        let original = read_openspec_file_internal(&project_dir.to_string_lossy(), "changes/feature-a/tasks.md")
-            .expect("read openspec file");
+        let original = read_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+        )
+        .expect("read openspec file");
         assert_eq!(original, "- [ ] first task\n");
 
         write_openspec_file_internal(
@@ -1319,17 +1559,19 @@ mod tests {
         )
         .expect("write openspec file");
 
-        let updated = read_openspec_file_internal(&project_dir.to_string_lossy(), "changes/feature-a/tasks.md")
-            .expect("read updated openspec file");
+        let updated = read_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+        )
+        .expect("read updated openspec file");
         assert_eq!(updated, "- [x] first task\n");
 
-        let traversal_error = write_openspec_file_internal(
-            &project_dir.to_string_lossy(),
-            "../README.md",
-            "denied",
-        )
-        .expect_err("path traversal should fail");
-        assert!(traversal_error.contains("File not found") || traversal_error.contains("Access denied"));
+        let traversal_error =
+            write_openspec_file_internal(&project_dir.to_string_lossy(), "../README.md", "denied")
+                .expect_err("path traversal should fail");
+        assert!(
+            traversal_error.contains("File not found") || traversal_error.contains("Access denied")
+        );
 
         fs::remove_dir_all(&project_dir).expect("cleanup project dir");
     }
@@ -1611,6 +1853,35 @@ mod tests {
     }
 
     #[test]
+    fn incremental_opencode_picks_up_db_only_session() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-db-incremental");
+        let appdata_dir = unique_test_dir("appdata");
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-002",
+            "D:\\repo\\db-only",
+            &[("ses_db_new", "DB New", 1000, 5000, None)],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("incremental db scan");
+
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "ses_db_new");
+            assert_eq!(cache.last_cursor, 5000);
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
     fn provider_bridge_paths_use_appdata_override() {
         let _guard = test_lock().lock().expect("lock");
         let appdata_dir = unique_test_dir("provider-bridge-appdata");
@@ -1621,6 +1892,8 @@ mod tests {
                 resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
             let opencode_path =
                 resolve_provider_bridge_path(OPENCODE_PROVIDER).expect("resolve opencode bridge");
+            let codex_path =
+                resolve_provider_bridge_path(CODEX_PROVIDER).expect("resolve codex bridge");
 
             assert_eq!(
                 copilot_path,
@@ -1635,6 +1908,13 @@ mod tests {
                     .join("SessionHub")
                     .join("provider-bridge")
                     .join("opencode.jsonl")
+            );
+            assert_eq!(
+                codex_path,
+                appdata_dir
+                    .join("SessionHub")
+                    .join("provider-bridge")
+                    .join("codex.jsonl")
             );
         });
 
@@ -1922,6 +2202,170 @@ mod tests {
 
         fs::remove_dir_all(&user_profile).expect("cleanup user profile");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_codex_integration_status_reads_installed_state_and_last_error() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-appdata");
+        let codex_root = unique_test_dir("codex-provider-root");
+        let config_path = resolve_codex_integration_path(&codex_root);
+
+        fs::create_dir_all(&codex_root).expect("create codex root");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            let bridge_path =
+                resolve_provider_bridge_path(CODEX_PROVIDER).expect("resolve codex bridge");
+            ensure_parent_dir(&bridge_path).expect("create bridge dir");
+            fs::write(
+                &bridge_path,
+                format!(
+                    "{}\n",
+                    bridge_record_json(
+                        CODEX_PROVIDER,
+                        "session.updated",
+                        "2026-04-03T09:15:00Z",
+                        Some("codex hook failed")
+                    )
+                ),
+            )
+            .expect("write bridge record");
+
+            let integration = serde_json::json!({
+                "sessionHub": {
+                    "provider": CODEX_PROVIDER,
+                    "bridgePath": bridge_path.to_string_lossy().to_string(),
+                    "integrationVersion": PROVIDER_INTEGRATION_VERSION
+                },
+                "hooks": {
+                    "SessionStart": [{
+                        "matcher": "startup|resume|clear|compact",
+                        "hooks": [{
+                            "type": "command",
+                            "commandWindows": format!(
+                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "PostToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "commandWindows": format!(
+                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "Stop": [{
+                        "hooks": [{
+                            "type": "command",
+                            "commandWindows": format!(
+                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }]
+                }
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&integration).expect("serialize codex integration"),
+            )
+            .expect("write codex integration");
+
+            let root_string = codex_root.to_string_lossy().to_string();
+            detect_codex_integration_status(Some(root_string.as_str()))
+        });
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(
+            status.last_event_at.as_deref(),
+            Some("2026-04-03T09:15:00Z")
+        );
+        assert_eq!(status.last_error.as_deref(), Some("codex hook failed"));
+        assert_eq!(
+            status.config_path.as_deref(),
+            Some(config_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(status.installed_version, Some(PROVIDER_INTEGRATION_VERSION));
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_codex_integration_status_marks_missing_and_manual_required() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-missing-appdata");
+        let codex_root = unique_test_dir("codex-provider-missing-root");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&codex_root).expect("create codex root");
+
+        let missing_status = with_appdata(&appdata_dir, || {
+            let root_string = codex_root.to_string_lossy().to_string();
+            detect_codex_integration_status(Some(root_string.as_str()))
+        });
+        assert_eq!(missing_status.status, ProviderIntegrationState::Missing);
+        assert!(missing_status.last_error.is_none());
+        assert!(missing_status
+            .config_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(CODEX_HOOK_FILE_NAME)));
+
+        let manual_required_status = with_appdata(&appdata_dir, || {
+            without_env_var("USERPROFILE", || detect_codex_integration_status(None))
+        });
+        assert_eq!(
+            manual_required_status.status,
+            ProviderIntegrationState::ManualRequired
+        );
+        assert!(manual_required_status.config_path.is_none());
+        assert!(manual_required_status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("USERPROFILE")));
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn install_codex_integration_writes_managed_hook_file() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-install-appdata");
+        let codex_root = unique_test_dir("codex-provider-install-root");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&codex_root).expect("create codex root");
+
+        let status = with_appdata(&appdata_dir, || {
+            let root_string = codex_root.to_string_lossy().to_string();
+            install_or_update_codex_integration(Some(root_string.as_str()))
+        });
+        let config_path = resolve_codex_integration_path(&codex_root);
+        let content = fs::read_to_string(&config_path).expect("read codex hook file");
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert!(content.contains("\"sessionHub\""));
+        assert!(content.contains("\"SessionStart\""));
+        assert!(content.contains("\"PostToolUse\""));
+        assert!(content.contains("\"Stop\""));
+        assert!(content.contains("\"command\": \"true\""));
+        assert!(content.contains("provider = 'codex'"));
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn provider_refresh_event_name_supports_codex() {
+        assert_eq!(
+            provider_refresh_event_name(CODEX_PROVIDER).expect("resolve codex refresh event"),
+            "codex-sessions-updated"
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -2262,8 +2706,13 @@ mod tests {
                 get_analytics_data_internal(&connection, None, "2026-04-30", "2026-04-01", "day");
             assert_eq!(reversed.unwrap_err(), "startDate must be before endDate");
 
-            let invalid_group =
-                get_analytics_data_internal(&connection, None, "2026-04-01", "2026-04-30", "quarter");
+            let invalid_group = get_analytics_data_internal(
+                &connection,
+                None,
+                "2026-04-01",
+                "2026-04-30",
+                "quarter",
+            );
             assert_eq!(invalid_group.unwrap_err(), "invalid groupBy value");
         });
 
@@ -2306,6 +2755,59 @@ mod tests {
 
         assert_eq!(stats2.output_tokens, 150);
         assert_eq!(stats2.interaction_count, 1);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+    }
+
+    #[test]
+    fn test_opencode_session_stats_db_only_message_source() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("oc-stats-db");
+        let storage_root = root_dir.join("storage");
+        let message_dir = storage_root.join("message").join("ses_db_stats");
+
+        fs::create_dir_all(&storage_root).expect("create storage root");
+        create_opencode_db_sessions(
+            &root_dir,
+            "project-db-stats",
+            "D:\\repo\\stats",
+            &[("ses_db_stats", "Stats Session", 1000, 4000, None)],
+        );
+        insert_opencode_db_message(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_user",
+            1000,
+            1000,
+            r#"{"role":"user","time":{"created":1000}}"#,
+        );
+        insert_opencode_db_message(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_assistant",
+            1001,
+            4000,
+            r#"{"role":"assistant","time":{"created":1001,"completed":4000},"modelID":"gpt-5","tokens":{"input":80,"output":150,"reasoning":10,"cache":{"write":0,"read":0}},"finish":"tool-calls"}"#,
+        );
+        insert_opencode_db_part(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_assistant",
+            "prt_db_tool",
+            1002,
+            1002,
+            r#"{"type":"tool","tool":"bash"}"#,
+        );
+
+        let stats =
+            calculate_opencode_session_stats(&message_dir).expect("db stats should calculate");
+
+        assert_eq!(stats.output_tokens, 150);
+        assert_eq!(stats.input_tokens, 80);
+        assert_eq!(stats.reasoning_count, 1);
+        assert_eq!(stats.interaction_count, 1);
+        assert_eq!(stats.tool_call_count, 1);
+        assert_eq!(stats.tool_breakdown.get("bash"), Some(&1));
 
         fs::remove_dir_all(&root_dir).expect("cleanup root");
     }

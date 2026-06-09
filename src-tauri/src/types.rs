@@ -46,8 +46,22 @@ pub(crate) struct SessionInfo {
     pub(crate) has_events: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionTodo {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) description: Option<String>,
+    pub(crate) updated_at: Option<String>,
+}
+
 pub(crate) fn default_enabled_providers() -> Vec<String> {
-    vec!["copilot".to_string(), "opencode".to_string()]
+    vec![
+        "copilot".to_string(),
+        "opencode".to_string(),
+        "codex".to_string(),
+    ]
 }
 
 pub(crate) fn default_notification_enabled() -> bool {
@@ -111,6 +125,8 @@ pub(crate) struct AppSettings {
     pub(crate) copilot_root: String,
     #[serde(default)]
     pub(crate) opencode_root: String,
+    #[serde(default)]
+    pub(crate) codex_root: String,
     pub(crate) terminal_path: Option<String>,
     pub(crate) external_editor_path: Option<String>,
     pub(crate) show_archived: bool,
@@ -137,7 +153,9 @@ pub(crate) struct AppSettings {
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
 pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
+pub(crate) const CODEX_PROVIDER: &str = "codex";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
+pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
 pub(crate) const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";
 pub(crate) const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider-event-bridge:";
 
@@ -384,6 +402,7 @@ pub(crate) struct WatcherState {
     pub(crate) plan: Mutex<Option<RecommendedWatcher>>,
     pub(crate) project: Mutex<Option<RecommendedWatcher>>,
     pub(crate) opencode: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) codex: Mutex<Option<RecommendedWatcher>>,
     pub(crate) provider_bridge: Mutex<Option<RecommendedWatcher>>,
     pub(crate) last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
     pub(crate) last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
@@ -419,6 +438,7 @@ pub(crate) struct ProviderCache {
 pub(crate) struct ScanCache {
     pub(crate) copilot: Mutex<Option<ProviderCache>>,
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
+    pub(crate) codex: Mutex<Option<ProviderCache>>,
 }
 
 // ── OpenCode JSON 儲存格式（session/*.json / project/*.json）────────────────
@@ -532,28 +552,43 @@ pub(crate) struct OpencodeMessage {
     #[serde(default)]
     pub(crate) role: String,
     #[serde(default)]
+    pub(crate) time: Option<OpencodeMessageTime>,
+    #[serde(default, alias = "modelID")]
+    pub(crate) model_id: Option<String>,
+    #[serde(default)]
+    pub(crate) tokens: Option<OpencodeTokens>,
+    #[serde(default)]
     pub(crate) metadata: Option<OpencodeMessageMetadata>,
 }
 
 impl OpencodeMessage {
     pub(crate) fn time(&self) -> Option<&OpencodeMessageTime> {
-        self.metadata.as_ref()?.time.as_ref()
+        self.time
+            .as_ref()
+            .or_else(|| self.metadata.as_ref()?.time.as_ref())
     }
     pub(crate) fn model_id(&self) -> Option<&str> {
-        self.metadata
-            .as_ref()?
-            .assistant
-            .as_ref()?
-            .model_id
+        self.model_id
             .as_deref()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.metadata
+                    .as_ref()?
+                    .assistant
+                    .as_ref()?
+                    .model_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+            })
     }
     pub(crate) fn tokens(&self) -> Option<&OpencodeTokens> {
-        self.metadata.as_ref().and_then(|m| {
-            m.assistant
-                .as_ref()
-                .and_then(|a| a.tokens.as_ref())
-                .or(m.usage.as_ref())
+        self.tokens.as_ref().or_else(|| {
+            self.metadata.as_ref().and_then(|m| {
+                m.assistant
+                    .as_ref()
+                    .and_then(|a| a.tokens.as_ref())
+                    .or(m.usage.as_ref())
+            })
         })
     }
 }

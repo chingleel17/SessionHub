@@ -119,15 +119,17 @@ pub(crate) fn get_analytics_data_internal(
             continue;
         };
         let label = group_by.label_for_date(date);
-        let point = grouped.entry(label.clone()).or_insert_with(|| AnalyticsDataPoint {
-            label,
-            output_tokens: 0,
-            input_tokens: 0,
-            interaction_count: 0,
-            cost_points: 0.0,
-            session_count: 0,
-            missing_count: 0,
-        });
+        let point = grouped
+            .entry(label.clone())
+            .or_insert_with(|| AnalyticsDataPoint {
+                label,
+                output_tokens: 0,
+                input_tokens: 0,
+                interaction_count: 0,
+                cost_points: 0.0,
+                session_count: 0,
+                missing_count: 0,
+            });
 
         point.session_count += 1;
 
@@ -152,10 +154,15 @@ pub fn get_analytics_data(
     group_by: String,
     db: State<'_, DbState>,
 ) -> Result<Vec<AnalyticsDataPoint>, String> {
-    let conn = db.conn.lock().map_err(|e| format!("db lock poisoned: {e}"))?;
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|e| format!("db lock poisoned: {e}"))?;
     get_analytics_data_internal(
         &*conn,
-        cwd.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        cwd.as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
         &start_date,
         &end_date,
         &group_by,

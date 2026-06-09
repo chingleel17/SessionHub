@@ -5,10 +5,12 @@ use crate::db::ensure_parent_dir;
 use crate::types::*;
 
 pub mod bridge;
+pub mod codex;
 pub mod copilot;
 pub mod opencode;
 
 pub(crate) use bridge::*;
+pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use opencode::*;
 
@@ -101,7 +103,10 @@ pub(super) fn managed_provider_metadata(
     }
 }
 
-pub(super) fn write_provider_integration_file(config_path: &Path, content: &str) -> Result<(), String> {
+pub(super) fn write_provider_integration_file(
+    config_path: &Path,
+    content: &str,
+) -> Result<(), String> {
     validate_integration_target(config_path)?;
     ensure_parent_dir(config_path)?;
     fs::write(config_path, content).map_err(|error| {
@@ -127,7 +132,14 @@ pub(super) fn build_install_failure_status(
         ProviderIntegrationState::Error
     };
 
-    build_provider_integration_status(provider, status, config_path, diagnostics, None, Some(error))
+    build_provider_integration_status(
+        provider,
+        status,
+        config_path,
+        diagnostics,
+        None,
+        Some(error),
+    )
 }
 
 // ── 公開聚合函式 ─────────────────────────────────────────────────────────────
@@ -135,10 +147,12 @@ pub(super) fn build_install_failure_status(
 pub(crate) fn recheck_provider_integration_status(
     provider: &str,
     copilot_root: Option<&str>,
+    codex_root: Option<&str>,
 ) -> Result<ProviderIntegrationStatus, String> {
     match provider {
         COPILOT_PROVIDER => Ok(detect_copilot_integration_status(copilot_root)),
         OPENCODE_PROVIDER => Ok(detect_opencode_integration_status()),
+        CODEX_PROVIDER => Ok(detect_codex_integration_status(codex_root)),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -146,10 +160,12 @@ pub(crate) fn recheck_provider_integration_status(
 pub(crate) fn install_or_update_provider_integration(
     provider: &str,
     copilot_root: Option<&str>,
+    codex_root: Option<&str>,
 ) -> Result<ProviderIntegrationStatus, String> {
     match provider {
         COPILOT_PROVIDER => Ok(install_or_update_copilot_integration(copilot_root)),
         OPENCODE_PROVIDER => Ok(install_or_update_opencode_integration()),
+        CODEX_PROVIDER => Ok(install_or_update_codex_integration(codex_root)),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }

@@ -216,8 +216,8 @@ pub(crate) fn find_session_by_cwd_internal(
             continue;
         }
 
-        let entries = fs::read_dir(&dir)
-            .map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
@@ -256,8 +256,6 @@ pub(crate) fn find_session_by_cwd_internal(
     Ok(None)
 }
 
-
-
 pub(crate) fn archive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     let source_dir = root_dir.join("session-state").join(session_id);
     let target_dir = root_dir.join("session-state-archive").join(session_id);
@@ -277,10 +275,7 @@ pub(crate) fn archive_session_internal(root_dir: &Path, session_id: &str) -> Res
     Ok(())
 }
 
-pub(crate) fn unarchive_session_internal(
-    root_dir: &Path,
-    session_id: &str,
-) -> Result<(), String> {
+pub(crate) fn unarchive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     let source_dir = root_dir.join("session-state-archive").join(session_id);
     let target_dir = root_dir.join("session-state").join(session_id);
 
@@ -302,7 +297,11 @@ pub(crate) fn unarchive_session_internal(
     Ok(())
 }
 
-pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str, connection: &Connection) -> Result<(), String> {
+pub(crate) fn delete_session_internal(
+    root_dir: &Path,
+    session_id: &str,
+    connection: &Connection,
+) -> Result<(), String> {
     for candidate in [
         root_dir.join("session-state").join(session_id),
         root_dir.join("session-state-archive").join(session_id),
@@ -320,7 +319,10 @@ pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str, connect
     Err(format!("session {} does not exist", session_id))
 }
 
-pub(crate) fn delete_empty_sessions_internal(copilot_root: &str, connection: &Connection) -> Result<usize, String> {
+pub(crate) fn delete_empty_sessions_internal(
+    copilot_root: &str,
+    connection: &Connection,
+) -> Result<usize, String> {
     let root = PathBuf::from(copilot_root);
     let session_state_dir = root.join("session-state");
 

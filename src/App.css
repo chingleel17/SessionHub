@@ -1272,6 +1272,18 @@ textarea {
   line-height: 1;
 }
 
+.session-chip-button {
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.session-chip-button:hover {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-panel);
+  color: var(--color-text-primary);
+}
+
 .tag-chip {
   background: transparent;
   border: 1px solid var(--color-border-subtle);
@@ -1346,6 +1358,11 @@ textarea {
   color: var(--color-provider-opencode-text);
 }
 
+.provider-tag--codex {
+  background: var(--color-provider-codex-bg);
+  color: var(--color-provider-codex-text);
+}
+
 .provider-version-badge {
   display: inline-flex;
   align-items: center;
@@ -1388,6 +1405,26 @@ textarea {
   font-size: 12px;
 }
 
+.stats-badge-button {
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.stats-badge-button:hover {
+  background: var(--color-surface-panel);
+  color: var(--color-text-primary);
+}
+
+.stats-badge-entry {
+  font-weight: 600;
+}
+
+.stats-badge-todo-summary {
+  max-width: 100%;
+  text-align: left;
+  white-space: nowrap;
+}
+
 .stats-badge-live {
   border-color: color-mix(
     in srgb,
@@ -1414,12 +1451,124 @@ textarea {
   justify-content: center;
 }
 
+.stats-badge-todo--in_progress {
+  border-color: color-mix(in srgb, var(--color-provider-copilot-bg) 40%, transparent);
+  background: color-mix(in srgb, var(--color-provider-copilot-bg) 16%, transparent);
+  color: var(--color-provider-copilot-text);
+}
+
+.stats-badge-todo--pending {
+  background: var(--color-surface-input);
+  color: var(--color-text-secondary);
+}
+
+.stats-badge-todo--done {
+  border-color: color-mix(in srgb, var(--color-status-success) 40%, transparent);
+  background: color-mix(in srgb, var(--color-status-success) 14%, transparent);
+  color: var(--color-status-success);
+}
+
+.stats-badge-todo--blocked {
+  border-color: color-mix(in srgb, var(--color-status-error) 35%, transparent);
+  background: color-mix(in srgb, var(--color-status-error) 10%, transparent);
+  color: var(--color-status-error);
+}
+
 .stats-panel {
   margin-top: 14px;
   padding: 14px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 14px;
   background: var(--color-surface-input);
+}
+
+.session-todos-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  background: var(--color-surface-input);
+  display: grid;
+  gap: 12px;
+}
+
+.session-todos-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-todos-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-todo-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  background: var(--color-surface-panel);
+}
+
+.session-todo-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.session-todo-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.session-todo-copy strong {
+  line-height: 1.4;
+}
+
+.session-todo-copy span,
+.session-todos-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-todo-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.session-todo-badge--pending {
+  background: var(--color-surface-panel);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.session-todo-badge--in_progress {
+  background: color-mix(in srgb, var(--color-provider-copilot-bg) 70%, white 30%);
+  color: var(--color-provider-copilot-text);
+}
+
+.session-todo-badge--done {
+  background: color-mix(in srgb, var(--color-status-success) 18%, transparent);
+  color: var(--color-status-success);
+}
+
+.session-todo-badge--blocked {
+  background: color-mix(in srgb, var(--color-status-error) 15%, transparent);
+  color: var(--color-status-error);
 }
 
 .stats-panel-grid {
