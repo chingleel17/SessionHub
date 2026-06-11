@@ -110,6 +110,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
+            get_sessions_cached,
             get_settings,
             save_settings,
             install_provider_integration,
@@ -127,6 +128,7 @@ pub fn run() {
             delete_session,
             delete_empty_sessions,
             get_session_stats,
+            get_all_session_stats,
             trigger_stats_backfill,
             read_session_todos,
             get_analytics_data,

@@ -68,7 +68,7 @@ fn render_claude_hook_command(
             "if ([string]::IsNullOrWhiteSpace($payload)) {{ exit 0 }}; ",
             "$event = $payload | ConvertFrom-Json; ",
             "$timestamp = [DateTimeOffset]::UtcNow.ToString('o'); ",
-            "$sessionId = if ($null -ne $event.session_id -and -not [string]::IsNullOrWhiteSpace([string]$event.session_id)) {{ [string]$event.session_id }} else {{ $null }}; ",
+            "$sessionId = if ($null -ne $event.session_id -and -not [string]::IsNullOrWhiteSpace([string]$event.session_id)) {{ [string]$event.session_id }} elseif ($null -ne $event.sessionId -and -not [string]::IsNullOrWhiteSpace([string]$event.sessionId)) {{ [string]$event.sessionId }} else {{ $null }}; ",
             "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
             "$sourcePath = if ($null -ne $event.transcript_path -and -not [string]::IsNullOrWhiteSpace([string]$event.transcript_path)) {{ [string]$event.transcript_path }} else {{ $null }}; ",
             "{title_snippet}",

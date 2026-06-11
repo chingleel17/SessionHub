@@ -240,6 +240,8 @@ function App() {
   const [lastBridgeEvent, setLastBridgeEvent] = useState<{ entry: BridgeEventLogEntry; receivedAt: Date } | null>(null);
   const [showEventMonitor, setShowEventMonitor] = useState(false);
   const lastBridgeEventTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bridgeEventBufferRef = useRef<BridgeEventLogEntry[]>([]);
+  const bridgeEventFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasShownOutdatedToast = useRef(false);
   const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
@@ -275,6 +277,21 @@ function App() {
     queryFn: () => invoke<AppSettings>("get_settings"),
   });
 
+  const sessionsCachedQuery = useQuery({
+    queryKey: [
+      "sessions_cached",
+      settingsQuery.data?.showArchived ?? false,
+      settingsQuery.data?.enabledProviders ?? [],
+    ],
+    enabled: Boolean(settingsQuery.data),
+    staleTime: Infinity,
+    queryFn: () =>
+      invoke<SessionInfo[]>("get_sessions_cached", {
+        showArchived: settingsQuery.data?.showArchived,
+        enabledProviders: settingsQuery.data?.enabledProviders,
+      }),
+  });
+
   const sessionsQuery = useQuery({
     queryKey: [
       "sessions",
@@ -287,6 +304,7 @@ function App() {
       forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
+    placeholderData: sessionsCachedQuery.data,
     queryFn: () =>
       invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
@@ -365,7 +383,7 @@ function App() {
     void triggerStatsBackfill(settingsQuery.data.copilotRoot)
       .then((count) => {
         if (count > 0) {
-          void queryClient.invalidateQueries({ queryKey: ["session_stats"] });
+          void queryClient.invalidateQueries({ queryKey: ["session_stats_all"] });
         }
       })
       .catch((error) => console.warn("[stats-backfill] trigger failed:", error));
@@ -425,22 +443,35 @@ function App() {
     const unlisten = listen<BridgeEventLogEntry>("provider-bridge-event-logged", (event) => {
       const entry = event.payload;
 
-      setBridgeEventLog((prev) => {
-        const next = [...prev, entry];
-        return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next;
-      });
+      bridgeEventBufferRef.current.push(entry);
+      if (bridgeEventFlushTimerRef.current) return;
 
-      setLastBridgeEvent({ entry, receivedAt: new Date() });
+      bridgeEventFlushTimerRef.current = setTimeout(() => {
+        const bufferedEntries = bridgeEventBufferRef.current;
+        bridgeEventBufferRef.current = [];
+        bridgeEventFlushTimerRef.current = null;
+        if (bufferedEntries.length === 0) return;
 
-      if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
-      lastBridgeEventTimerRef.current = setTimeout(() => {
-        setLastBridgeEvent(null);
-      }, LAST_EVENT_TTL_MS);
+        setBridgeEventLog((prev) => {
+          const next = [...prev, ...bufferedEntries];
+          return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next;
+        });
+
+        const latestEntry = bufferedEntries[bufferedEntries.length - 1];
+        setLastBridgeEvent({ entry: latestEntry, receivedAt: new Date() });
+
+        if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+        lastBridgeEventTimerRef.current = setTimeout(() => {
+          setLastBridgeEvent(null);
+        }, LAST_EVENT_TTL_MS);
+      }, 200);
     });
 
     return () => {
       void unlisten.then((fn) => fn());
       if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+      if (bridgeEventFlushTimerRef.current) clearTimeout(bridgeEventFlushTimerRef.current);
+      bridgeEventBufferRef.current = [];
     };
   }, []);
 
@@ -971,29 +1002,35 @@ function App() {
     [sessionsQuery.data],
   );
 
-  const sessionStatsQueries = useQueries({
-    queries: (sessionsQuery.data ?? []).map((session) => ({
-      queryKey: ["session_stats", session.sessionDir],
-      queryFn: () => invoke<SessionStats>("get_session_stats", { sessionDir: session.sessionDir }),
-      staleTime: 60_000,
-      enabled: session.provider !== "codex" && Boolean(session.sessionDir),
-      refetchInterval: (query: { state: { data?: SessionStats } }) =>
-        query.state.data?.isLive ? 30_000 : false,
-    })),
+  const allSessionDirs = useMemo(
+    () => (sessionsQuery.data ?? [])
+      .filter((session) => session.provider !== "codex" && Boolean(session.sessionDir))
+      .map((session) => session.sessionDir)
+      .sort((left, right) => left.localeCompare(right)),
+    [sessionsQuery.data],
+  );
+
+  const sessionStatsQuery = useQuery({
+    queryKey: ["session_stats_all", allSessionDirs],
+    enabled: allSessionDirs.length > 0,
+    staleTime: 60_000,
+    queryFn: () => invoke<Record<string, SessionStats>>("get_all_session_stats", { sessionDirs: allSessionDirs }),
+    refetchInterval: (query: { state: { data?: Record<string, SessionStats> } }) =>
+      Object.values(query.state.data ?? {}).some((stats) => stats.isLive) ? 30_000 : false,
   });
 
   const sessionStatsMap = useMemo(
     () => Object.fromEntries(
-      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.data]),
+      (sessionsQuery.data ?? []).map((session) => [session.id, sessionStatsQuery.data?.[session.sessionDir]]),
     ) as Record<string, SessionStats | undefined>,
-    [sessionStatsQueries, sessionsQuery.data],
+    [sessionStatsQuery.data, sessionsQuery.data],
   );
 
   const sessionStatsLoadingMap = useMemo(
     () => Object.fromEntries(
-      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.isLoading]),
+      (sessionsQuery.data ?? []).map((session) => [session.id, session.provider !== "codex" ? sessionStatsQuery.isLoading : false]),
     ) as Record<string, boolean | undefined>,
-    [sessionStatsQueries, sessionsQuery.data],
+    [sessionStatsQuery.isLoading, sessionsQuery.data],
   );
 
   const sessionTodoQueries = useQueries({

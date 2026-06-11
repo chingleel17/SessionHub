@@ -101,8 +101,6 @@ fn parse_claude_session_file(session_path: &Path, meta: SessionMeta) -> SessionI
             continue;
         };
 
-        has_events = true;
-
         if let Some(ts) = &entry.timestamp {
             updated_at = Some(ts.clone());
             if created_at.is_none() {
@@ -111,20 +109,34 @@ fn parse_claude_session_file(session_path: &Path, meta: SessionMeta) -> SessionI
         }
 
         if session_id.is_none() {
-            session_id = entry.session_id.clone();
+            if let Some(sid) = &entry.session_id {
+                if !sid.is_empty() {
+                    session_id = Some(sid.clone());
+                }
+            }
         }
 
         if cwd.is_none() {
-            cwd = entry.cwd.clone();
+            if let Some(c) = &entry.cwd {
+                if !c.is_empty() {
+                    cwd = Some(c.clone());
+                }
+            }
         }
 
-        if entry.entry_type == "user" && summary.is_none() {
-            if let Some(msg) = &entry.message {
-                if let Some(role) = &msg.role {
-                    if role == "user" {
-                        summary = entry.session_id.clone();
-                    }
+        // ai-title entry 含有 AI 生成的對話標題，優先使用
+        if entry.entry_type == "ai-title" {
+            if let Some(title) = &entry.ai_title {
+                if !title.is_empty() {
+                    summary = Some(title.clone());
                 }
+            }
+        }
+
+        // 只有非 meta 的 user/assistant entry 才算真實對話內容
+        if matches!(entry.entry_type.as_str(), "user" | "assistant") {
+            if entry.is_meta != Some(true) {
+                has_events = true;
             }
         }
     }
@@ -133,10 +145,10 @@ fn parse_claude_session_file(session_path: &Path, meta: SessionMeta) -> SessionI
     let parse_error = !has_events;
 
     SessionInfo {
-        id: resolved_id.clone(),
+        id: resolved_id,
         provider: CLAUDE_PROVIDER.to_string(),
         cwd,
-        summary: Some(resolved_id),
+        summary,
         summary_count: None,
         created_at,
         updated_at,

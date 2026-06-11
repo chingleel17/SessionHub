@@ -343,6 +343,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "eventMonitor.status.full_refresh": "full_refresh",
   "eventMonitor.status.skipped_dedup": "skipped (dedup)",
   "eventMonitor.status.skipped_rate_limit": "skipped (rate limit)",
+  "eventMonitor.status.activity_hint": "activity hint",
   "eventMonitor.lastEvent": "Last event",
   "eventMonitor.lastEvent.noEvent": "No events received",
   "statusBar.noEvent": "No bridge events received",

@@ -381,11 +381,11 @@ export function SettingsView({
           </div>
         </div>
 
-        {providerIntegrations.filter(i => settingsForm.enabledProviders.includes(i.provider)).length === 0 ? (
+        {providerIntegrations.length === 0 ? (
           <div className="provider-integration-empty">{t("settings.integrations.empty")}</div>
         ) : (
           <div className="provider-integrations-list">
-            {providerIntegrations.filter(i => settingsForm.enabledProviders.includes(i.provider)).map((integration) => {
+            {providerIntegrations.map((integration) => {
               const providerLabel = getProviderLabel(
                 integration.provider,
                 providerLabels.copilot,

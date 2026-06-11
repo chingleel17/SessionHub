@@ -338,6 +338,7 @@ export const zhTwMessages = {
   "eventMonitor.status.full_refresh": "全量刷新",
   "eventMonitor.status.skipped_dedup": "略過（重複）",
   "eventMonitor.status.skipped_rate_limit": "略過（頻率限制）",
+  "eventMonitor.status.activity_hint": "活動提示",
   "eventMonitor.lastEvent": "最後事件",
   "eventMonitor.lastEvent.noEvent": "尚未收到事件",
   "statusBar.noEvent": "尚未收到 Bridge 事件",

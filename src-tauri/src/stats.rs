@@ -732,36 +732,58 @@ pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, 
         .map_err(|e| format!("failed to open Claude session: {e}"))?;
     let reader = BufReader::new(file);
 
-    let mut dedup: StdHashMap<String, crate::types::ClaudeUsage> = StdHashMap::new();
+    struct DedupEntry {
+        usage: crate::types::ClaudeUsage,
+        model: String,
+        tool_names: Vec<String>,
+    }
+
+    let mut dedup: StdHashMap<String, DedupEntry> = StdHashMap::new();
     let mut models_used: BTreeSet<String> = BTreeSet::new();
     let mut interaction_count: u32 = 0;
-    let mut tool_call_count: u32 = 0;
     let mut first_ts: Option<i64> = None;
     let mut last_ts: Option<i64> = None;
 
     for line in reader.lines().map_while(Result::ok) {
         let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.contains("\"usage\"") {
+        if trimmed.is_empty() {
             continue;
         }
 
-        let Ok(entry) = serde_json::from_str::<crate::types::ClaudeEntry>(trimmed) else {
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
 
-        if entry.entry_type != "assistant" || entry.is_sidechain {
-            if entry.entry_type == "user" {
+        let entry_type = raw.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let is_sidechain = raw.get("isSidechain").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_meta = raw.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        // 只統計非 meta 的 user entry 作為互動次數
+        if entry_type == "user" && !is_meta && !is_sidechain {
+            if raw.pointer("/message/role").and_then(|v| v.as_str()) == Some("user") {
                 interaction_count += 1;
             }
             continue;
         }
 
-        let Some(msg) = &entry.message else { continue };
-        let Some(usage) = &msg.usage else { continue };
-        let Some(msg_id) = &msg.id else { continue };
+        if entry_type != "assistant" || is_sidechain {
+            continue;
+        }
 
-        // timestamp tracking for duration
-        if let Some(ts_str) = &entry.timestamp {
+        let msg = match raw.get("message") {
+            Some(m) => m,
+            None => continue,
+        };
+        let usage = match msg.get("usage") {
+            Some(u) => u,
+            None => continue,
+        };
+        let msg_id = match msg.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+
+        if let Some(ts_str) = raw.get("timestamp").and_then(|v| v.as_str()) {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
                 let secs = dt.timestamp();
                 if first_ts.is_none() || secs < first_ts.unwrap_or(i64::MAX) {
@@ -773,81 +795,87 @@ pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, 
             }
         }
 
-        if let Some(model) = &msg.model {
-            if !model.is_empty() && model != "<synthetic>" {
-                models_used.insert(model.clone());
-            }
+        let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !model.is_empty() && model != "<synthetic>" {
+            models_used.insert(model.clone());
         }
 
-        // dedup: keep entry with highest total tokens
-        let total = usage.input_tokens + usage.output_tokens;
-        let should_insert = dedup
-            .get(msg_id.as_str())
-            .map(|existing| {
-                existing.input_tokens + existing.output_tokens < total
-            })
-            .unwrap_or(true);
+        // 從 message.content 陣列解析 tool_use
+        let tool_names = extract_tool_names_from_content(msg);
 
-        if should_insert {
-            // Check for tool_use in content — approximate via cache pattern
-            // Tool calls tracked as entries that have non-trivial output
-            if usage.output_tokens > 0 {
-                tool_call_count = tool_call_count.saturating_add(1);
-            }
-            dedup.insert(msg_id.clone(), crate::types::ClaudeUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                cache_read_input_tokens: usage.cache_read_input_tokens,
-                speed: usage.speed.clone(),
-                service_tier: usage.service_tier.clone(),
-                cache_creation: usage.cache_creation.as_ref().map(|cc| crate::types::ClaudeCacheCreation {
-                    ephemeral_1h_input_tokens: cc.ephemeral_1h_input_tokens,
-                    ephemeral_5m_input_tokens: cc.ephemeral_5m_input_tokens,
-                }),
+        let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_creation_input_tokens = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_read_input_tokens = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let speed = usage.get("speed").and_then(|v| v.as_str()).map(str::to_string);
+        let service_tier = usage.get("service_tier").and_then(|v| v.as_str()).map(str::to_string);
+        let cache_creation = usage.get("cache_creation").map(|cc| crate::types::ClaudeCacheCreation {
+            ephemeral_1h_input_tokens: cc.get("ephemeral_1h_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            ephemeral_5m_input_tokens: cc.get("ephemeral_5m_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        });
+
+        let total = input_tokens + output_tokens;
+        let existing_total = dedup.get(msg_id.as_str())
+            .map(|e| e.usage.input_tokens + e.usage.output_tokens)
+            .unwrap_or(0);
+
+        if total >= existing_total {
+            dedup.insert(msg_id, DedupEntry {
+                usage: crate::types::ClaudeUsage {
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                    speed,
+                    service_tier,
+                    cache_creation,
+                },
+                model,
+                tool_names,
             });
         }
     }
 
-    // Aggregate
     let mut total_input: u64 = 0;
     let mut total_output: u64 = 0;
-    let mut total_cost: f64 = 0.0;
+    let mut tool_call_count: u32 = 0;
+    let mut tool_breakdown: BTreeMap<String, u32> = BTreeMap::new();
     let mut model_metrics: BTreeMap<String, ModelMetricsEntry> = BTreeMap::new();
 
-    for (_, usage) in &dedup {
-        total_input += usage.input_tokens;
-        total_output += usage.output_tokens;
+    for entry in dedup.values() {
+        total_input += entry.usage.input_tokens;
+        total_output += entry.usage.output_tokens;
+        tool_call_count += entry.tool_names.len() as u32;
+        for name in &entry.tool_names {
+            *tool_breakdown.entry(name.clone()).or_insert(0) += 1;
+        }
 
-        let model_name = models_used.iter().next().cloned().unwrap_or_default();
-        let pricing = claude_model_pricing(&model_name);
-        let fast_multiplier = if usage.speed.as_deref() == Some("fast") { 1.3 } else { 1.0 };
+        let pricing = claude_model_pricing(&entry.model);
+        let fast_multiplier = if entry.usage.speed.as_deref() == Some("fast") { 1.3 } else { 1.0 };
 
-        let cc = usage.cache_creation.as_ref();
+        let cc = entry.usage.cache_creation.as_ref();
         let tokens_1h = cc.map(|c| c.ephemeral_1h_input_tokens).unwrap_or(0);
-        let tokens_5m = cc.map(|c| c.ephemeral_5m_input_tokens).unwrap_or(
-            usage.cache_creation_input_tokens,
-        );
+        let tokens_5m = cc.map(|c| c.ephemeral_5m_input_tokens)
+            .unwrap_or(entry.usage.cache_creation_input_tokens);
 
         let cost = fast_multiplier * (
-            (usage.input_tokens as f64 / 1_000_000.0) * pricing.input
-            + (usage.output_tokens as f64 / 1_000_000.0) * pricing.output
+            (entry.usage.input_tokens as f64 / 1_000_000.0) * pricing.input
+            + (entry.usage.output_tokens as f64 / 1_000_000.0) * pricing.output
             + (tokens_1h as f64 / 1_000_000.0) * pricing.cache_write_1h
             + (tokens_5m as f64 / 1_000_000.0) * pricing.cache_write_5m
-            + (usage.cache_read_input_tokens as f64 / 1_000_000.0) * pricing.cache_read
+            + (entry.usage.cache_read_input_tokens as f64 / 1_000_000.0) * pricing.cache_read
         );
-        total_cost += cost;
 
-        let entry = model_metrics.entry(model_name.clone()).or_insert(ModelMetricsEntry {
+        let model_entry = model_metrics.entry(entry.model.clone()).or_insert(ModelMetricsEntry {
             requests_count: 0.0,
             requests_cost: 0.0,
             input_tokens: 0,
             output_tokens: 0,
         });
-        entry.requests_count += 1.0;
-        entry.requests_cost += cost;
-        entry.input_tokens += usage.input_tokens;
-        entry.output_tokens += usage.output_tokens;
+        model_entry.requests_count += 1.0;
+        model_entry.requests_cost += cost;
+        model_entry.input_tokens += entry.usage.input_tokens;
+        model_entry.output_tokens += entry.usage.output_tokens;
     }
 
     let duration_minutes = match (first_ts, last_ts) {
@@ -859,14 +887,26 @@ pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, 
         input_tokens: total_input,
         output_tokens: total_output,
         interaction_count,
-        tool_call_count: tool_call_count.min(dedup.len() as u32),
+        tool_call_count,
         duration_minutes,
         models_used: models_used.into_iter().collect(),
         reasoning_count: 0,
-        tool_breakdown: BTreeMap::new(),
+        tool_breakdown,
         model_metrics,
         is_live: false,
     })
+}
+
+/// 從 message JSON 的 content 陣列中提取 tool_use 的工具名稱清單
+fn extract_tool_names_from_content(msg: &serde_json::Value) -> Vec<String> {
+    let Some(content) = msg.get("content").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
+        .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(str::to_string))
+        .collect()
 }
 
 pub(crate) fn build_claude_usage_blocks(session_path: &Path) -> Result<Vec<ClaudeUsageBlock>, String> {

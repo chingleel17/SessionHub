@@ -66,6 +66,7 @@ export function PlansSpecsView({
   const resizerRef = useRef<HTMLDivElement>(null);
   const cleanupDragRef = useRef<(() => void) | null>(null);
   const lastHandledRefreshTokenRef = useRef(refreshToken);
+  const selfWrittenFilesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     return () => {
@@ -120,7 +121,7 @@ export function PlansSpecsView({
 
       try {
         await onWriteOpenspecFile(projectCwd, filePath, nextContent);
-        void onRefresh();
+        selfWrittenFilesRef.current.add(filePath);
       } catch (error) {
         setContent(previousContent);
         throw error;
@@ -128,7 +129,7 @@ export function PlansSpecsView({
         setTaskSaving(false);
       }
     },
-    [content, contentFilePath, contentFilePathType, onRefresh, onWriteOpenspecFile, projectCwd],
+    [content, contentFilePath, contentFilePathType, onWriteOpenspecFile, projectCwd],
   );
 
   const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -210,6 +211,11 @@ export function PlansSpecsView({
     if (lastHandledRefreshTokenRef.current === refreshToken) return;
     lastHandledRefreshTokenRef.current = refreshToken;
 
+    if (contentFilePath && selfWrittenFilesRef.current.has(contentFilePath)) {
+      selfWrittenFilesRef.current.delete(contentFilePath);
+      return;
+    }
+
     const stack = [...rootNodes];
     let matchedNode: TreeNode | null = null;
     while (stack.length > 0) {
@@ -223,14 +229,14 @@ export function PlansSpecsView({
       }
     }
 
-      if (!matchedNode?.filePath) {
-        setSelectedNode(null);
-        setContent(null);
-        setContentFilePath(null);
-        setContentFilePathType(null);
-        setContentError(null);
-        return;
-      }
+    if (!matchedNode?.filePath) {
+      setSelectedNode(null);
+      setContent(null);
+      setContentFilePath(null);
+      setContentFilePathType(null);
+      setContentError(null);
+      return;
+    }
 
     if (
       selectedNode.filePath !== matchedNode.filePath ||
@@ -240,7 +246,7 @@ export function PlansSpecsView({
     }
 
     void loadNodeContent(matchedNode, false);
-  }, [loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
+  }, [contentFilePath, loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
 
   if (isLoading) {
     return (

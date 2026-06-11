@@ -729,6 +729,12 @@ pub(crate) struct ClaudeEntry {
     pub(crate) is_api_error_message: Option<bool>,
     #[serde(default)]
     pub(crate) git_branch: Option<String>,
+    /// user entry 中由系統自動產生的 meta 訊息（local-command-caveat 等），不算互動次數
+    #[serde(default)]
+    pub(crate) is_meta: Option<bool>,
+    /// ai-title entry 中的 AI 生成標題
+    #[serde(rename = "aiTitle")]
+    pub(crate) ai_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -294,6 +294,20 @@ fn is_activity_only_event(event_type: &str) -> bool {
     matches!(event_type, "tool.pre" | "tool.post" | "prompt.submitted")
 }
 
+/// 從 transcript_path（source_path）推導 Claude session_id。
+/// transcript_path 格式：`.../.claude/projects/<project>/<session-id>.jsonl`
+fn session_id_from_source_path(source_path: Option<&str>) -> Option<String> {
+    let path = source_path.filter(|s| !s.is_empty())?;
+    let p = Path::new(path);
+    if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 pub(crate) fn matched_bridge_providers(
     event: &notify::Event,
     provider_bridge_paths: &HashMap<String, PathBuf>,
@@ -411,8 +425,15 @@ pub(crate) fn process_provider_bridge_event(
             }
         }
 
-        // 有 session_id 時直接精準定位（session_id 即 SessionInfo.id）
-        if let Some(session_id) = record.session_id.as_deref().filter(|s| !s.is_empty()) {
+        // session_id 優先從 record 欄位取得；若無則從 source_path（transcript_path）推導
+        let resolved_session_id = record
+            .session_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| session_id_from_source_path(record.source_path.as_deref()));
+
+        if let Some(session_id) = resolved_session_id {
             let rate_ok =
                 should_emit_provider_refresh_at(refresh_state, CLAUDE_PROVIDER, Instant::now())?;
             if !rate_ok {
@@ -420,7 +441,7 @@ pub(crate) fn process_provider_bridge_event(
                 return Ok(false);
             }
             let payload = SessionTargetedPayload {
-                session_id: session_id.to_string(),
+                session_id,
                 cwd: record.cwd.clone().unwrap_or_default(),
                 event_type: record.event_type.clone(),
             };

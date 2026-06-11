@@ -15,6 +15,7 @@ function statusClass(status: string): string {
     case "full_refresh": return "event-log-status event-log-status--full-refresh";
     case "skipped_dedup":
     case "skipped_rate_limit": return "event-log-status event-log-status--skipped";
+    case "activity_hint": return "event-log-status event-log-status--activity";
     default: return "event-log-status";
   }
 }
@@ -26,6 +27,7 @@ function statusKey(status: string): string {
     case "full_refresh": return "eventMonitor.status.full_refresh";
     case "skipped_dedup": return "eventMonitor.status.skipped_dedup";
     case "skipped_rate_limit": return "eventMonitor.status.skipped_rate_limit";
+    case "activity_hint": return "eventMonitor.status.activity_hint";
     default: return "eventMonitor.status.full_refresh";
   }
 }
