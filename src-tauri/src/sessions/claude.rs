@@ -29,7 +29,14 @@ fn collect_claude_session_files(projects_root: &Path) -> Result<Vec<PathBuf>, St
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                stack.push(path);
+                // 跳過 subagents 目錄，避免掃描子 agent 的 JSONL 檔案
+                let dir_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if dir_name != "subagents" {
+                    stack.push(path);
+                }
             } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
                 files.push(path);
             }

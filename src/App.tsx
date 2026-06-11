@@ -766,9 +766,42 @@ function App() {
       const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
       const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
       const unlistenCodex = await listen("codex-sessions-updated", onSessionsRefresh);
+      const unlistenClaude = await listen("claude-sessions-updated", onSessionsRefresh);
 
       const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
         "copilot-session-targeted",
+        async (event) => {
+          const { cwd } = event.payload;
+          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
+            cwd,
+            rootDir: settingsQuery.data?.copilotRoot,
+          }).catch(() => null);
+
+          if (!mounted) return;
+
+          if (updated) {
+            queryClient.setQueriesData<SessionInfo[]>(
+              { queryKey: ["sessions"], exact: false },
+              (old) => {
+                if (!old) return old;
+                const idx = old.findIndex((s) => s.id === updated.id);
+                if (idx === -1) return [...old, updated];
+                const next = [...old];
+                next[idx] = updated;
+                return next;
+              }
+            );
+          } else {
+            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          }
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      const unlistenClaudeTargeted = await listen<SessionTargetedPayload>(
+        "claude-session-targeted",
         async (event) => {
           const { cwd } = event.payload;
           const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
@@ -847,6 +880,52 @@ function App() {
         }
       );
 
+      // claude-activity-hint：與 copilot-activity-hint 相同的輕量活動通知邏輯
+      const unlistenClaudeActivityHint = await listen<ActivityHintPayload>(
+        "claude-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, eventType, title } = event.payload;
+          const normalizedCwd = normalizePath(cwd);
+          const session = sessionsDataRef.current.find(
+            (s) => normalizePath(s.cwd ?? "") === normalizedCwd,
+          );
+          if (!session) return;
+
+          let detail: SessionActivityStatus["detail"] = "tool_call";
+          if (eventType === "prompt.submitted") {
+            detail = "thinking";
+          } else if (eventType === "tool.pre" && title) {
+            const lowerTitle = title.toLowerCase();
+            if (/edit|write|patch|create/.test(lowerTitle)) {
+              detail = "file_op";
+            } else if (/task|subtask|agent/.test(lowerTitle)) {
+              detail = "sub_agent";
+            }
+          }
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id, provider: session.provider }),
+                status: "active",
+                detail,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
         if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
         await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
@@ -869,8 +948,11 @@ function App() {
         unlistenCopilot();
         unlistenOpencode();
         unlistenCodex();
+        unlistenClaude();
         unlistenCopilotTargeted();
+        unlistenClaudeTargeted();
         unlistenActivityHint();
+        unlistenClaudeActivityHint();
         unlistenPlan();
         unlistenProjectFiles();
       };

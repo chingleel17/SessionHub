@@ -11,53 +11,96 @@ use super::{build_install_failure_status, build_provider_integration_status};
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
 
+const CLAUDE_MANAGED_EVENTS: [&str; 5] = [
+    "SessionStart",
+    "PreToolUse",
+    "PostToolUse",
+    "UserPromptSubmit",
+    "Stop",
+];
+
 /// 支援新巢狀格式 `{ "matcher": "...", "hooks": [{...}] }` 與舊扁平格式
 fn is_sessionhub_hook_group(group: &Value) -> bool {
-    // 新格式：{ "matcher": "...", "hooks": [{ "type": "command", "command": "..." }] }
+    let contains_marker = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| s.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
+    };
+    // 新格式：{ "matcher": "...", "hooks": [{ "type": "command", "command": "...", "commandWindows": "..." }] }
     if let Some(inner) = group.get("hooks").and_then(Value::as_array) {
         if inner.iter().any(|h| {
-            h.get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|cmd| cmd.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
+            h.get("command").is_some_and(&contains_marker)
+                || h.get("commandWindows").is_some_and(&contains_marker)
         }) {
             return true;
         }
     }
     // 舊格式：{ "type": "command", "command": "...", "commandWindows": "..." }
-    group
-        .get("command")
-        .or_else(|| group.get("commandWindows"))
-        .and_then(Value::as_str)
-        .is_some_and(|cmd| cmd.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
+    group.get("command").is_some_and(&contains_marker)
+        || group.get("commandWindows").is_some_and(&contains_marker)
 }
 
-fn render_claude_stop_hook_command(bridge_path: &std::path::Path) -> String {
-    let bridge_path_str = bridge_path.to_string_lossy().replace('\\', "/");
-    let bridge_parent_str = bridge_path
-        .parent()
-        .unwrap_or(bridge_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    // 用 bash 單引號包住 PowerShell 腳本，避免 Git Bash 展開 $ 變數
-    // PowerShell 腳本內使用雙引號作字串字面量
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 生成 Claude hook 的 PowerShell 命令。
+/// `title_snippet` 是設定 `$title` 變數的 PowerShell 片段，各 event 不同。
+fn render_claude_hook_command(
+    bridge_path: &std::path::Path,
+    event_type: &str,
+    title_snippet: &str,
+) -> String {
+    let bridge_path_literal =
+        powershell_single_quoted(&bridge_path.to_string_lossy().replace('\\', "/"));
+    let bridge_parent_literal = powershell_single_quoted(
+        &bridge_path
+            .parent()
+            .unwrap_or(bridge_path)
+            .to_string_lossy()
+            .replace('\\', "/"),
+    );
+    let event_type_literal = powershell_single_quoted(event_type);
+    let provider_literal = powershell_single_quoted(CLAUDE_PROVIDER);
+
     format!(
         concat!(
-            "powershell.exe -NoProfile -NonInteractive -Command ",
-            "'$d=[Console]::In.ReadToEnd();",
-            "try{{$j=$d|ConvertFrom-Json -EA 0}}catch{{$j=[PSCustomObject]@{{}}}};",
-            "$ts=[DateTimeOffset]::UtcNow.ToString(\"o\");",
-            "$sid=if($j.session_id){{$j.session_id}}else{{$null}};",
-            "$cwd=if($j.cwd){{$j.cwd}}else{{(Get-Location).Path}};",
-            "$rec=[ordered]@{{version={version};provider=\"claude\";eventType=\"session.stop\";timestamp=$ts;sessionId=$sid;cwd=$cwd;sourcePath=$null;title=$null;error=$null}};",
-            "$null=New-Item -ItemType Directory -Force -Path \"{bridge_parent}\";",
-            "[System.IO.File]::AppendAllText(\"{bridge_path}\",($rec|ConvertTo-Json -Compress)+[System.Environment]::NewLine,[System.Text.UTF8Encoding]::new($false));",
-            "# {marker}'"
+            "$payload = [Console]::In.ReadToEnd(); ",
+            "if ([string]::IsNullOrWhiteSpace($payload)) {{ exit 0 }}; ",
+            "$event = $payload | ConvertFrom-Json; ",
+            "$timestamp = [DateTimeOffset]::UtcNow.ToString('o'); ",
+            "$sessionId = if ($null -ne $event.session_id -and -not [string]::IsNullOrWhiteSpace([string]$event.session_id)) {{ [string]$event.session_id }} else {{ $null }}; ",
+            "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
+            "$sourcePath = if ($null -ne $event.transcript_path -and -not [string]::IsNullOrWhiteSpace([string]$event.transcript_path)) {{ [string]$event.transcript_path }} else {{ $null }}; ",
+            "{title_snippet}",
+            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = {event_type}; timestamp = $timestamp; sessionId = $sessionId; cwd = $cwd; sourcePath = $sourcePath; title = $title; error = $null }}; ",
+            "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
+            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false)); ",
+            "# {marker}"
         ),
+        title_snippet = title_snippet,
         version = PROVIDER_INTEGRATION_VERSION,
-        bridge_parent = bridge_parent_str,
-        bridge_path = bridge_path_str,
+        provider = provider_literal,
+        event_type = event_type_literal,
+        bridge_parent = bridge_parent_literal,
+        bridge_path = bridge_path_literal,
         marker = SESSIONHUB_HOOK_COMMAND_MARKER,
     )
+}
+
+fn managed_hook_group(command_windows: String, matcher: Option<&str>) -> Value {
+    // command = "true" 為非 Windows 平台的 NOOP（bash 可執行）
+    // commandWindows 為 Windows 平台執行的 PowerShell 腳本
+    let mut group = json!({
+        "hooks": [{
+            "type": "command",
+            "command": "true",
+            "commandWindows": command_windows,
+        }]
+    });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+    group
 }
 
 fn render_claude_integration(
@@ -84,23 +127,44 @@ fn render_claude_integration(
         root["hooks"] = json!({});
     }
 
-    let hooks_obj = root["hooks"].as_object_mut().ok_or("hooks 欄位不是物件")?;
-    let stop_arr = hooks_obj.entry("Stop").or_insert_with(|| json!([]));
-    if !stop_arr.is_array() {
-        *stop_arr = json!([]);
+    // SessionStart → source 欄位（startup/resume/clear/compact）作為 title
+    let session_start_title = concat!(
+        "$title = if ($null -ne $event.source -and -not [string]::IsNullOrWhiteSpace([string]$event.source)) ",
+        "{ [string]$event.source } else { $null }; "
+    );
+    // PreToolUse / PostToolUse → tool_name 作為 title
+    let tool_title = concat!(
+        "$title = if ($null -ne $event.tool_name -and -not [string]::IsNullOrWhiteSpace([string]$event.tool_name)) ",
+        "{ [string]$event.tool_name } else { $null }; "
+    );
+    // UserPromptSubmit → prompt 前 80 字作為 title
+    let prompt_title = concat!(
+        "$title = if ($null -ne $event.prompt -and -not [string]::IsNullOrWhiteSpace([string]$event.prompt)) ",
+        "{ $s = [string]$event.prompt; if ($s.Length -gt 80) { $s.Substring(0, 80) } else { $s } } else { $null }; "
+    );
+    let null_title = "$title = $null; ";
+
+    let managed_groups: &[(&str, &str, Option<&str>, &str)] = &[
+        ("SessionStart", "session.started", Some("startup|resume|clear|compact"), session_start_title),
+        ("PreToolUse", "tool.pre", None, tool_title),
+        ("PostToolUse", "tool.post", None, tool_title),
+        ("UserPromptSubmit", "prompt.submitted", None, prompt_title),
+        ("Stop", "session.stop", None, null_title),
+    ];
+
+    for (event_name, event_type, matcher, title_snippet) in managed_groups {
+        let mut groups = root["hooks"]
+            .get(event_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        groups.retain(|group| !is_sessionhub_hook_group(group));
+        groups.push(managed_hook_group(
+            render_claude_hook_command(bridge_path, event_type, title_snippet),
+            *matcher,
+        ));
+        root["hooks"][event_name] = Value::Array(groups);
     }
-    let arr = stop_arr.as_array_mut().ok_or("hooks.Stop 不是陣列")?;
-
-    arr.retain(|group| !is_sessionhub_hook_group(group));
-
-    // 使用 Claude Code 規格的巢狀格式：{ "matcher": "", "hooks": [{...}] }
-    arr.push(json!({
-        "matcher": "",
-        "hooks": [{
-            "type": "command",
-            "command": render_claude_stop_hook_command(bridge_path),
-        }]
-    }));
 
     serde_json::to_string_pretty(&root)
         .map_err(|e| format!("無法序列化 Claude settings.json：{e}"))
@@ -118,10 +182,12 @@ fn remove_claude_integration_from_content(
     })?;
 
     if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
-        if let Some(stop) = hooks.get_mut("Stop").and_then(Value::as_array_mut) {
-            stop.retain(|g| !is_sessionhub_hook_group(g));
-            if stop.is_empty() {
-                hooks.remove("Stop");
+        for event_name in CLAUDE_MANAGED_EVENTS {
+            if let Some(arr) = hooks.get_mut(event_name).and_then(Value::as_array_mut) {
+                arr.retain(|g| !is_sessionhub_hook_group(g));
+                if arr.is_empty() {
+                    hooks.remove(event_name);
+                }
             }
         }
         if hooks.is_empty() {
@@ -131,6 +197,24 @@ fn remove_claude_integration_from_content(
 
     serde_json::to_string_pretty(&root)
         .map_err(|e| format!("無法序列化 Claude settings.json：{e}"))
+}
+
+fn has_all_managed_claude_events(root: &Value) -> bool {
+    CLAUDE_MANAGED_EVENTS.iter().all(|event_name| {
+        root.get("hooks")
+            .and_then(|hooks| hooks.get(*event_name))
+            .and_then(Value::as_array)
+            .is_some_and(|arr| arr.iter().any(is_sessionhub_hook_group))
+    })
+}
+
+fn has_any_managed_claude_event(root: &Value) -> bool {
+    CLAUDE_MANAGED_EVENTS.iter().any(|event_name| {
+        root.get("hooks")
+            .and_then(|hooks| hooks.get(*event_name))
+            .and_then(Value::as_array)
+            .is_some_and(|arr| arr.iter().any(is_sessionhub_hook_group))
+    })
 }
 
 pub(crate) fn detect_claude_integration_status(
@@ -193,13 +277,7 @@ pub(crate) fn detect_claude_integration_status(
         }
     };
 
-    let has_hook = root
-        .get("hooks")
-        .and_then(|h| h.get("Stop"))
-        .and_then(Value::as_array)
-        .is_some_and(|arr| arr.iter().any(is_sessionhub_hook_group));
-
-    if has_hook {
+    if has_all_managed_claude_events(&root) {
         build_provider_integration_status(
             CLAUDE_PROVIDER,
             ProviderIntegrationState::Installed,
@@ -207,6 +285,16 @@ pub(crate) fn detect_claude_integration_status(
             diagnostics,
             Some(PROVIDER_INTEGRATION_VERSION),
             None,
+        )
+    } else if has_any_managed_claude_event(&root) {
+        // 只有部分事件（舊版安裝），需要更新
+        build_provider_integration_status(
+            CLAUDE_PROVIDER,
+            ProviderIntegrationState::Outdated,
+            Some(config_path),
+            diagnostics,
+            None,
+            Some("缺少部分 Claude hook 事件，請重新安裝以完整支援所有事件。".to_string()),
         )
     } else {
         build_provider_integration_status(
@@ -333,4 +421,75 @@ pub(crate) fn uninstall_claude_integration(
         None,
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_bridge_path() -> std::path::PathBuf {
+        std::path::PathBuf::from("C:/Users/test/AppData/Roaming/SessionHub/provider-bridge/claude.jsonl")
+    }
+
+    #[test]
+    fn render_integration_has_all_events() {
+        let bridge = fake_bridge_path();
+        let result = render_claude_integration(&bridge, None, std::path::Path::new("settings.json")).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        for event in CLAUDE_MANAGED_EVENTS {
+            assert!(
+                v["hooks"][event].is_array(),
+                "missing event hook array: {event}"
+            );
+            let arr = v["hooks"][event].as_array().unwrap();
+            assert!(
+                arr.iter().any(is_sessionhub_hook_group),
+                "no sessionhub group for event: {event}"
+            );
+        }
+    }
+
+    #[test]
+    fn idempotent_reinstall_does_not_duplicate() {
+        let bridge = fake_bridge_path();
+        let first = render_claude_integration(&bridge, None, std::path::Path::new("settings.json")).unwrap();
+        let second = render_claude_integration(&bridge, Some(&first), std::path::Path::new("settings.json")).unwrap();
+        let v: Value = serde_json::from_str(&second).unwrap();
+        for event in CLAUDE_MANAGED_EVENTS {
+            let arr = v["hooks"][event].as_array().unwrap();
+            let count = arr.iter().filter(|g| is_sessionhub_hook_group(g)).count();
+            assert_eq!(count, 1, "duplicate sessionhub group for event: {event}");
+        }
+    }
+
+    #[test]
+    fn uninstall_removes_all_events() {
+        let bridge = fake_bridge_path();
+        let installed = render_claude_integration(&bridge, None, std::path::Path::new("settings.json")).unwrap();
+        let removed = remove_claude_integration_from_content(&installed, std::path::Path::new("settings.json")).unwrap();
+        let v: Value = serde_json::from_str(&removed).unwrap();
+        assert!(!has_any_managed_claude_event(&v), "hooks should be empty after uninstall");
+    }
+
+    #[test]
+    fn detect_partial_install_returns_outdated() {
+        // 模擬舊版只有 Stop hook 的 settings.json
+        let marker = SESSIONHUB_HOOK_COMMAND_MARKER;
+        let old_settings = format!(
+            "{{\"hooks\":{{\"Stop\":[{{\"matcher\":\"\",\"hooks\":[{{\"type\":\"command\",\"command\":\"# {marker}\"}}]}}]}}}}"
+        );
+        let v: Value = serde_json::from_str(&old_settings).unwrap();
+        assert!(has_any_managed_claude_event(&v), "should detect partial install");
+        assert!(!has_all_managed_claude_events(&v), "should not report as fully installed");
+    }
+
+    #[test]
+    fn session_start_hook_has_matcher() {
+        let bridge = fake_bridge_path();
+        let result = render_claude_integration(&bridge, None, std::path::Path::new("settings.json")).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let arr = v["hooks"]["SessionStart"].as_array().unwrap();
+        let group = arr.iter().find(|g| is_sessionhub_hook_group(g)).unwrap();
+        assert_eq!(group["matcher"], "startup|resume|clear|compact");
+    }
 }

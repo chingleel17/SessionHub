@@ -394,6 +394,43 @@ pub(crate) fn process_provider_bridge_event(
         }
     }
 
+    if provider == CLAUDE_PROVIDER {
+        if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
+            // tool.pre / tool.post / prompt.submitted 只需更新 activity status，不觸發掃描
+            if is_activity_only_event(&record.event_type) {
+                let payload = ActivityHintPayload {
+                    cwd: cwd.to_string(),
+                    event_type: record.event_type.clone(),
+                    title: record.title.clone(),
+                    error: record.error.clone(),
+                };
+                app.emit("claude-activity-hint", &payload)
+                    .map_err(|e| format!("failed to emit claude-activity-hint: {e}"))?;
+                emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                return Ok(true);
+            }
+        }
+
+        // 有 session_id 時直接精準定位（session_id 即 SessionInfo.id）
+        if let Some(session_id) = record.session_id.as_deref().filter(|s| !s.is_empty()) {
+            let rate_ok =
+                should_emit_provider_refresh_at(refresh_state, CLAUDE_PROVIDER, Instant::now())?;
+            if !rate_ok {
+                emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+                return Ok(false);
+            }
+            let payload = SessionTargetedPayload {
+                session_id: session_id.to_string(),
+                cwd: record.cwd.clone().unwrap_or_default(),
+                event_type: record.event_type.clone(),
+            };
+            app.emit("claude-session-targeted", payload)
+                .map_err(|e| format!("failed to emit claude-session-targeted: {e}"))?;
+            emit_event_log(app, make_log_entry(&record, "targeted"));
+            return Ok(true);
+        }
+    }
+
     let rate_ok = emit_provider_refresh(app, refresh_state, provider)?;
     if rate_ok {
         emit_event_log(app, make_log_entry(&record, "full_refresh"));

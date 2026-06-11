@@ -42,7 +42,15 @@ pub fn run() {
             )?;
 
             // Build system tray icon with menu
-            let show_item = tauri::tray::TrayIconBuilder::new()
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/32x32.png"
+            ))
+            .ok();
+            let mut tray_builder = tauri::tray::TrayIconBuilder::new();
+            if let Some(icon) = tray_icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            let show_item = tray_builder
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
                         button: tauri::tray::MouseButton::Left,
@@ -1292,6 +1300,7 @@ mod tests {
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
                 Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![COPILOT_PROVIDER.to_string()]),
                 Some(true),
@@ -1306,6 +1315,7 @@ mod tests {
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
                 Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![OPENCODE_PROVIDER.to_string()]),
                 Some(true),
@@ -1319,6 +1329,7 @@ mod tests {
             let all_providers = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
                 Some(String::new()),
                 Some(false),
                 Some(vec![
