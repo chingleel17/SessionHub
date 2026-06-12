@@ -49,6 +49,29 @@ pub(crate) fn resolve_claude_settings_path() -> Result<PathBuf, String> {
     Ok(default_claude_root()?.join(CLAUDE_HOOK_FILE_NAME))
 }
 
+pub(crate) fn default_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_claude_root()?.join("hooks"))
+}
+
+pub(crate) fn bundled_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join(".claude").join("hooks"))
+}
+
+pub(crate) fn resolve_effective_hook_scripts_root(
+    configured_path: Option<&str>,
+) -> Result<PathBuf, String> {
+    let configured = configured_path
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default_hook_scripts_root()?);
+
+    if configured.exists() {
+        return Ok(configured);
+    }
+
+    bundled_hook_scripts_root()
+}
+
 pub(crate) fn default_opencode_config_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -168,6 +191,7 @@ impl AppSettings {
             opencode_root: default_opencode_root()?.to_string_lossy().to_string(),
             codex_root: default_codex_root()?.to_string_lossy().to_string(),
             claude_root: default_claude_root()?.to_string_lossy().to_string(),
+            hook_scripts_path: default_hook_scripts_root()?.to_string_lossy().to_string(),
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
             terminal_path,
@@ -189,13 +213,13 @@ impl AppSettings {
 pub(crate) fn collect_provider_integration_statuses(
     copilot_root: Option<&str>,
     codex_root: Option<&str>,
-    claude_root: Option<&str>,
+    hook_scripts_path: Option<&str>,
 ) -> Vec<ProviderIntegrationStatus> {
     vec![
         crate::provider::detect_copilot_integration_status(copilot_root),
         crate::provider::detect_opencode_integration_status(),
         crate::provider::detect_codex_integration_status(codex_root),
-        crate::provider::detect_claude_integration_status(claude_root),
+        crate::provider::detect_claude_integration_status(hook_scripts_path),
     ]
 }
 

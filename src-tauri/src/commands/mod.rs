@@ -19,7 +19,9 @@ pub(crate) use tools::*;
 pub mod quota;
 pub(crate) use quota::*;
 
-use crate::settings::{default_claude_root, default_codex_root, default_opencode_root};
+use crate::settings::{
+    default_claude_root, default_codex_root, default_hook_scripts_root, default_opencode_root,
+};
 use crate::types::{default_enabled_providers, AppSettings, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
 
@@ -42,6 +44,9 @@ pub(super) fn restart_provider_watchers_after_integration_change(
                 .unwrap_or_default()
         }),
         claude_root: default_claude_root()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        hook_scripts_path: default_hook_scripts_root()
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_default(),
         claude_quota_reset_day: 1,

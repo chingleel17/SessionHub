@@ -51,7 +51,8 @@ function normalizePath(path: string): string {
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
   const raw = session.repoRoot?.trim() || session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
-  return normalizePath(raw);
+  const branch = session.gitBranch?.trim() ?? "";
+  return `${normalizePath(raw)}:${branch}`;
 }
 
 function getProjectDisplayPath(session: SessionInfo, uncategorizedLabel: string): string {
@@ -67,10 +68,7 @@ function getProjectTitle(session: SessionInfo, displayPath: string, uncategorize
 }
 
 function getProjectBranchLabel(sessions: SessionInfo[]): string | null {
-  const branches = [...new Set(sessions.map((session) => session.gitBranch?.trim()).filter(Boolean))] as string[];
-  if (branches.length === 0) return null;
-  if (branches.length === 1) return branches[0];
-  return `${branches[0]} +${branches.length - 1}`;
+  return sessions.map((session) => session.gitBranch?.trim()).find((branch): branch is string => Boolean(branch)) ?? null;
 }
 
 function getDashboardPeriodStart(period: "week" | "month"): number {
@@ -300,6 +298,7 @@ function App() {
     analyticsPanelCollapsed: false,
     minimizeToTray: false,
     claudeRoot: "",
+    hookScriptsPath: "",
     claudeQuotaResetDay: 1,
     claudeMonthlyLimitTokens: null,
     claudeMonthlyLimitUsd: null,
@@ -398,6 +397,7 @@ function App() {
         analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
         minimizeToTray: settingsQuery.data.minimizeToTray ?? false,
         claudeRoot: settingsQuery.data.claudeRoot ?? "",
+        hookScriptsPath: settingsQuery.data.hookScriptsPath ?? "",
         claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
         claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
         claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
@@ -624,7 +624,7 @@ function App() {
         provider,
         copilotRoot: settingsForm.copilotRoot.trim() || null,
         codexRoot: settingsForm.codexRoot.trim() || null,
-        claudeRoot: (settingsForm.claudeRoot ?? "").trim() || null,
+        hookScriptsPath: (settingsForm.hookScriptsPath ?? "").trim() || null,
       });
     },
     onSuccess: (status, variables) => {
@@ -725,6 +725,7 @@ function App() {
       overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
     minimizeToTray: overrides.minimizeToTray ?? settingsForm.minimizeToTray ?? false,
     claudeRoot: overrides.claudeRoot ?? settingsForm.claudeRoot ?? "",
+    hookScriptsPath: (overrides.hookScriptsPath ?? settingsForm.hookScriptsPath ?? "").trim(),
     claudeQuotaResetDay: overrides.claudeQuotaResetDay ?? settingsForm.claudeQuotaResetDay ?? 1,
     claudeMonthlyLimitTokens:
       overrides.claudeMonthlyLimitTokens ?? settingsForm.claudeMonthlyLimitTokens ?? null,
@@ -968,27 +969,38 @@ function App() {
         }
       );
 
-      // claude-activity-hint：與 copilot-activity-hint 相同的輕量活動通知邏輯
+      // claude-activity-hint：後端已計算 status/detail，直接 patch activityStatusMap
       const unlistenClaudeActivityHint = await listen<ActivityHintPayload>(
         "claude-activity-hint",
         (event) => {
           if (!mounted) return;
-          const { cwd, eventType, title } = event.payload;
+          const { cwd, eventType, title, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
+
+          // 優先使用後端傳來的 sessionId，否則從 cwd 查找
           const normalizedCwd = normalizePath(cwd);
-          const session = sessionsDataRef.current.find(
-            (s) => normalizePath(s.cwd ?? "") === normalizedCwd,
-          );
+          const session = hintSessionId
+            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
+            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
           if (!session) return;
 
-          let detail: SessionActivityStatus["detail"] = "tool_call";
-          if (eventType === "prompt.submitted") {
-            detail = "thinking";
-          } else if (eventType === "tool.pre" && title) {
-            const lowerTitle = title.toLowerCase();
-            if (/edit|write|patch|create/.test(lowerTitle)) {
-              detail = "file_op";
-            } else if (/task|subtask|agent/.test(lowerTitle)) {
-              detail = "sub_agent";
+          // 後端已提供 status 時直接使用，否則 fallback 到前端推算（向後相容）
+          let status: SessionActivityStatus["status"];
+          let detail: SessionActivityStatus["detail"];
+          if (hintStatus) {
+            status = hintStatus;
+            detail = hintDetail ?? undefined;
+          } else {
+            status = "active";
+            detail = "tool_call";
+            if (eventType === "prompt.submitted") {
+              detail = "thinking";
+            } else if (eventType === "tool.pre" && title) {
+              const lowerTitle = title.toLowerCase();
+              if (/edit|write|patch|create/.test(lowerTitle)) {
+                detail = "file_op";
+              } else if (/task|subtask|agent/.test(lowerTitle)) {
+                detail = "sub_agent";
+              }
             }
           }
 
@@ -998,9 +1010,10 @@ function App() {
               if (!old) return old;
               const idx = old.findIndex((s) => s.sessionId === session.id);
               const updated: SessionActivityStatus = {
-                ...(old[idx] ?? { sessionId: session.id, provider: session.provider }),
-                status: "active",
+                ...(old[idx] ?? { sessionId: session.id }),
+                status,
                 detail,
+                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
               };
               if (idx === -1) return [...old, updated];
               const next = [...old];
@@ -1114,42 +1127,6 @@ function App() {
     [sessionTodoQueries, sessionsQuery.data],
   );
 
-  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
-    const sessions = sessionsQuery.data ?? [];
-    const now = Date.now();
-    const THIRTY_MIN = 30 * 60 * 1000;
-    const ONE_DAY = 24 * 60 * 60 * 1000;
-    let active = 0;
-    let waiting = 0;
-    let idle = 0;
-    let done = 0;
-    for (const s of sessions) {
-      if (s.isArchived) {
-        done++;
-        continue;
-      }
-      const stats = sessionStatsMap[s.id];
-      if (stats?.isLive) {
-        active++;
-        continue;
-      }
-      const updatedAt = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
-      // 只有 stats 已載入且明確非 live，才用時間判斷「最近活動」
-      if (stats !== undefined) {
-        if (updatedAt > 0 && now - updatedAt <= THIRTY_MIN) {
-          waiting++;
-        } else if (updatedAt > 0 && now - updatedAt <= ONE_DAY) {
-          idle++;
-        }
-      } else {
-        if (updatedAt > 0 && now - updatedAt <= ONE_DAY) {
-          idle++;
-        }
-      }
-    }
-    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
-  }, [sessionsQuery.data, sessionStatsMap]);
-
   const sisyphusQuery = useQuery({
     queryKey: ["project_plans", activeProject?.pathLabel ?? ""],
     enabled: Boolean(activeProject?.pathLabel),
@@ -1164,9 +1141,13 @@ function App() {
     staleTime: 30_000,
   });
 
+  const claudeHookInstalled = (settingsQuery.data?.providerIntegrations ?? [])
+    .some((i) => i.provider === "claude" && i.status === "installed");
+
   const activityStatusQuery = useQuery({
     queryKey: ["activity_statuses", sessionsQuery.data?.map((s) => s.id)],
     enabled: Boolean(sessionsQuery.data?.length),
+    refetchOnMount: true,
     queryFn: async () => {
       const sessions = sessionsQuery.data ?? [];
       return invoke<SessionActivityStatus[]>("get_session_activity_statuses", {
@@ -1178,13 +1159,21 @@ function App() {
         opencodeRoot: settingsQuery.data?.opencodeRoot || null,
       });
     },
-   refetchInterval: 30_000,
+    refetchInterval: claudeHookInstalled ? false : 30_000,
     staleTime: 25_000,
   });
 
   const toolAvailabilityQuery = useQuery({
     queryKey: ["tool_availability"],
     queryFn: () => invoke<ToolAvailability>("check_tool_availability"),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const jqAvailableQuery = useQuery({
+    queryKey: ["jq_available"],
+    enabled: activeView === "settings",
+    queryFn: () => invoke<boolean>("check_jq_available"),
     staleTime: Infinity,
     gcTime: Infinity,
   });
@@ -1196,6 +1185,29 @@ function App() {
     }
     return m;
   }, [activityStatusQuery.data]);
+
+  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
+    const sessions = sessionsQuery.data ?? [];
+    let active = 0;
+    let waiting = 0;
+    let idle = 0;
+    let done = 0;
+    for (const s of sessions) {
+      if (s.isArchived) {
+        done++;
+        continue;
+      }
+      const activityStatus = activityStatusMap.get(s.id)?.status;
+      if (activityStatus === "active") {
+        active++;
+      } else if (activityStatus === "waiting") {
+        waiting++;
+      } else if (activityStatus === "idle") {
+        idle++;
+      }
+    }
+    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
+  }, [sessionsQuery.data, activityStatusMap]);
 
   // 偵測 session 狀態轉換，發送 Windows 通知
   useEffect(() => {
@@ -1470,7 +1482,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -1710,13 +1722,18 @@ function App() {
       <section className="workspace">
         <header className="workspace-header">
             <div>
-              <h2 className="workspace-title">
-                {activeView === "dashboard"
-                  ? t("tabs.dashboard")
-                  : activeView === "settings"
-                    ? t("settings.title")
-                    : activeProject?.title ?? ""}
-              </h2>
+              <div className="workspace-title-row">
+                <h2 className="workspace-title">
+                  {activeView === "dashboard"
+                    ? t("tabs.dashboard")
+                    : activeView === "settings"
+                      ? t("settings.title")
+                      : activeProject?.title ?? ""}
+                </h2>
+                {activeView !== "dashboard" && activeView !== "settings" && activeProject?.branchLabel ? (
+                  <span className="project-branch-badge">{activeProject.branchLabel}</span>
+                ) : null}
+              </div>
               <p className="workspace-subtitle">
                 {activeView === "dashboard"
                   ? t("dashboard.subtitle")
@@ -1769,8 +1786,8 @@ function App() {
               settingsForm={settingsForm}
               onFormChange={setSettingsForm}
               onSave={() => void handleSaveSettings()}
-              onBrowseDirectory={(field) => void handleBrowseDirectory(field)}
-              onBrowseFile={(field) => void handleBrowseFile(field)}
+              onBrowseDirectory={handleBrowseDirectory}
+              onBrowseFile={handleBrowseFile}
               onDetectTerminal={() => detectTerminalMutation.mutate()}
               onDetectVscode={() => detectVscodeMutation.mutate()}
               onProviderAction={handleProviderAction}
@@ -1778,6 +1795,7 @@ function App() {
               onEditProviderPath={(integration) => void handleEditProviderPath(integration)}
               pendingProviderAction={pendingProviderAction}
               onOpenEventMonitor={() => setShowEventMonitor(true)}
+              jqAvailable={jqAvailableQuery.data ?? null}
             />
           ) : null}
 

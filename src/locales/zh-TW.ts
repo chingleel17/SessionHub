@@ -102,6 +102,7 @@ export const zhTwMessages = {
   "settings.fields.codexRoot": "Codex 資料目錄",
   "settings.fields.terminalPath": "終端程式路徑",
   "settings.fields.externalEditorPath": "外部編輯器路徑",
+  "settings.fields.hookScriptsPath": "Claude Hook 腳本路徑",
   "settings.fields.showArchived": "顯示已封存 sessions",
   "settings.fields.defaultLauncher": "預設開啟工具",
   "settings.fields.enabledProviders": "啟用的平台",
@@ -369,6 +370,9 @@ export const zhTwMessages = {
   "quota.noLimit": "無上限",
   "quota.tray.show": "顯示 SessionHub",
   "quota.tray.quit": "退出 SessionHub",
+  "settings.jqNotFound.title": "建議安裝 jq",
+  "settings.jqNotFound.body": "jq 可啟用 Git Bash hook 模式，讓狀態更新更即時。可透過 Git for Windows 安裝程式勾選，或執行：",
+  "settings.jqNotFound.winget": "winget install jqlang.jq",
 } as const;
 
 export type MessageKey = keyof typeof zhTwMessages;

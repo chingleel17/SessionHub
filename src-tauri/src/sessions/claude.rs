@@ -239,18 +239,12 @@ pub(crate) fn scan_claude_incremental_internal(
                 cache.sessions.push(info.clone());
             }
             cache.session_mtimes.insert(cache_key, current_mtime);
-        } else if let Some(session) = cache
-            .sessions
-            .iter()
-            .find(|s| s.session_dir == cache_key)
-        {
+        } else if let Some(session) = cache.sessions.iter().find(|s| s.session_dir == cache_key) {
             current_ids.insert(session.id.clone());
         }
     }
 
-    cache
-        .sessions
-        .retain(|s| current_ids.contains(&s.id));
+    cache.sessions.retain(|s| current_ids.contains(&s.id));
     let current_paths: HashSet<String> = cache
         .sessions
         .iter()

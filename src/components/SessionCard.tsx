@@ -196,10 +196,6 @@ export function SessionCard({
           <span className="session-meta-label">{t("session.repo")}</span>
           <p>{session.repoName ?? "-"}</p>
         </div>
-        <div>
-          <span className="session-meta-label">{t("session.branch")}</span>
-          <p>{session.gitBranch ?? "-"}</p>
-        </div>
       </div>
 
       {session.notes ? (

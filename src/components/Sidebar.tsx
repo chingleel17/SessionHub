@@ -123,6 +123,16 @@ export function Sidebar({
     setIsDraggingOverPinned(false);
   };
 
+  const getGroupTooltip = (group: ProjectGroup) =>
+    group.branchLabel ? `${group.title} · ${group.branchLabel}` : group.title;
+
+  const renderGroupLabel = (group: ProjectGroup) => (
+    <>
+      <span className="sidebar-pinned-item-label">{group.title}</span>
+      {group.branchLabel ? <span className="sidebar-branch-label">· {group.branchLabel}</span> : null}
+    </>
+  );
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -180,7 +190,7 @@ export function Sidebar({
                     key={group.key}
                     type="button"
                     className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
-                    title={group.title}
+                    title={getGroupTooltip(group)}
                     onClick={() => onOpenProject(group.key)}
                   >
                     {initial}
@@ -190,13 +200,13 @@ export function Sidebar({
                     key={group.key}
                     type="button"
                     className={`sidebar-link ${activeView === group.key ? "active" : ""}`}
-                    title={group.pathLabel}
+                    title={getGroupTooltip(group)}
                     onClick={() => onOpenProject(group.key)}
                   >
                     <span className="sidebar-link-icon sidebar-pin-icon">
                       <PinIcon size={13} />
                     </span>
-                    <span className="sidebar-pinned-item-label">{group.title}</span>
+                    {renderGroupLabel(group)}
                   </button>
                 );
               })}
@@ -234,7 +244,7 @@ export function Sidebar({
                     <button
                       type="button"
                       className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
-                      title={group.title}
+                      title={getGroupTooltip(group)}
                       onClick={() => onOpenProject(group.key)}
                     >
                       {initial}
@@ -260,13 +270,13 @@ export function Sidebar({
                       type="button"
                       draggable
                       className={`sidebar-link sidebar-open-item-label ${activeView === group.key ? "active" : ""}`}
-                      title={group.pathLabel}
+                      title={getGroupTooltip(group)}
                       onClick={() => onOpenProject(group.key)}
                       onDragStart={(e) => handleDragStart(group.key, e)}
                       onDragEnd={handleDragEnd}
                     >
                       <span className="sidebar-link-icon sidebar-pinned-initial">{initial}</span>
-                      <span className="sidebar-pinned-item-label">{group.title}</span>
+                      {renderGroupLabel(group)}
                     </button>
                     <button
                       type="button"

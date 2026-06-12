@@ -36,9 +36,7 @@ fn collect_all_claude_sessions(claude_root: &str) -> Vec<std::path::PathBuf> {
 }
 
 #[tauri::command]
-pub fn get_provider_quota(
-    db_state: State<'_, DbState>,
-) -> Result<Vec<ProviderQuota>, String> {
+pub fn get_provider_quota(db_state: State<'_, DbState>) -> Result<Vec<ProviderQuota>, String> {
     let conn = db_state
         .conn
         .lock()
@@ -95,7 +93,13 @@ pub fn set_provider_quota_settings(
         .conn
         .lock()
         .map_err(|_| "failed to lock db".to_string())?;
-    set_provider_quota_settings_in_db(&conn, &provider, monthly_limit_tokens, monthly_limit_usd, reset_day)
+    set_provider_quota_settings_in_db(
+        &conn,
+        &provider,
+        monthly_limit_tokens,
+        monthly_limit_usd,
+        reset_day,
+    )
 }
 
 #[tauri::command]
@@ -138,7 +142,11 @@ pub fn refresh_claude_quota(
             total_input += stats.input_tokens;
             total_output += stats.output_tokens;
             // cache tokens aren't in SessionStats directly; use model_metrics cost as proxy
-            total_cost += stats.model_metrics.values().map(|m| m.requests_cost).sum::<f64>();
+            total_cost += stats
+                .model_metrics
+                .values()
+                .map(|m| m.requests_cost)
+                .sum::<f64>();
         }
     }
 

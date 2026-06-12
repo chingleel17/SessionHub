@@ -130,6 +130,11 @@ pub fn check_tool_availability() -> ToolAvailability {
 }
 
 #[tauri::command]
+pub fn check_jq_available() -> bool {
+    which_exists("jq")
+}
+
+#[tauri::command]
 pub fn focus_terminal_window(title_hint: String) -> Result<(), String> {
     focus_terminal_window_internal(&title_hint)
 }
@@ -150,16 +155,24 @@ pub fn open_in_tool(
 }
 
 #[tauri::command]
-pub fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
-    Ok(scan_sisyphus_internal(std::path::Path::new(&project_dir)))
+pub async fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
+    // 在後台執行掃描，避免阻塞 UI 執行緒
+    let result =
+        std::thread::spawn(move || scan_sisyphus_internal(std::path::Path::new(&project_dir)))
+            .join();
+
+    match result {
+        Ok(data) => Ok(data),
+        Err(_) => Err("plan scan thread panicked".to_string()),
+    }
 }
 
 #[tauri::command]
 pub async fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
     // 在後台執行掃描，避免阻塞 UI 執行緒
-    let result = std::thread::spawn(move || {
-        scan_openspec_internal(std::path::Path::new(&project_dir))
-    }).join();
+    let result =
+        std::thread::spawn(move || scan_openspec_internal(std::path::Path::new(&project_dir)))
+            .join();
 
     match result {
         Ok(data) => Ok(data),

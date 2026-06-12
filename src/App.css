@@ -277,6 +277,27 @@ textarea {
   min-height: 80px;
 }
 
+.workspace-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.project-branch-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--color-surface-accent);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .workspace-content {
   overflow-y: auto;
   padding: 12px;
@@ -1037,6 +1058,33 @@ textarea {
 .provider-integration-card--error {
   border-color: var(--color-error-border);
   background: var(--color-error-surface);
+}
+
+.jq-missing-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-info-border, #b6d4fe);
+  background: var(--color-info-surface, #e8f0fe);
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.jq-missing-banner strong {
+  font-weight: 600;
+}
+
+.jq-missing-banner code {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-surface-subtle, rgba(0,0,0,0.05));
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  user-select: all;
 }
 
 .provider-integration-header {
@@ -2331,11 +2379,20 @@ textarea {
 }
 
 .sidebar-pinned-item-label {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-branch-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted, var(--color-text-secondary));
+  font-size: 12px;
+  flex-shrink: 1;
 }
 
 /* ========================

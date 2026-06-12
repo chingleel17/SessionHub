@@ -36,6 +36,12 @@ pub(crate) fn get_sessions_internal(
     scan_cache: &ScanCache,
     connection: &Connection,
 ) -> Result<Vec<SessionInfo>, String> {
+    // 獲取全局掃描鎖，防止多個掃描同時進行
+    let _scan_lock = scan_cache
+        .scan_lock
+        .lock()
+        .map_err(|_| "failed to lock scan".to_string())?;
+
     let resolved_copilot = resolve_copilot_root(root_dir.as_deref())?;
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
     let resolved_codex = resolve_codex_root(codex_root.as_deref()).ok();

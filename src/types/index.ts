@@ -51,6 +51,7 @@ export type AppSettings = {
     analyticsPanelCollapsed?: boolean;
     minimizeToTray?: boolean;
     claudeRoot?: string;
+    hookScriptsPath?: string;
     claudeQuotaResetDay?: number;
     claudeMonthlyLimitTokens?: number | null;
     claudeMonthlyLimitUsd?: number | null;
@@ -238,6 +239,11 @@ export type ActivityHintPayload = {
     eventType: string;
     title: string | null;
     error: string | null;
+    /** 後端計算好的狀態，可直接更新 activityStatusMap */
+    sessionId?: string | null;
+    status?: "active" | "waiting" | "idle" | null;
+    detail?: string | null;
+    lastActivityAt?: string | null;
 };
 
 export type BridgeEventLogEntry = {

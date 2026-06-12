@@ -95,7 +95,12 @@ pub(crate) fn enrich_sessions_with_git_metadata(sessions: &mut [SessionInfo]) {
     let mut cache: HashMap<String, Option<GitMetadata>> = HashMap::new();
 
     for session in sessions {
-        let Some(cwd) = session.cwd.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(cwd) = session
+            .cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             continue;
         };
 

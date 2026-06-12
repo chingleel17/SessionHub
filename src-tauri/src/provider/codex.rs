@@ -351,9 +351,7 @@ fn has_all_managed_codex_events(root: &Value, bridge_path: &Path) -> bool {
     })
 }
 
-pub(crate) fn uninstall_codex_integration(
-    codex_root: Option<&str>,
-) -> ProviderIntegrationStatus {
+pub(crate) fn uninstall_codex_integration(codex_root: Option<&str>) -> ProviderIntegrationStatus {
     let diagnostics = read_bridge_diagnostics(CODEX_PROVIDER);
     let codex_root = match resolve_codex_root(codex_root) {
         Ok(path) => path,
@@ -412,14 +410,16 @@ pub(crate) fn uninstall_codex_integration(
         for event_name in CODEX_MANAGED_EVENTS {
             if let Some(groups) = hooks.get_mut(event_name).and_then(Value::as_array_mut) {
                 groups.retain(|g| {
-                    !g.get("hooks").and_then(Value::as_array).is_some_and(|inner| {
-                        inner.iter().any(|h| {
-                            h.get("commandWindows")
-                                .or_else(|| h.get("command"))
-                                .and_then(Value::as_str)
-                                .is_some_and(|cmd| cmd.contains("provider = 'codex'"))
+                    !g.get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(|inner| {
+                            inner.iter().any(|h| {
+                                h.get("commandWindows")
+                                    .or_else(|| h.get("command"))
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|cmd| cmd.contains("provider = 'codex'"))
+                            })
                         })
-                    })
                 });
                 if groups.is_empty() {
                     hooks.remove(event_name);

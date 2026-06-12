@@ -37,6 +37,7 @@
 | **即時更新**            | 監聽 session-state 目錄，新增或修改時自動刷新列表                      |
 | **備註與標籤**          | 為每個 session 加入個人備註與標籤，存於本地資料庫                      |
 | **多語系**              | 支援繁體中文介面                                                       |
+| **Claude Hook 整合**    | 安裝 Claude Code hooks 並將事件寫入 SessionHub bridge                 |
 
 ---
 
@@ -131,6 +132,7 @@ Session 卡片上若有 📄 圖示，代表該 session 包含 `plan.md`：
 | -------------------- | ------------------------------------- |
 | 應用程式設定         | `%APPDATA%\SessionHub\settings.json`  |
 | 備註與標籤（SQLite） | `%APPDATA%\SessionHub\metadata.db`    |
+| Claude Hook 腳本     | `%APPDATA%\SessionHub\.claude\hooks\` |
 | Copilot Sessions     | `~/.copilot/session-state/`（可自訂） |
 
 ---

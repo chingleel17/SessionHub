@@ -25,7 +25,9 @@ pub(crate) fn get_sessions_cached_internal(
     let enabled_providers = enabled_providers.unwrap_or_else(default_enabled_providers);
     let mut sessions = load_sessions_cache_from_db(connection, None)?;
     sessions.retain(|session| {
-        enabled_providers.iter().any(|provider| provider == &session.provider)
+        enabled_providers
+            .iter()
+            .any(|provider| provider == &session.provider)
             && (include_archived || !session.is_archived)
     });
     sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));

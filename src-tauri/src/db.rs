@@ -279,9 +279,13 @@ pub(crate) fn get_provider_quota_from_db(
     let mut stmt = connection
         .prepare("SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM provider_quota WHERE provider = ?1 AND billing_period = ?2")
         .map_err(|e| format!("failed to prepare quota query: {e}"))?;
-    let mut rows = stmt.query(rusqlite::params![provider, billing_period])
+    let mut rows = stmt
+        .query(rusqlite::params![provider, billing_period])
         .map_err(|e| format!("failed to query provider quota: {e}"))?;
-    if let Some(row) = rows.next().map_err(|e| format!("failed to read quota row: {e}"))? {
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("failed to read quota row: {e}"))?
+    {
         Ok(Some((
             row.get::<_, i64>(0).unwrap_or(0) as u64,
             row.get::<_, i64>(1).unwrap_or(0) as u64,
@@ -301,9 +305,13 @@ pub(crate) fn get_provider_quota_settings_from_db(
     let mut stmt = connection
         .prepare("SELECT monthly_limit_tokens, monthly_limit_usd, reset_day FROM provider_quota_settings WHERE provider = ?1")
         .map_err(|e| format!("failed to prepare quota settings query: {e}"))?;
-    let mut rows = stmt.query(rusqlite::params![provider])
+    let mut rows = stmt
+        .query(rusqlite::params![provider])
         .map_err(|e| format!("failed to query provider quota settings: {e}"))?;
-    if let Some(row) = rows.next().map_err(|e| format!("failed to read quota settings row: {e}"))? {
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("failed to read quota settings row: {e}"))?
+    {
         let limit_tokens: Option<i64> = row.get(0).ok();
         let limit_usd: Option<f64> = row.get(1).ok();
         let reset_day: i64 = row.get(2).unwrap_or(1);

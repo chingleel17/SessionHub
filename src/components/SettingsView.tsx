@@ -12,7 +12,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -21,6 +21,7 @@ type Props = {
   onEditProviderPath: (integration: ProviderIntegrationStatus) => void;
   pendingProviderAction: string | null;
   onOpenEventMonitor: () => void;
+  jqAvailable?: boolean | null;
 };
 
 function getProviderLabel(
@@ -128,6 +129,7 @@ export function SettingsView({
   onEditProviderPath,
   pendingProviderAction,
   onOpenEventMonitor,
+  jqAvailable,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
@@ -232,6 +234,25 @@ export function SettingsView({
                 onClick={() => onBrowseFile("externalEditorPath")}
               >
                 {t("settings.actions.browseFile")}
+              </button>
+            </div>
+          </label>
+
+          <label className="field-group">
+            <span>{t("settings.fields.hookScriptsPath")}</span>
+            <div className="field-with-action">
+              <input
+                value={settingsForm.hookScriptsPath ?? ""}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, hookScriptsPath: event.currentTarget.value })
+                }
+              />
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onBrowseDirectory("hookScriptsPath")}
+              >
+                {t("settings.actions.browseDirectory")}
               </button>
             </div>
           </label>
@@ -380,6 +401,14 @@ export function SettingsView({
             </button>
           </div>
         </div>
+
+        {jqAvailable === false && providerIntegrations.some((i) => i.provider === "claude") ? (
+          <div className="jq-missing-banner">
+            <strong>{t("settings.jqNotFound.title")}</strong>
+            <span>{t("settings.jqNotFound.body")}</span>
+            <code>{t("settings.jqNotFound.winget")}</code>
+          </div>
+        ) : null}
 
         {providerIntegrations.length === 0 ? (
           <div className="provider-integration-empty">{t("settings.integrations.empty")}</div>

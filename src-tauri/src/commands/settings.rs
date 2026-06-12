@@ -1,9 +1,9 @@
 use tauri::State;
 
 use crate::settings::{
-    collect_provider_integration_statuses, default_codex_root, default_opencode_root,
-    detect_terminal_path, detect_vscode_path, load_settings_internal, save_settings_internal,
-    validate_terminal_path_internal,
+    collect_provider_integration_statuses, default_codex_root, default_hook_scripts_root,
+    default_opencode_root, detect_terminal_path, detect_vscode_path, load_settings_internal,
+    save_settings_internal, validate_terminal_path_internal,
 };
 use crate::types::{default_enabled_providers, AppSettings, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
@@ -20,10 +20,15 @@ pub(crate) fn get_settings_internal() -> Result<AppSettings, String> {
             settings.codex_root = default_root.to_string_lossy().to_string();
         }
     }
+    if settings.hook_scripts_path.trim().is_empty() {
+        if let Ok(default_root) = default_hook_scripts_root() {
+            settings.hook_scripts_path = default_root.to_string_lossy().to_string();
+        }
+    }
     settings.provider_integrations = collect_provider_integration_statuses(
         Some(settings.copilot_root.as_str()),
         Some(settings.codex_root.as_str()),
-        Some(settings.claude_root.as_str()),
+        Some(settings.hook_scripts_path.as_str()),
     );
     Ok(settings)
 }

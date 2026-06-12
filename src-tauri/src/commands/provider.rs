@@ -15,13 +15,13 @@ pub fn install_provider_integration(
     provider: String,
     copilot_root: Option<String>,
     codex_root: Option<String>,
-    claude_root: Option<String>,
+    hook_scripts_path: Option<String>,
 ) -> Result<ProviderIntegrationStatus, String> {
     let status = install_or_update_provider_integration(
         &provider,
         copilot_root.as_deref(),
         codex_root.as_deref(),
-        claude_root.as_deref(),
+        hook_scripts_path.as_deref(),
     )?;
     restart_provider_watchers_after_integration_change(
         &app,
@@ -39,13 +39,13 @@ pub fn update_provider_integration(
     provider: String,
     copilot_root: Option<String>,
     codex_root: Option<String>,
-    claude_root: Option<String>,
+    hook_scripts_path: Option<String>,
 ) -> Result<ProviderIntegrationStatus, String> {
     let status = install_or_update_provider_integration(
         &provider,
         copilot_root.as_deref(),
         codex_root.as_deref(),
-        claude_root.as_deref(),
+        hook_scripts_path.as_deref(),
     )?;
     restart_provider_watchers_after_integration_change(
         &app,
@@ -63,13 +63,13 @@ pub fn recheck_provider_integration(
     provider: String,
     copilot_root: Option<String>,
     codex_root: Option<String>,
-    claude_root: Option<String>,
+    hook_scripts_path: Option<String>,
 ) -> Result<ProviderIntegrationStatus, String> {
     let status = recheck_provider_integration_status(
         &provider,
         copilot_root.as_deref(),
         codex_root.as_deref(),
-        claude_root.as_deref(),
+        hook_scripts_path.as_deref(),
     )?;
     restart_provider_watchers_after_integration_change(
         &app,
@@ -87,13 +87,13 @@ pub fn uninstall_provider_integration(
     provider: String,
     copilot_root: Option<String>,
     codex_root: Option<String>,
-    claude_root: Option<String>,
+    hook_scripts_path: Option<String>,
 ) -> Result<ProviderIntegrationStatus, String> {
     let status = do_uninstall_provider_integration(
         &provider,
         copilot_root.as_deref(),
         codex_root.as_deref(),
-        claude_root.as_deref(),
+        hook_scripts_path.as_deref(),
     )?;
     restart_provider_watchers_after_integration_change(
         &app,

@@ -71,6 +71,10 @@ pub(crate) fn default_claude_quota_reset_day() -> u8 {
     1
 }
 
+pub(crate) fn default_hook_scripts_path() -> String {
+    String::new()
+}
+
 pub(crate) fn default_minimize_to_tray() -> bool {
     false
 }
@@ -111,6 +115,13 @@ pub(crate) struct ActivityHintPayload {
     pub(crate) event_type: String,
     pub(crate) title: Option<String>,
     pub(crate) error: Option<String>,
+    /// 後端已計算好的 session 狀態，前端直接 patch activityStatusMap 使用
+    pub(crate) session_id: Option<String>,
+    /// "active" | "waiting" | "idle"
+    pub(crate) status: Option<String>,
+    /// "thinking" | "tool_call" | "working"
+    pub(crate) detail: Option<String>,
+    pub(crate) last_activity_at: Option<String>,
 }
 
 /// 每次 provider bridge 收到事件時發送給前端的 debug log 記錄。
@@ -161,6 +172,8 @@ pub(crate) struct AppSettings {
     pub(crate) analytics_panel_collapsed: bool,
     #[serde(default)]
     pub(crate) claude_root: String,
+    #[serde(default = "default_hook_scripts_path")]
+    pub(crate) hook_scripts_path: String,
     #[serde(default = "default_claude_quota_reset_day")]
     pub(crate) claude_quota_reset_day: u8,
     #[serde(default = "default_minimize_to_tray")]
@@ -455,12 +468,25 @@ pub(crate) struct ProviderCache {
 }
 
 /// 兩個 provider 各自持有的掃描快取
-#[derive(Default)]
 pub(crate) struct ScanCache {
     pub(crate) copilot: Mutex<Option<ProviderCache>>,
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
     pub(crate) codex: Mutex<Option<ProviderCache>>,
     pub(crate) claude: Mutex<Option<ProviderCache>>,
+    // 防止同時進行多個掃描的全局互斥體
+    pub(crate) scan_lock: Mutex<()>,
+}
+
+impl Default for ScanCache {
+    fn default() -> Self {
+        ScanCache {
+            copilot: Mutex::new(None),
+            opencode: Mutex::new(None),
+            codex: Mutex::new(None),
+            claude: Mutex::new(None),
+            scan_lock: Mutex::new(()),
+        }
+    }
 }
 
 // ── OpenCode JSON 儲存格式（session/*.json / project/*.json）────────────────

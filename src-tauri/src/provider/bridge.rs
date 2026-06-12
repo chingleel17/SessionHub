@@ -294,6 +294,57 @@ fn is_activity_only_event(event_type: &str) -> bool {
     matches!(event_type, "tool.pre" | "tool.post" | "prompt.submitted")
 }
 
+/// 依 hook eventType 計算前端需要的 (status, detail)。
+fn derive_activity_status(event_type: &str, stop_reason: Option<&str>) -> (String, Option<String>) {
+    match event_type {
+        "session.started" | "prompt.submitted" => ("active".to_string(), Some("thinking".to_string())),
+        "tool.pre" => ("active".to_string(), Some("tool_call".to_string())),
+        "tool.post" => ("active".to_string(), Some("working".to_string())),
+        "session.stop" => {
+            let reason = stop_reason.unwrap_or("normal");
+            if reason == "normal" {
+                ("idle".to_string(), None)
+            } else {
+                ("waiting".to_string(), None)
+            }
+        }
+        _ => ("idle".to_string(), None),
+    }
+}
+
+fn current_timestamp_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // 簡易 ISO 8601 UTC 格式
+    let secs = ms / 1000;
+    let millis = ms % 1000;
+    let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
+}
+
+fn epoch_to_ymd_hms(secs: u128) -> (u32, u32, u32, u32, u32, u32) {
+    let secs = secs as u64;
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    // Tomohiko Sakamoto's algorithm
+    let mut z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    (y as u32, mo as u32, d as u32, h as u32, m as u32, s as u32)
+}
+
 /// 從 transcript_path（source_path）推導 Claude session_id。
 /// transcript_path 格式：`.../.claude/projects/<project>/<session-id>.jsonl`
 fn session_id_from_source_path(source_path: Option<&str>) -> Option<String> {
@@ -361,11 +412,16 @@ pub(crate) fn process_provider_bridge_event(
             // tool.pre / tool.post / prompt.submitted 不會更改 session 元數據（summary/updatedAt）。
             // 只需告知前端活動狀態即可，不做任何檔案 I/O 或 session 掃描。
             if is_activity_only_event(&record.event_type) {
+                let (status, detail) = derive_activity_status(&record.event_type, None);
                 let payload = ActivityHintPayload {
                     cwd: cwd.to_string(),
                     event_type: record.event_type.clone(),
                     title: record.title.clone(),
                     error: record.error.clone(),
+                    session_id: None,
+                    status: Some(status),
+                    detail,
+                    last_activity_at: Some(current_timestamp_iso()),
                 };
                 app.emit("copilot-activity-hint", &payload)
                     .map_err(|e| format!("failed to emit copilot-activity-hint: {e}"))?;
@@ -410,17 +466,44 @@ pub(crate) fn process_provider_bridge_event(
 
     if provider == CLAUDE_PROVIDER {
         if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
-            // tool.pre / tool.post / prompt.submitted 只需更新 activity status，不觸發掃描
-            if is_activity_only_event(&record.event_type) {
+            // tool.pre / tool.post / prompt.submitted / session.started / session.stop
+            // 只需更新 activity status，不觸發掃描（session.stop 與 session.started 不改 JSONL 結構）
+            let is_hint = is_activity_only_event(&record.event_type)
+                || matches!(record.event_type.as_str(), "session.started" | "session.stop");
+            if is_hint {
+                let resolved_session_id = record
+                    .session_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| session_id_from_source_path(record.source_path.as_deref()));
+                let stop_reason = record.title.as_deref();
+                let (status, detail) = derive_activity_status(&record.event_type, stop_reason);
                 let payload = ActivityHintPayload {
                     cwd: cwd.to_string(),
                     event_type: record.event_type.clone(),
                     title: record.title.clone(),
                     error: record.error.clone(),
+                    session_id: resolved_session_id,
+                    status: Some(status),
+                    detail,
+                    last_activity_at: Some(current_timestamp_iso()),
                 };
                 app.emit("claude-activity-hint", &payload)
                     .map_err(|e| format!("failed to emit claude-activity-hint: {e}"))?;
                 emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                // session.started 還需要觸發掃描（新 session），session.stop 則不需要
+                if record.event_type == "session.started" {
+                    let rate_ok = should_emit_provider_refresh_at(
+                        refresh_state,
+                        CLAUDE_PROVIDER,
+                        Instant::now(),
+                    )?;
+                    if rate_ok {
+                        app.emit("claude-sessions-updated", ())
+                            .map_err(|e| format!("failed to emit claude-sessions-updated: {e}"))?;
+                    }
+                }
                 return Ok(true);
             }
         }

@@ -106,6 +106,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.fields.codexRoot": "Codex data directory",
   "settings.fields.terminalPath": "Terminal path",
   "settings.fields.externalEditorPath": "External editor path",
+  "settings.fields.hookScriptsPath": "Claude hook scripts path",
   "settings.fields.showArchived": "Show archived sessions",
   "settings.fields.defaultLauncher": "Default launcher",
   "settings.fields.enabledProviders": "Enabled platforms",
@@ -374,4 +375,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "quota.noLimit": "No limit",
   "quota.tray.show": "Show SessionHub",
   "quota.tray.quit": "Quit SessionHub",
+  "settings.jqNotFound.title": "jq recommended",
+  "settings.jqNotFound.body": "Installing jq enables Git Bash hook mode for faster real-time status updates. Install via Git for Windows or run:",
+  "settings.jqNotFound.winget": "winget install jqlang.jq",
 };

@@ -30,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
+            provider::ensure_claude_hook_scripts_installed()?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(
                 app.handle(),
@@ -42,29 +43,26 @@ pub fn run() {
             )?;
 
             // Build system tray icon with menu
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
-                "../icons/32x32.png"
-            ))
-            .ok();
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok();
             let mut tray_builder = tauri::tray::TrayIconBuilder::new();
             if let Some(icon) = tray_icon {
                 tray_builder = tray_builder.icon(icon);
             }
-            let show_item = tray_builder
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click {
-                        button: tauri::tray::MouseButton::Left,
-                        button_state: tauri::tray::MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+            let show_item = tray_builder.on_tray_icon_event(|tray, event| {
+                if let tauri::tray::TrayIconEvent::Click {
+                    button: tauri::tray::MouseButton::Left,
+                    button_state: tauri::tray::MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    let app = tray.app_handle();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
-                });
+                }
+            });
 
             let show_menu_item = tauri::menu::MenuItemBuilder::new("顯示視窗")
                 .id("show_window")
@@ -151,6 +149,7 @@ pub fn run() {
             watch_project_files,
             stop_project_watch,
             check_tool_availability,
+            check_jq_available,
             send_intervention_notification,
             get_provider_quota,
             set_provider_quota_settings,
