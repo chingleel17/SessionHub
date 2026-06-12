@@ -9,6 +9,11 @@
 - **WHEN** 顯示 provider 為 `"opencode"` 的 session 卡片
 - **THEN** 卡片顯示醒目的 `OpenCode` 標籤（使用特定 accent 顏色）
 
+#### Scenario: Codex session 標籤
+
+- **WHEN** 顯示 provider 為 `"codex"` 的 session 卡片
+- **THEN** 卡片顯示醒目的 `Codex` 標籤（使用與 OpenCode 可區分的 provider accent 顏色）
+
 #### Scenario: Copilot session 不顯示標籤
 
 - **WHEN** 顯示 provider 為 `"copilot"` 的 session 卡片

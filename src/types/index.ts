@@ -2,6 +2,9 @@ export type SessionInfo = {
     id: string;
     provider: string;
     cwd?: string | null;
+    repoRoot?: string | null;
+    repoName?: string | null;
+    gitBranch?: string | null;
     summary?: string | null;
     summaryCount?: number | null;
     createdAt?: string | null;
@@ -133,6 +136,7 @@ export type ProjectGroup = {
     key: string;
     title: string;
     pathLabel: string;
+    branchLabel?: string | null;
     sessions: SessionInfo[];
     updatedAtLabel: string;
 };

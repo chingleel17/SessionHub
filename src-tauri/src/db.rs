@@ -87,6 +87,9 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
                 session_id TEXT NOT NULL,
                 provider TEXT NOT NULL DEFAULT 'copilot',
                 cwd TEXT,
+                repo_root TEXT,
+                repo_name TEXT,
+                git_branch TEXT,
                 summary TEXT,
                 summary_count INTEGER,
                 created_at TEXT,
@@ -148,6 +151,22 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
         let error_message = error.to_string();
         if !error_message.contains("duplicate column name") {
             eprintln!("Warning: failed to add model_metrics column: {error}");
+        }
+    }
+
+    for (column_name, sql_type) in [
+        ("repo_root", "TEXT"),
+        ("repo_name", "TEXT"),
+        ("git_branch", "TEXT"),
+    ] {
+        if let Err(error) = connection.execute(
+            &format!("ALTER TABLE sessions_cache ADD COLUMN {column_name} {sql_type}"),
+            [],
+        ) {
+            let error_message = error.to_string();
+            if !error_message.contains("duplicate column name") {
+                eprintln!("Warning: failed to add {column_name} column: {error}");
+            }
         }
     }
 
@@ -348,6 +367,9 @@ pub(crate) fn load_sessions_cache_from_db(
         session_id: String,
         provider: String,
         cwd: Option<String>,
+        repo_root: Option<String>,
+        repo_name: Option<String>,
+        git_branch: Option<String>,
         summary: Option<String>,
         summary_count: Option<u32>,
         created_at: Option<String>,
@@ -361,12 +383,12 @@ pub(crate) fn load_sessions_cache_from_db(
 
     let mut sessions = Vec::new();
     let query = if provider.is_some() {
-        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+        "SELECT session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at, \
                 session_dir, parse_error, is_archived, has_plan, has_events \
          FROM sessions_cache \
          WHERE provider = ?1"
     } else {
-        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+        "SELECT session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at, \
                 session_dir, parse_error, is_archived, has_plan, has_events \
          FROM sessions_cache"
     };
@@ -383,15 +405,18 @@ pub(crate) fn load_sessions_cache_from_db(
                     session_id: row.get(0)?,
                     provider: row.get(1)?,
                     cwd: row.get(2)?,
-                    summary: row.get(3)?,
-                    summary_count: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    session_dir: row.get(7)?,
-                    parse_error: row.get(8)?,
-                    is_archived: row.get(9)?,
-                    has_plan: row.get(10)?,
-                    has_events: row.get(11)?,
+                    repo_root: row.get(3)?,
+                    repo_name: row.get(4)?,
+                    git_branch: row.get(5)?,
+                    summary: row.get(6)?,
+                    summary_count: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    session_dir: row.get(10)?,
+                    parse_error: row.get(11)?,
+                    is_archived: row.get(12)?,
+                    has_plan: row.get(13)?,
+                    has_events: row.get(14)?,
                 })
             })
             .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
@@ -408,15 +433,18 @@ pub(crate) fn load_sessions_cache_from_db(
                     session_id: row.get(0)?,
                     provider: row.get(1)?,
                     cwd: row.get(2)?,
-                    summary: row.get(3)?,
-                    summary_count: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    session_dir: row.get(7)?,
-                    parse_error: row.get(8)?,
-                    is_archived: row.get(9)?,
-                    has_plan: row.get(10)?,
-                    has_events: row.get(11)?,
+                    repo_root: row.get(3)?,
+                    repo_name: row.get(4)?,
+                    git_branch: row.get(5)?,
+                    summary: row.get(6)?,
+                    summary_count: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    session_dir: row.get(10)?,
+                    parse_error: row.get(11)?,
+                    is_archived: row.get(12)?,
+                    has_plan: row.get(13)?,
+                    has_events: row.get(14)?,
                 })
             })
             .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
@@ -438,6 +466,9 @@ pub(crate) fn load_sessions_cache_from_db(
             id: row.session_id,
             provider: row.provider,
             cwd: row.cwd,
+            repo_root: row.repo_root,
+            repo_name: row.repo_name,
+            git_branch: row.git_branch,
             summary: row.summary,
             summary_count: row.summary_count,
             created_at: row.created_at,
@@ -470,10 +501,10 @@ pub(crate) fn save_sessions_cache_to_db(
         .prepare(
             "
             INSERT INTO sessions_cache (
-                session_id, provider, cwd, summary, summary_count, created_at, updated_at,
+                session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at,
                 session_dir, parse_error, is_archived, has_plan, has_events
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ",
         )
         .map_err(|error| format!("failed to prepare sessions_cache insert: {error}"))?;
@@ -487,6 +518,9 @@ pub(crate) fn save_sessions_cache_to_db(
                 session.id,
                 session.provider,
                 session.cwd,
+                session.repo_root,
+                session.repo_name,
+                session.git_branch,
                 session.summary,
                 session.summary_count,
                 session.created_at,

@@ -155,8 +155,16 @@ pub fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
 }
 
 #[tauri::command]
-pub fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
-    Ok(scan_openspec_internal(std::path::Path::new(&project_dir)))
+pub async fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
+    // 在後台執行掃描，避免阻塞 UI 執行緒
+    let result = std::thread::spawn(move || {
+        scan_openspec_internal(std::path::Path::new(&project_dir))
+    }).join();
+
+    match result {
+        Ok(data) => Ok(data),
+        Err(_) => Err("scan thread panicked".to_string()),
+    }
 }
 
 #[tauri::command]

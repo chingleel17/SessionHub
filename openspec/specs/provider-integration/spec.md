@@ -2,12 +2,24 @@
 
 ### Requirement: Provider integration 安裝與狀態管理
 
-系統 SHALL 能檢測 Copilot 與 OpenCode 的 bridge integration 狀態，並允許使用者由 SessionHub 自動安裝、更新或重新安裝整合檔案；系統 SHALL 同時追蹤已安裝插件的版本號，並在版本落差時提示使用者更新。
+系統 SHALL 能檢測 Copilot、OpenCode、Codex 與 Claude 的 bridge integration 狀態，並允許使用者由 SessionHub 自動安裝、更新或重新安裝整合檔案；系統 SHALL 同時追蹤已安裝 integration 的版本號，並在版本落差時提示使用者更新。
 
 #### Scenario: 安裝 OpenCode integration
 
 - **WHEN** 使用者在設定頁對 OpenCode 點擊「安裝整合」
 - **THEN** 系統建立或更新 OpenCode plugin 檔案到偵測到的 plugin 設定位置
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Codex integration
+
+- **WHEN** 使用者在設定頁對 Codex 點擊「安裝整合」
+- **THEN** 系統建立或更新 Codex hook 設定到偵測到的設定位置
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Claude integration
+
+- **WHEN** 使用者在設定頁對 Claude 點擊「安裝整合」
+- **THEN** 系統讀取並 merge 更新 `~/.claude/settings.json` 的 `hooks.Stop` 陣列
 - **AND** 狀態更新為 `installed` 或顯示具體錯誤
 
 #### Scenario: provider 路徑不可寫入
@@ -43,3 +55,23 @@
 - **WHEN** Copilot hook 發出 session 結束事件
 - **THEN** SessionHub 接收的 bridge record 包含 provider=`copilot`
 - **AND** 系統可依該事件重新驗證並更新對應 session 清單
+
+#### Scenario: Codex hook 發送 session 更新
+
+- **WHEN** Codex hook 發出 session 更新或等效事件
+- **THEN** SessionHub 接收的 bridge record 包含 provider=`codex`
+- **AND** 系統可依該事件重新驗證並更新對應 session 清單
+
+### Requirement: Provider integration 腳本分離管理
+
+系統 SHALL 以 provider-specific 的腳本或模板資產管理 Copilot、OpenCode 與 Codex 的 integration 內容，不得將三個 provider 的 hook / plugin 內容混寫在同一份受管理產物中。
+
+#### Scenario: 管理 Copilot integration 內容
+- **WHEN** 系統安裝或更新 Copilot integration
+- **THEN** 系統僅寫入與 Copilot 相關的 hook 內容
+- **AND** 不影響 OpenCode 或 Codex 的受管理腳本資產
+
+#### Scenario: 管理 Codex integration 內容
+- **WHEN** 系統安裝或更新 Codex integration
+- **THEN** 系統僅寫入與 Codex 相關的 hook 內容
+- **AND** 不重用混雜其他 provider 事件映射的模板內容

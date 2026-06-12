@@ -33,6 +33,9 @@ pub(crate) struct SessionInfo {
     #[serde(default = "default_provider")]
     pub(crate) provider: String,
     pub(crate) cwd: Option<String>,
+    pub(crate) repo_root: Option<String>,
+    pub(crate) repo_name: Option<String>,
+    pub(crate) git_branch: Option<String>,
     pub(crate) summary: Option<String>,
     pub(crate) summary_count: Option<u32>,
     pub(crate) created_at: Option<String>,

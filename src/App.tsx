@@ -45,13 +45,32 @@ import { StatusBar } from "./components/StatusBar";
 
 function normalizePath(path: string): string {
   // Windows 路徑大小寫不敏感，正規化為小寫用於分組比對
-  return path.toLowerCase();
+  return path.replace(/\//g, "\\").toLowerCase();
 }
 
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
-  const raw = session.cwd?.trim();
+  const raw = session.repoRoot?.trim() || session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
   return normalizePath(raw);
+}
+
+function getProjectDisplayPath(session: SessionInfo, uncategorizedLabel: string): string {
+  return session.repoRoot?.trim() || session.cwd?.trim() || uncategorizedLabel;
+}
+
+function getProjectTitle(session: SessionInfo, displayPath: string, uncategorizedLabel: string): string {
+  if (displayPath === uncategorizedLabel) return uncategorizedLabel;
+  const repoName = session.repoName?.trim();
+  if (repoName) return repoName;
+  const parts = displayPath.replace(/\//g, "\\").split("\\").filter(Boolean);
+  return parts[parts.length - 1] ?? displayPath;
+}
+
+function getProjectBranchLabel(sessions: SessionInfo[]): string | null {
+  const branches = [...new Set(sessions.map((session) => session.gitBranch?.trim()).filter(Boolean))] as string[];
+  if (branches.length === 0) return null;
+  if (branches.length === 1) return branches[0];
+  return `${branches[0]} +${branches.length - 1}`;
 }
 
 function getDashboardPeriodStart(period: "week" | "month"): number {
@@ -85,28 +104,27 @@ function isSessionInUpdatedRange(session: SessionInfo, periodStartTime: number):
 }
 
 function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string, locale: string): ProjectGroup[] {
-  const groupMap = new Map<string, { displayPath: string; sessions: SessionInfo[] }>();
+  const groupMap = new Map<string, { displayPath: string; title: string; sessions: SessionInfo[] }>();
 
   for (const session of sessions) {
     const key = getProjectKey(session, uncategorizedLabel);
-    const displayPath = session.cwd?.trim() || uncategorizedLabel;
+    const displayPath = getProjectDisplayPath(session, uncategorizedLabel);
     if (!groupMap.has(key)) {
-      groupMap.set(key, { displayPath, sessions: [] });
+      groupMap.set(key, {
+        displayPath,
+        title: getProjectTitle(session, displayPath, uncategorizedLabel),
+        sessions: [],
+      });
     }
     groupMap.get(key)!.sessions.push(session);
   }
 
-  const getTitle = (pathLabel: string) => {
-    if (pathLabel === uncategorizedLabel) return pathLabel;
-    const parts = pathLabel.split("\\").filter(Boolean);
-    return parts[parts.length - 1] ?? pathLabel;
-  };
-
   return Array.from(groupMap.entries())
-    .map(([key, { displayPath, sessions: groupedSessions }]) => ({
+    .map(([key, { displayPath, title, sessions: groupedSessions }]) => ({
       key,
-      title: getTitle(displayPath),
+      title,
       pathLabel: displayPath,
+      branchLabel: getProjectBranchLabel(groupedSessions),
       sessions: groupedSessions.sort((a, b) =>
         (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
       ),
@@ -147,6 +165,21 @@ function resolveProviderTargetPath(integration: ProviderIntegrationStatus): stri
   if (configPath) return configPath;
   const bridgePath = integration.bridgePath?.trim();
   return bridgePath || null;
+}
+
+function getSessionOpenCommand(provider: string, sessionId: string): string {
+  switch (provider) {
+    case "copilot":
+      return `copilot --resume=${sessionId}`;
+    case "opencode":
+      return `opencode session ${sessionId}`;
+    case "codex":
+      return `codex session ${sessionId}`;
+    case "claude":
+      return `claude code --session=${sessionId}`;
+    default:
+      return "";
+  }
 }
 
 function upsertProviderIntegrationStatus(
@@ -481,6 +514,16 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F5" || (e.ctrlKey && e.key === "r")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   const showToast = (message: string) => setToastMessage(message);
 
   const settingsMutation = useMutation({
@@ -763,23 +806,37 @@ function App() {
     [activeView, groupedProjects],
   );
 
+  const planSpecsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshProjectPlansSpecs = useCallback(
     async (projectDir: string) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
-        queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] }),
-      ]);
+      // 清除之前的計時器，實現去抖動
+      if (planSpecsRefreshTimerRef.current) {
+        clearTimeout(planSpecsRefreshTimerRef.current);
+      }
+
+      // 延遲 500ms 再執行掃描，避免大量檔案變更時频繁掃描
+      planSpecsRefreshTimerRef.current = setTimeout(async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
+          queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] }),
+        ]);
+        planSpecsRefreshTimerRef.current = null;
+      }, 500);
     },
     [queryClient],
   );
 
   useEffect(() => {
     if (!activeProject?.pathLabel) {
+      if (planSpecsRefreshTimerRef.current) clearTimeout(planSpecsRefreshTimerRef.current);
       void invoke("stop_project_watch");
       return undefined;
     }
     void invoke("watch_project_files", { projectDir: activeProject.pathLabel });
-    return () => { void invoke("stop_project_watch"); };
+    return () => {
+      void invoke("stop_project_watch");
+      if (planSpecsRefreshTimerRef.current) clearTimeout(planSpecsRefreshTimerRef.current);
+    };
   }, [activeProject?.pathLabel]);
 
   useEffect(() => {
@@ -1498,12 +1555,7 @@ function App() {
   };
 
   const handleCopyCommand = async (session: SessionInfo) => {
-    const command =
-      session.provider === "opencode"
-        ? `opencode session ${session.id}`
-        : session.provider === "codex"
-          ? ""
-        : `copilot --resume=${session.id}`;
+    const command = getSessionOpenCommand(session.provider, session.id);
     if (!command) {
       showToast(t("toast.commandUnavailable"));
       return;

@@ -91,7 +91,7 @@ pub(crate) fn get_analytics_data_internal(
         LEFT JOIN session_stats ss ON ss.session_id = sc.session_id
         WHERE sc.updated_at IS NOT NULL
           AND date(substr(sc.updated_at, 1, 10)) BETWEEN ?1 AND ?2
-          AND (?3 IS NULL OR lower(sc.cwd) = lower(?3))
+          AND (?3 IS NULL OR lower(COALESCE(sc.repo_root, sc.cwd)) = lower(?3) OR lower(sc.cwd) = lower(?3))
         ORDER BY sc.updated_at ASC
     ";
 

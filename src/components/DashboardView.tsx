@@ -62,6 +62,10 @@ function getProjectShortName(cwd?: string | null): string | null {
   return parts[parts.length - 1] ?? null;
 }
 
+function getSessionProjectName(session: SessionInfo): string | null {
+  return session.repoName?.trim() || getProjectShortName(session.repoRoot ?? session.cwd);
+}
+
 function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
@@ -136,6 +140,7 @@ const SESSIONS_PER_PROJECT_CARD = 3;
 function KanbanProjectCard({
   projectName,
   projectKey,
+  branchLabel,
   sessions,
   activityStatusMap,
   onOpenInTool,
@@ -148,6 +153,7 @@ function KanbanProjectCard({
 }: {
   projectName: string;
   projectKey: string;
+  branchLabel: string | null;
   sessions: SessionInfo[];
   activityStatusMap: Map<string, SessionActivityStatus>;
   onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
@@ -186,6 +192,7 @@ function KanbanProjectCard({
         title={t("dashboard.kanban.openProject")}
       >
         <strong className="kanban-project-name">{projectName}</strong>
+        {branchLabel ? <span className="kanban-project-time">{branchLabel}</span> : null}
         <span className="kanban-project-count">{sessions.length}</span>
         <div className="kanban-project-providers">
           {providers.map((p) => (
@@ -294,7 +301,7 @@ function KanbanProjectCard({
 
 // ─── KanbanBoard ──────────────────────────────────────────────────────────────
 
-type ProjectBucket = { projectName: string; projectKey: string; sessions: SessionInfo[] };
+type ProjectBucket = { projectName: string; projectKey: string; branchLabel: string | null; sessions: SessionInfo[] };
 
 function KanbanBoard({
   groupedProjects,
@@ -350,8 +357,6 @@ function KanbanBoard({
     return () => document.removeEventListener("scroll", handleCloseMenu, true);
   }, [openMenu, handleCloseMenu]);
 
-  const allSessions = groupedProjects.flatMap((p) => p.sessions);
-
   const columns: { key: string; label: string; buckets: ProjectBucket[] }[] = [
     { key: "active", label: t("dashboard.kanban.column.active"), buckets: [] },
     { key: "waiting", label: t("dashboard.kanban.column.waiting"), buckets: [] },
@@ -359,15 +364,24 @@ function KanbanBoard({
     { key: "done", label: t("dashboard.kanban.column.done"), buckets: [] },
   ];
 
-  const uncategorized = t("dashboard.kanban.uncategorized");
-  for (const s of allSessions) {
-    const statusKey = s.isArchived ? "done" : (activityStatusMap.get(s.id)?.status ?? "idle");
-    const col = columns.find((c) => c.key === statusKey) ?? columns[2];
-    const projectName = getProjectShortName(s.cwd) ?? uncategorized;
-    const projectKey = s.cwd ? s.cwd.toLowerCase() : uncategorized;
-    let bucket = col.buckets.find((b) => b.projectKey === projectKey);
-    if (!bucket) { bucket = { projectName, projectKey, sessions: [] }; col.buckets.push(bucket); }
-    bucket.sessions.push(s);
+  for (const project of groupedProjects) {
+    const sessionsByStatus = new Map<string, SessionInfo[]>();
+    for (const session of project.sessions) {
+      const statusKey = session.isArchived ? "done" : (activityStatusMap.get(session.id)?.status ?? "idle");
+      const groupedSessions = sessionsByStatus.get(statusKey) ?? [];
+      groupedSessions.push(session);
+      sessionsByStatus.set(statusKey, groupedSessions);
+    }
+
+    for (const [statusKey, sessions] of sessionsByStatus.entries()) {
+      const col = columns.find((column) => column.key === statusKey) ?? columns[2];
+      col.buckets.push({
+        projectName: project.title,
+        projectKey: project.key,
+        branchLabel: project.branchLabel ?? null,
+        sessions,
+      });
+    }
   }
 
   for (const col of columns) {
@@ -433,6 +447,7 @@ function KanbanBoard({
                   key={bucket.projectKey}
                   projectName={bucket.projectName}
                   projectKey={bucket.projectKey}
+                  branchLabel={bucket.branchLabel}
                   sessions={bucket.sessions}
                   activityStatusMap={activityStatusMap}
                   onOpenInTool={onOpenInTool}
@@ -628,18 +643,21 @@ export function DashboardView({
              <div className="project-list">
                {groupedProjects.length > 0 ? (
                  groupedProjects.map((project) => {
-                   const lastSession = project.sessions[0];
-                   const lastSessionTitle = lastSession?.summary?.trim() || null;
-                   return (
+                    const lastSession = project.sessions[0];
+                    const lastSessionTitle = lastSession?.summary?.trim() || null;
+                    return (
                      <button
                        key={project.key}
                        type="button"
                        className="project-item"
                        onClick={() => onOpenProject(project.key)}
                      >
-                       <div className="project-item-info">
-                         <strong>{project.title}</strong>
-                         <p>{project.pathLabel}</p>
+                        <div className="project-item-info">
+                          <strong>
+                            {project.title}
+                            {project.branchLabel ? ` (${project.branchLabel})` : ""}
+                          </strong>
+                          <p>{project.pathLabel}</p>
                          {lastSessionTitle ? (
                            <p className="project-last-session-title">
                              {truncate(lastSessionTitle, PROJECT_LAST_SESSION_MAX_LEN)}
@@ -674,8 +692,8 @@ export function DashboardView({
               {recentSessions.length > 0 ? (
                 recentSessions.map((session) => {
                   const fullTitle = getSessionTitle(session);
-                  const projectName = getProjectShortName(session.cwd);
-                  return (
+                   const projectName = getSessionProjectName(session);
+                   return (
                     <li key={session.id}>
                       <div className="recent-session-item">
                         <button
@@ -687,7 +705,10 @@ export function DashboardView({
                           {truncate(fullTitle, RECENT_TITLE_MAX_LEN)}
                         </button>
                         {projectName ? (
-                          <span className="recent-session-project">{projectName}</span>
+                          <span className="recent-session-project">
+                            {projectName}
+                            {session.gitBranch ? ` (${session.gitBranch})` : ""}
+                          </span>
                         ) : null}
                       </div>
                     </li>

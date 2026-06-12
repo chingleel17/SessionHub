@@ -165,6 +165,8 @@ export const enUsMessages: Record<MessageKey, string> = {
   "session.hasPlan": "Has plan",
   "session.parseError": "Parse error",
   "session.cwd": "Project path",
+  "session.repo": "Git repo",
+  "session.branch": "Branch",
   "session.updatedAt": "Updated",
   "session.createdAt": "Created",
   "session.summaryCount": "Summary count",

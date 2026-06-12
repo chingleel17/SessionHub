@@ -161,6 +161,8 @@ export const zhTwMessages = {
   "session.hasPlan": "有 plan",
   "session.parseError": "解析失敗",
   "session.cwd": "專案路徑",
+  "session.repo": "Git Repo",
+  "session.branch": "分支",
   "session.updatedAt": "更新時間",
   "session.createdAt": "建立時間",
   "session.summaryCount": "Summary 數量",

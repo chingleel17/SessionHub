@@ -69,9 +69,15 @@ function getProviderLabel(provider: string): string {
       return "OpenCode";
     case "codex":
       return "Codex";
+    case "claude":
+      return "Claude Code";
     default:
       return provider;
   }
+}
+
+function supportsSessionCommandCopy(provider: string): boolean {
+  return ["copilot", "opencode", "codex", "claude"].includes(provider);
 }
 
 export function SessionCard({
@@ -127,7 +133,7 @@ export function SessionCard({
   const activityStatusCls = activityStatus
     ? `activity-badge activity-badge--${activityStatus.status}`
     : null;
-  const supportsCommandCopy = session.provider !== "codex";
+  const supportsCommandCopy = supportsSessionCommandCopy(session.provider);
   const supportsPlanEditing = session.provider !== "codex";
   const activityLabel = activityStatus
     ? activityStatus.status === "active"
@@ -185,6 +191,14 @@ export function SessionCard({
         <div>
           <span className="session-meta-label">{t("session.summaryCount")}</span>
           <p>{session.summaryCount ?? 0}</p>
+        </div>
+        <div>
+          <span className="session-meta-label">{t("session.repo")}</span>
+          <p>{session.repoName ?? "-"}</p>
+        </div>
+        <div>
+          <span className="session-meta-label">{t("session.branch")}</span>
+          <p>{session.gitBranch ?? "-"}</p>
         </div>
       </div>
 

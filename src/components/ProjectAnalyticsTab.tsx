@@ -59,7 +59,7 @@ export function ProjectAnalyticsTab({ sessions, sessionStats, onFetchAnalytics }
   const handleGenerate = async () => {
     setIsLoading(true);
     try {
-      const data = await onFetchAnalytics(sessions[0]?.cwd ?? null, startDate, endDate, groupBy);
+      const data = await onFetchAnalytics(sessions[0]?.repoRoot ?? sessions[0]?.cwd ?? null, startDate, endDate, groupBy);
       if (data) {
         setAnalyticsData(data);
         setHasFetched(true);

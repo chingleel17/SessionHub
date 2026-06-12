@@ -16,11 +16,13 @@ use crate::types::*;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub mod git;
 pub mod opencode;
 
 pub(crate) use claude::*;
 pub(crate) use codex::*;
 pub(crate) use copilot::*;
+pub(crate) use git::*;
 pub(crate) use opencode::*;
 
 pub(crate) fn get_sessions_internal(
@@ -318,6 +320,7 @@ pub(crate) fn get_sessions_internal(
         }
     }
 
+    enrich_sessions_with_git_metadata(&mut all_sessions);
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     Ok(all_sessions)

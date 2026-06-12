@@ -868,6 +868,9 @@ mod tests {
             id: "ghost-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -911,6 +914,9 @@ mod tests {
             id: "active-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -928,6 +934,9 @@ mod tests {
             id: "archived-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -2464,6 +2473,9 @@ mod tests {
                     id: "ses-aaa".to_string(),
                     provider: "copilot".to_string(),
                     cwd: Some("C:/proj/a".to_string()),
+                    repo_root: Some("C:/proj".to_string()),
+                    repo_name: Some("proj".to_string()),
+                    git_branch: Some("main".to_string()),
                     summary: Some("initial session".to_string()),
                     summary_count: Some(3),
                     created_at: Some("2026-01-01T00:00:00Z".to_string()),
@@ -2480,6 +2492,9 @@ mod tests {
                     id: "ses-bbb".to_string(),
                     provider: "copilot".to_string(),
                     cwd: Some("C:/proj/b".to_string()),
+                    repo_root: Some("C:/proj".to_string()),
+                    repo_name: Some("proj".to_string()),
+                    git_branch: Some("feature/test".to_string()),
                     summary: None,
                     summary_count: None,
                     created_at: None,
@@ -2508,6 +2523,9 @@ mod tests {
                 .expect("ses-aaa not found");
             assert_eq!(a.provider, "copilot");
             assert_eq!(a.cwd.as_deref(), Some("C:/proj/a"));
+            assert_eq!(a.repo_root.as_deref(), Some("C:/proj"));
+            assert_eq!(a.repo_name.as_deref(), Some("proj"));
+            assert_eq!(a.git_branch.as_deref(), Some("main"));
             assert_eq!(a.summary.as_deref(), Some("initial session"));
             assert_eq!(a.summary_count, Some(3));
             assert!(!a.parse_error);
@@ -2621,6 +2639,9 @@ mod tests {
                         id: "analytics-a".to_string(),
                         provider: "copilot".to_string(),
                         cwd: Some("D:\\repo\\demo".to_string()),
+                        repo_root: Some("D:\\repo\\demo".to_string()),
+                        repo_name: Some("demo".to_string()),
+                        git_branch: Some("main".to_string()),
                         summary: Some("A".to_string()),
                         summary_count: Some(1),
                         created_at: Some("2026-04-01T00:00:00Z".to_string()),
@@ -2637,6 +2658,9 @@ mod tests {
                         id: "analytics-b".to_string(),
                         provider: "copilot".to_string(),
                         cwd: Some("D:\\repo\\demo".to_string()),
+                        repo_root: Some("D:\\repo\\demo".to_string()),
+                        repo_name: Some("demo".to_string()),
+                        git_branch: Some("main".to_string()),
                         summary: Some("B".to_string()),
                         summary_count: Some(1),
                         created_at: Some("2026-04-02T00:00:00Z".to_string()),
