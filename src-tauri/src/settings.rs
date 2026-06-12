@@ -133,6 +133,20 @@ pub(crate) fn metadata_db_path() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join("metadata.db"))
 }
 
+pub(crate) fn hook_logs_dir() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join("logs"))
+}
+
+pub(crate) fn hook_error_log_path() -> Result<PathBuf, String> {
+    Ok(hook_logs_dir()?.join("hook-errors.log"))
+}
+
+pub(crate) fn ensure_logs_dir() {
+    if let Ok(dir) = hook_logs_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+}
+
 pub(crate) fn legacy_session_cache_path() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join("session_cache.json"))
 }

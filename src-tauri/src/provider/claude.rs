@@ -442,6 +442,22 @@ pub(crate) fn install_or_update_claude_integration(
     detect_claude_integration_status(hook_scripts_path)
 }
 
+/// 移除 bundled hook scripts 目錄（AppData 路徑），開發路徑保留不動
+fn remove_bundled_hook_scripts() {
+    let Ok(root) = bundled_hook_scripts_root() else {
+        return;
+    };
+    if !root.exists() {
+        return;
+    }
+    if let Err(e) = fs::remove_dir_all(&root) {
+        eprintln!(
+            "[uninstall] failed to remove hook scripts dir {}: {e}",
+            root.display()
+        );
+    }
+}
+
 pub(crate) fn uninstall_claude_integration(
     hook_scripts_path: Option<&str>,
 ) -> ProviderIntegrationStatus {
@@ -459,6 +475,8 @@ pub(crate) fn uninstall_claude_integration(
             );
         }
     };
+
+    remove_bundled_hook_scripts();
 
     let status_path = effective_hook_status_path(hook_scripts_path).or(Some(config_path.clone()));
 

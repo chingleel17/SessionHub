@@ -429,7 +429,6 @@ pub(crate) struct SessionEvent {
     pub(crate) data: serde_json::Value,
 }
 
-#[derive(Default)]
 pub(crate) struct WatcherState {
     pub(crate) sessions: Mutex<Option<RecommendedWatcher>>,
     pub(crate) plan: Mutex<Option<RecommendedWatcher>>,
@@ -440,6 +439,25 @@ pub(crate) struct WatcherState {
     pub(crate) provider_bridge: Mutex<Option<RecommendedWatcher>>,
     pub(crate) last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
     pub(crate) last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
+    /// 最後一次 get_settings 取得的 integration 狀態，供 restart_session_watcher 使用，避免重讀磁碟
+    pub(crate) known_integrations: Mutex<Vec<ProviderIntegrationStatus>>,
+}
+
+impl Default for WatcherState {
+    fn default() -> Self {
+        WatcherState {
+            sessions: Mutex::new(None),
+            plan: Mutex::new(None),
+            project: Mutex::new(None),
+            opencode: Mutex::new(None),
+            codex: Mutex::new(None),
+            claude: Mutex::new(None),
+            provider_bridge: Mutex::new(None),
+            last_provider_refresh: Arc::new(Mutex::new(HashMap::new())),
+            last_bridge_records: Arc::new(Mutex::new(HashMap::new())),
+            known_integrations: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 /// Copilot watcher 防抖時間（毫秒）
@@ -473,6 +491,8 @@ pub(crate) struct ScanCache {
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
     pub(crate) codex: Mutex<Option<ProviderCache>>,
     pub(crate) claude: Mutex<Option<ProviderCache>>,
+    // session_id → (events_mtime_secs, SessionActivityStatus)
+    pub(crate) activity: Mutex<HashMap<String, (i64, SessionActivityStatus)>>,
     // 防止同時進行多個掃描的全局互斥體
     pub(crate) scan_lock: Mutex<()>,
 }
@@ -484,6 +504,7 @@ impl Default for ScanCache {
             opencode: Mutex::new(None),
             codex: Mutex::new(None),
             claude: Mutex::new(None),
+            activity: Mutex::new(HashMap::new()),
             scan_lock: Mutex::new(()),
         }
     }

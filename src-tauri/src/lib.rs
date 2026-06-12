@@ -30,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
+            ensure_logs_dir();
             provider::ensure_claude_hook_scripts_installed()?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(

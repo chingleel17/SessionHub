@@ -2,8 +2,29 @@
 # record-event.sh - Hook 事件記錄核心模組
 # 依賴：jq（Git Bash 環境）
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "$SCRIPT_DIR/db-ops.sh"
+# invoke_with_retry 直接內嵌，避免 source $0 路徑問題（$0 指向呼叫者而非本檔）
+invoke_with_retry() {
+    local cmd="$1"
+    local max_attempts="${2:-3}"
+    local delay_ms="${3:-50}"
+    local attempt=0
+
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        if eval "$cmd"; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            return 1
+        fi
+        sleep "$(echo "scale=3; $delay_ms / 1000" | bc 2>/dev/null || echo 0.05)"
+        delay_ms=$((delay_ms * 2))
+        if [ "$delay_ms" -gt 500 ]; then
+            delay_ms=500
+        fi
+    done
+    return 1
+}
 
 # 確認 jq 可用，否則輸出錯誤並以 exit 0 結束（不阻斷 Claude）
 _ensure_jq() {

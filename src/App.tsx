@@ -453,6 +453,7 @@ function App() {
       copilotRoot: settingsQuery.data.copilotRoot,
       opencodeRoot: settingsQuery.data.opencodeRoot,
       codexRoot: settingsQuery.data.codexRoot,
+      hookScriptsPath: settingsQuery.data.hookScriptsPath,
       enabledProviders: settingsQuery.data.enabledProviders,
     })
       .then(() => setRealtimeStatus("active"))
@@ -537,6 +538,7 @@ function App() {
           copilotRoot: settingsForm.copilotRoot.trim(),
           opencodeRoot: settingsForm.opencodeRoot.trim(),
           codexRoot: settingsForm.codexRoot.trim(),
+          hookScriptsPath: settingsForm.hookScriptsPath?.trim() ?? "",
           enabledProviders: settingsForm.enabledProviders,
         });
         setRealtimeStatus("active");

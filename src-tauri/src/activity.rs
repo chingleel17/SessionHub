@@ -1,7 +1,9 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
+use crate::sessions::dir_mtime_secs;
 use crate::settings::default_opencode_root;
 use crate::types::*;
 
@@ -21,21 +23,28 @@ pub(crate) fn get_copilot_activity_status(
         return not_started;
     }
 
-    let content = match fs::read_to_string(&events_path) {
-        Ok(c) => c,
+    // 使用 BufReader 逐行讀取，避免一次載入整個檔案到記憶體
+    let file = match fs::File::open(&events_path) {
+        Ok(f) => f,
         Err(_) => return not_started,
     };
+    let reader = BufReader::new(file);
+    let lines: Vec<String> = reader
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
 
-    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-
-    let tail: Vec<&str> = lines.iter().rev().take(30).copied().collect();
+    // 只看最後 30 行，避免解析超大 events.jsonl
+    let tail_start = lines.len().saturating_sub(30);
+    let tail = &lines[tail_start..];
 
     let now = chrono::Utc::now();
-    let mut last_type = "";
+    let mut last_type = String::new();
     let mut last_ts: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut last_tool: Option<String> = None;
 
-    for raw in tail.iter().rev() {
+    for raw in tail {
         let Ok(ev) = serde_json::from_str::<SessionEvent>(raw) else {
             continue;
         };
@@ -44,7 +53,6 @@ pub(crate) fn get_copilot_activity_status(
                 last_ts = Some(ts);
             }
         }
-        last_type = Box::leak(ev.event_type.clone().into_boxed_str());
         if ev.event_type == "tool.execution_start" {
             last_tool = ev
                 .data
@@ -52,6 +60,7 @@ pub(crate) fn get_copilot_activity_status(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
         }
+        last_type = ev.event_type.clone();
     }
 
     let last_activity_at = last_ts.map(|t| t.to_rfc3339());
@@ -59,7 +68,7 @@ pub(crate) fn get_copilot_activity_status(
         .map(|t| if t > now { 0 } else { (now - t).num_minutes() })
         .unwrap_or(i64::MAX);
 
-    let (status, detail) = match last_type {
+    let (status, detail) = match last_type.as_str() {
         "session.task_complete" | "session.shutdown" => {
             ("done".to_string(), Some("completed".to_string()))
         }
@@ -223,13 +232,45 @@ pub(crate) fn get_codex_activity_status(
     }
 }
 
+/// 取得 events.jsonl 或 session dir 的修改時間（秒），失敗回傳 0
+fn events_mtime(session_dir: &Path, provider: &str) -> i64 {
+    match provider {
+        CODEX_PROVIDER => {
+            // Codex: session_dir 本身是 JSONL 檔案
+            fs::metadata(session_dir)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        }
+        OPENCODE_PROVIDER => {
+            // OpenCode: 以目錄 mtime 作為 staleness 判斷（粗略）
+            dir_mtime_secs(session_dir)
+        }
+        _ => {
+            // Copilot/Claude: events.jsonl 的 mtime
+            let events_path = session_dir.join("events.jsonl");
+            fs::metadata(&events_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        }
+    }
+}
+
 pub(crate) fn get_session_activity_statuses_internal(
     sessions: &[serde_json::Value],
     opencode_root: Option<&str>,
+    activity_cache: &std::sync::Mutex<std::collections::HashMap<String, (i64, SessionActivityStatus)>>,
 ) -> Vec<SessionActivityStatus> {
     let oc_root = opencode_root
         .map(PathBuf::from)
         .unwrap_or_else(|| default_opencode_root().unwrap_or_default());
+
+    let mut cache = activity_cache.lock().unwrap_or_else(|e| e.into_inner());
 
     sessions
         .iter()
@@ -241,17 +282,28 @@ pub(crate) fn get_session_activity_statuses_internal(
                 .unwrap_or("copilot");
             let session_dir_str = s.get("sessionDir").and_then(|v| v.as_str()).unwrap_or("");
 
-            match provider {
-                OPENCODE_PROVIDER => Some(get_opencode_activity_status(&oc_root, id)),
-                CODEX_PROVIDER => {
-                    let path = PathBuf::from(session_dir_str);
-                    Some(get_codex_activity_status(&path, id))
-                }
-                _ => {
-                    let dir = PathBuf::from(session_dir_str);
-                    Some(get_copilot_activity_status(&dir, id))
+            let dir = match provider {
+                OPENCODE_PROVIDER => oc_root.join("storage").join("message").join(id),
+                _ => PathBuf::from(session_dir_str),
+            };
+
+            let current_mtime = events_mtime(&dir, provider);
+
+            // 如果快取存在且 mtime 未變，直接回傳快取結果
+            if let Some((cached_mtime, cached_status)) = cache.get(id) {
+                if *cached_mtime == current_mtime && current_mtime > 0 {
+                    return Some(cached_status.clone());
                 }
             }
+
+            let status = match provider {
+                OPENCODE_PROVIDER => get_opencode_activity_status(&oc_root, id),
+                CODEX_PROVIDER => get_codex_activity_status(&dir, id),
+                _ => get_copilot_activity_status(&dir, id),
+            };
+
+            cache.insert(id.to_string(), (current_mtime, status.clone()));
+            Some(status)
         })
         .collect()
 }

@@ -3,7 +3,7 @@ use tauri::State;
 use crate::settings::{
     collect_provider_integration_statuses, default_codex_root, default_hook_scripts_root,
     default_opencode_root, detect_terminal_path, detect_vscode_path, load_settings_internal,
-    save_settings_internal, validate_terminal_path_internal,
+    resolve_copilot_root, save_settings_internal, validate_terminal_path_internal,
 };
 use crate::types::{default_enabled_providers, AppSettings, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
@@ -66,9 +66,25 @@ pub fn restart_session_watcher(
     opencode_root: Option<String>,
     codex_root: Option<String>,
     claude_root: Option<String>,
+    hook_scripts_path: Option<String>,
     enabled_providers: Option<Vec<String>>,
 ) -> Result<(), String> {
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
+
+    // 更新 integration 狀態快取，讓 watcher 判斷時不需再重讀磁碟
+    let resolved_copilot = resolve_copilot_root(copilot_root.as_deref())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let hook_path = hook_scripts_path.unwrap_or_default();
+    let integrations = collect_provider_integration_statuses(
+        Some(resolved_copilot.as_str()),
+        codex_root.as_deref(),
+        Some(hook_path.as_str()),
+    );
+    if let Ok(mut known) = watcher_state.known_integrations.lock() {
+        *known = integrations;
+    }
+
     restart_session_watcher_internal(
         &app,
         &watcher_state,

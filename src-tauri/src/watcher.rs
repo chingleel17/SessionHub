@@ -9,11 +9,9 @@ use notify::{recommended_watcher, RecursiveMode, Watcher};
 use tauri::Emitter;
 
 use crate::provider::{
-    build_copilot_watch_snapshot, build_opencode_watch_snapshot, detect_claude_integration_status,
-    detect_codex_integration_status, detect_copilot_integration_status,
-    detect_opencode_integration_status, emit_provider_refresh, is_relevant_copilot_event,
-    is_relevant_opencode_event, matched_bridge_providers, process_provider_bridge_event,
-    should_emit_copilot_refresh, should_emit_opencode_refresh,
+    build_copilot_watch_snapshot, build_opencode_watch_snapshot, emit_provider_refresh,
+    is_relevant_copilot_event, is_relevant_opencode_event, matched_bridge_providers,
+    process_provider_bridge_event, should_emit_copilot_refresh, should_emit_opencode_refresh,
 };
 use crate::settings::{
     provider_bridge_dir, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
@@ -421,6 +419,15 @@ pub(crate) fn create_provider_bridge_watcher(
     Ok(watcher)
 }
 
+fn is_provider_installed(
+    integrations: &[ProviderIntegrationStatus],
+    provider: &str,
+) -> bool {
+    integrations
+        .iter()
+        .any(|i| i.provider == provider && matches!(i.status, ProviderIntegrationState::Installed))
+}
+
 pub(crate) fn restart_session_watcher_internal(
     app: &tauri::AppHandle,
     watcher_state: &WatcherState,
@@ -430,26 +437,21 @@ pub(crate) fn restart_session_watcher_internal(
     claude_root: Option<&str>,
     enabled_providers: &[String],
 ) -> Result<(), String> {
+    // 直接從已快取的 integration status 判斷，避免每次重讀磁碟
+    let known_integrations = watcher_state
+        .known_integrations
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+
     let copilot_bridge_active = enabled_providers.iter().any(|p| p == COPILOT_PROVIDER)
-        && matches!(
-            detect_copilot_integration_status(copilot_root).status,
-            ProviderIntegrationState::Installed
-        );
+        && is_provider_installed(&known_integrations, COPILOT_PROVIDER);
     let opencode_bridge_active = enabled_providers.iter().any(|p| p == OPENCODE_PROVIDER)
-        && matches!(
-            detect_opencode_integration_status().status,
-            ProviderIntegrationState::Installed
-        );
+        && is_provider_installed(&known_integrations, OPENCODE_PROVIDER);
     let codex_bridge_active = enabled_providers.iter().any(|p| p == CODEX_PROVIDER)
-        && matches!(
-            detect_codex_integration_status(codex_root).status,
-            ProviderIntegrationState::Installed
-        );
+        && is_provider_installed(&known_integrations, CODEX_PROVIDER);
     let claude_bridge_active = enabled_providers.iter().any(|p| p == CLAUDE_PROVIDER)
-        && matches!(
-            detect_claude_integration_status(claude_root).status,
-            ProviderIntegrationState::Installed
-        );
+        && is_provider_installed(&known_integrations, CLAUDE_PROVIDER);
 
     let mut bridge_providers = Vec::new();
     if copilot_bridge_active {

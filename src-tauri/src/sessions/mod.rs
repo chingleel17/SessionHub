@@ -326,7 +326,25 @@ pub(crate) fn get_sessions_internal(
         }
     }
 
-    enrich_sessions_with_git_metadata(&mut all_sessions);
+    // 只對尚未填入 repo_root 的 session 執行 git 查詢，避免每次重跑 git 子程序
+    let needs_git: Vec<usize> = all_sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.repo_root.is_none() && s.cwd.as_deref().map(|c| !c.trim().is_empty()).unwrap_or(false))
+        .map(|(i, _)| i)
+        .collect();
+
+    if !needs_git.is_empty() {
+        let subset: Vec<SessionInfo> = needs_git.iter().map(|&i| all_sessions[i].clone()).collect();
+        let mut enriched = subset;
+        enrich_sessions_with_git_metadata(&mut enriched);
+        for (pos, &i) in needs_git.iter().enumerate() {
+            all_sessions[i].repo_root = enriched[pos].repo_root.clone();
+            all_sessions[i].repo_name = enriched[pos].repo_name.clone();
+            all_sessions[i].git_branch = enriched[pos].git_branch.clone();
+        }
+    }
+
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     Ok(all_sessions)

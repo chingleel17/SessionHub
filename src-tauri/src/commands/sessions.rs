@@ -146,8 +146,9 @@ pub fn check_directory_exists(path: String) -> bool {
 pub fn get_session_activity_statuses(
     sessions: Vec<serde_json::Value>,
     opencode_root: Option<String>,
+    scan_cache: State<'_, ScanCache>,
 ) -> Vec<SessionActivityStatus> {
-    get_session_activity_statuses_internal(&sessions, opencode_root.as_deref())
+    get_session_activity_statuses_internal(&sessions, opencode_root.as_deref(), &scan_cache.activity)
 }
 
 #[tauri::command]
