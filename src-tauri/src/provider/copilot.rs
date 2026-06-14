@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::settings::{
-    bundled_copilot_hook_scripts_root, default_copilot_hook_scripts_root, resolve_copilot_root,
-};
+use crate::settings::{default_copilot_hook_scripts_root, resolve_copilot_root};
 use crate::types::*;
 
 use super::bridge::{read_bridge_diagnostics, resolve_copilot_integration_path};
@@ -68,8 +66,16 @@ fn hook_script_entries() -> [(&'static str, &'static str); 14] {
 }
 
 pub(crate) fn ensure_copilot_hook_scripts_installed() -> Result<PathBuf, String> {
-    let root = bundled_copilot_hook_scripts_root()?;
+    let root = default_copilot_hook_scripts_root()?;
     install_hook_scripts("Copilot", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)
+}
+
+/// 移除 SessionHub 安裝的 Copilot hook 腳本（`~/.copilot/hooks`），保留使用者自訂檔案
+fn remove_copilot_hook_scripts() {
+    let Ok(root) = default_copilot_hook_scripts_root() else {
+        return;
+    };
+    super::uninstall_hook_scripts(&root, &hook_script_entries());
 }
 
 fn powershell_single_quoted(value: &str) -> String {
@@ -337,6 +343,8 @@ pub(crate) fn uninstall_copilot_integration(
         }
     };
     let config_path = resolve_copilot_integration_path(&copilot_root);
+
+    remove_copilot_hook_scripts();
 
     if config_path.exists() {
         if let Err(error) = fs::remove_file(&config_path) {

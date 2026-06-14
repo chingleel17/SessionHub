@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::settings::{
-    bundled_codex_hook_scripts_root, default_codex_hook_scripts_root, resolve_codex_root,
-};
+use crate::settings::{default_codex_hook_scripts_root, resolve_codex_root};
 use crate::types::*;
 
 use super::bridge::read_bridge_diagnostics;
@@ -59,8 +57,16 @@ fn hook_script_entries() -> [(&'static str, &'static str); 12] {
 }
 
 pub(crate) fn ensure_codex_hook_scripts_installed() -> Result<PathBuf, String> {
-    let root = bundled_codex_hook_scripts_root()?;
+    let root = default_codex_hook_scripts_root()?;
     install_hook_scripts("Codex", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)
+}
+
+/// 移除 SessionHub 安裝的 Codex hook 腳本（`~/.codex/hooks`），保留使用者自訂檔案
+fn remove_codex_hook_scripts() {
+    let Ok(root) = default_codex_hook_scripts_root() else {
+        return;
+    };
+    super::uninstall_hook_scripts(&root, &hook_script_entries());
 }
 
 pub(crate) fn resolve_codex_integration_path(codex_root: &Path) -> PathBuf {
@@ -107,16 +113,24 @@ fn is_sessionhub_hook_group(group: &Value) -> bool {
         v.as_str()
             .is_some_and(|s| s.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
     };
+    // 舊版 v4 內嵌 PowerShell group 特徵：commandWindows 含 "provider = 'codex'"
+    let is_legacy_codex_group = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| s.contains("provider = 'codex'"))
+    };
+    let matches_hook = |h: &Value| {
+        h.get("command").is_some_and(&contains_marker)
+            || h.get("commandWindows").is_some_and(&contains_marker)
+            || h.get("commandWindows").is_some_and(&is_legacy_codex_group)
+    };
     if let Some(inner) = group.get("hooks").and_then(Value::as_array) {
-        if inner.iter().any(|h| {
-            h.get("command").is_some_and(&contains_marker)
-                || h.get("commandWindows").is_some_and(&contains_marker)
-        }) {
+        if inner.iter().any(matches_hook) {
             return true;
         }
     }
-    group.get("command").is_some_and(&contains_marker)
-        || group.get("commandWindows").is_some_and(&contains_marker)
+    contains_marker(group.get("command").unwrap_or(&Value::Null))
+        || contains_marker(group.get("commandWindows").unwrap_or(&Value::Null))
+        || is_legacy_codex_group(group.get("commandWindows").unwrap_or(&Value::Null))
 }
 
 fn managed_hook_group(command_windows: String, command_sh: String, matcher: Option<&str>) -> Value {
@@ -433,6 +447,8 @@ pub(crate) fn uninstall_codex_integration(codex_root: Option<&str>) -> ProviderI
         }
     };
     let config_path = resolve_codex_integration_path(&codex_root);
+
+    remove_codex_hook_scripts();
 
     if !config_path.exists() {
         return build_provider_integration_status(

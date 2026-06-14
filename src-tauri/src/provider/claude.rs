@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::db::ensure_parent_dir;
-use crate::settings::{
-    bundled_hook_scripts_root, resolve_claude_settings_path, resolve_effective_hook_scripts_root,
-};
+use crate::settings::{resolve_claude_settings_path, resolve_effective_hook_scripts_root};
 use crate::types::*;
 
 use super::bridge::read_bridge_diagnostics;
@@ -68,8 +66,10 @@ fn hook_script_entries() -> [(&'static str, &'static str); 16] {
     ]
 }
 
-pub(crate) fn ensure_claude_hook_scripts_installed() -> Result<PathBuf, String> {
-    let root = bundled_hook_scripts_root()?;
+pub(crate) fn ensure_claude_hook_scripts_installed(
+    hook_scripts_path: Option<&str>,
+) -> Result<PathBuf, String> {
+    let root = resolve_effective_hook_scripts_root(hook_scripts_path)?;
     for (relative_path, content) in hook_script_entries() {
         let path = root.join(relative_path);
         ensure_parent_dir(&path)?;
@@ -389,7 +389,7 @@ pub(crate) fn install_or_update_claude_integration(
         );
     };
 
-    if let Err(error) = ensure_claude_hook_scripts_installed() {
+    if let Err(error) = ensure_claude_hook_scripts_installed(hook_scripts_path) {
         return build_install_failure_status(
             CLAUDE_PROVIDER,
             effective_hook_status_path(hook_scripts_path).or(Some(config_path)),
@@ -442,20 +442,13 @@ pub(crate) fn install_or_update_claude_integration(
     detect_claude_integration_status(hook_scripts_path)
 }
 
-/// 移除 bundled hook scripts 目錄（AppData 路徑），開發路徑保留不動
-fn remove_bundled_hook_scripts() {
-    let Ok(root) = bundled_hook_scripts_root() else {
+/// 移除 SessionHub 安裝的 Claude hook 腳本（原生 `~/.claude/hooks` 或使用者自訂路徑），
+/// 保留同目錄中使用者自訂的其他 hook 檔案
+fn remove_hook_scripts(hook_scripts_path: Option<&str>) {
+    let Ok(root) = resolve_effective_hook_scripts_root(hook_scripts_path) else {
         return;
     };
-    if !root.exists() {
-        return;
-    }
-    if let Err(e) = fs::remove_dir_all(&root) {
-        eprintln!(
-            "[uninstall] failed to remove hook scripts dir {}: {e}",
-            root.display()
-        );
-    }
+    super::uninstall_hook_scripts(&root, &hook_script_entries());
 }
 
 pub(crate) fn uninstall_claude_integration(
@@ -476,7 +469,7 @@ pub(crate) fn uninstall_claude_integration(
         }
     };
 
-    remove_bundled_hook_scripts();
+    remove_hook_scripts(hook_scripts_path);
 
     let status_path = effective_hook_status_path(hook_scripts_path).or(Some(config_path.clone()));
 

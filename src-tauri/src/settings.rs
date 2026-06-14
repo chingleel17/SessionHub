@@ -53,39 +53,23 @@ pub(crate) fn default_hook_scripts_root() -> Result<PathBuf, String> {
     Ok(default_claude_root()?.join("hooks"))
 }
 
-pub(crate) fn bundled_hook_scripts_root() -> Result<PathBuf, String> {
-    Ok(default_app_data_dir()?.join(".claude").join("hooks"))
-}
-
 pub(crate) fn default_codex_hook_scripts_root() -> Result<PathBuf, String> {
     Ok(default_codex_root()?.join("hooks"))
-}
-
-pub(crate) fn bundled_codex_hook_scripts_root() -> Result<PathBuf, String> {
-    Ok(default_app_data_dir()?.join(".codex").join("hooks"))
 }
 
 pub(crate) fn default_copilot_hook_scripts_root() -> Result<PathBuf, String> {
     Ok(default_copilot_root()?.join("hooks"))
 }
 
-pub(crate) fn bundled_copilot_hook_scripts_root() -> Result<PathBuf, String> {
-    Ok(default_app_data_dir()?.join(".copilot").join("hooks"))
-}
-
+/// 解析 Claude hook 腳本根目錄：使用者自訂路徑優先，否則一律使用 provider 原生目錄
+/// （`~/.claude/hooks`）。三個 provider 統一安裝至各自原生目錄。
 pub(crate) fn resolve_effective_hook_scripts_root(
     configured_path: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let configured = configured_path
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(default_hook_scripts_root()?);
-
-    if configured.exists() {
-        return Ok(configured);
+    match configured_path.filter(|value| !value.trim().is_empty()) {
+        Some(value) => Ok(PathBuf::from(value)),
+        None => default_hook_scripts_root(),
     }
-
-    bundled_hook_scripts_root()
 }
 
 pub(crate) fn default_opencode_config_root() -> Result<PathBuf, String> {

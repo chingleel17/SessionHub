@@ -5,7 +5,7 @@ function Get-SessionHubLogDirectory {
     return Join-Path $appData "SessionHub\logs"
 }
 
-function Ensure-SessionHubLogDirectory {
+function Initialize-SessionHubLogDirectory {
     $dir = Get-SessionHubLogDirectory
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -21,7 +21,7 @@ function Write-HookErrorLog {
         [string]$EventType = "hook.error"
     )
 
-    $logDir = Ensure-SessionHubLogDirectory
+    $logDir = Initialize-SessionHubLogDirectory
     $logPath = Join-Path $logDir "hook-errors.log"
     $entry = [ordered]@{
         timestamp = [DateTimeOffset]::UtcNow.ToString("o")
@@ -162,7 +162,7 @@ function Write-BridgeEventRecord {
 }
 
 Export-ModuleMember -Function @(
-    "Ensure-SessionHubLogDirectory",
+    "Initialize-SessionHubLogDirectory",
     "Write-HookErrorLog",
     "Read-HookPayload",
     "Get-HookStringValue",

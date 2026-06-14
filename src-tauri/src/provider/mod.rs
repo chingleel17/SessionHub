@@ -147,6 +147,50 @@ pub(super) fn install_hook_scripts(
     Ok(root.to_path_buf())
 }
 
+/// 移除由 SessionHub 安裝的 hook 腳本檔案。僅刪除 `entries` 列出的檔案與 `.version`
+/// 標記，不刪除使用者自訂的其他檔案；清理後若 `modules/` 子目錄或 root 變空才一併移除。
+pub(super) fn uninstall_hook_scripts(root: &Path, entries: &[(&str, &str)]) {
+    if !root.exists() {
+        return;
+    }
+
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    for (relative_path, _) in entries {
+        let path = root.join(relative_path);
+        if path.exists() {
+            if let Err(e) = fs::remove_file(&path) {
+                eprintln!("[uninstall] failed to remove hook script {}: {e}", path.display());
+            }
+        }
+        if let Some(parent) = path.parent() {
+            if parent != root && !subdirs.contains(&parent.to_path_buf()) {
+                subdirs.push(parent.to_path_buf());
+            }
+        }
+    }
+
+    let version_path = root.join(".version");
+    if version_path.exists() {
+        let _ = fs::remove_file(&version_path);
+    }
+
+    // 僅在子目錄已空時移除（保留使用者自訂內容）
+    for dir in subdirs {
+        remove_dir_if_empty(&dir);
+    }
+    remove_dir_if_empty(root);
+}
+
+/// 僅當目錄為空時移除，否則保留（內含使用者自訂檔案）
+fn remove_dir_if_empty(dir: &Path) {
+    let is_empty = fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false);
+    if is_empty {
+        let _ = fs::remove_dir(dir);
+    }
+}
+
 pub(super) fn build_install_failure_status(
     provider: &str,
     config_path: Option<PathBuf>,
@@ -216,5 +260,61 @@ pub(crate) fn uninstall_provider_integration(
         CODEX_PROVIDER => Ok(uninstall_codex_integration(codex_root)),
         CLAUDE_PROVIDER => Ok(uninstall_claude_integration(hook_scripts_path)),
         _ => Err(format!("unsupported provider: {provider}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ENTRIES: [(&str, &str); 2] = [
+        ("modules/record-event.psm1", "managed-module"),
+        ("on-session-start.ps1", "managed-script"),
+    ];
+
+    fn temp_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("session-hub-uninstall-{name}"))
+    }
+
+    #[test]
+    fn uninstall_removes_managed_files_but_keeps_user_files() {
+        let root = temp_root("keeps-user");
+        let _ = fs::remove_dir_all(&root);
+        install_hook_scripts("Test", &root, &ENTRIES, "2").unwrap();
+
+        // 使用者自訂檔案：root 下與 modules/ 子目錄各一
+        let user_root_file = root.join("my-custom-hook.ps1");
+        fs::write(&user_root_file, "user").unwrap();
+        let user_module_file = root.join("modules").join("user-helper.psm1");
+        fs::write(&user_module_file, "user").unwrap();
+
+        uninstall_hook_scripts(&root, &ENTRIES);
+
+        // 受管檔案與 .version 應被移除
+        assert!(!root.join("on-session-start.ps1").exists());
+        assert!(!root.join("modules/record-event.psm1").exists());
+        assert!(!root.join(".version").exists());
+        // 使用者自訂檔案必須保留
+        assert!(user_root_file.exists(), "使用者 root 檔案不應被刪除");
+        assert!(user_module_file.exists(), "使用者 modules 檔案不應被刪除");
+        // root 與 modules/ 因仍有使用者檔案而保留
+        assert!(root.exists());
+        assert!(root.join("modules").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn uninstall_removes_empty_dirs_when_no_user_files() {
+        let root = temp_root("empty-dirs");
+        let _ = fs::remove_dir_all(&root);
+        install_hook_scripts("Test", &root, &ENTRIES, "2").unwrap();
+
+        uninstall_hook_scripts(&root, &ENTRIES);
+
+        // 沒有使用者檔案時，modules/ 與 root 皆應被移除
+        assert!(!root.exists(), "空目錄應被清除");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
