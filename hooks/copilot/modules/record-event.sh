@@ -2,7 +2,6 @@
 # record-event.sh - Hook 事件記錄核心模組
 # 依賴：jq（Git Bash 環境）
 
-# invoke_with_retry 直接內嵌，避免 source $0 路徑問題（$0 指向呼叫者而非本檔）
 invoke_with_retry() {
     local cmd="$1"
     local max_attempts="${2:-3}"
@@ -26,7 +25,6 @@ invoke_with_retry() {
     return 1
 }
 
-# 確認 jq 可用，否則輸出錯誤並以 exit 0 結束（不阻斷 Claude）
 _ensure_jq() {
     if ! command -v jq > /dev/null 2>&1; then
         printf '[SessionHub] hook 事件記錄需要 jq，但找不到 jq 執行檔。\n請安裝 jq：winget install jqlang.jq 或透過 Git for Windows 安裝程式勾選。\n' >&2
@@ -59,7 +57,6 @@ write_hook_error_log() {
         >> "$log_path"
 }
 
-# 從 stdin 讀取 hook payload JSON，存入全域變數 HOOK_PAYLOAD
 read_hook_payload() {
     HOOK_PAYLOAD="$(cat)"
     if [ -z "$(printf '%s' "$HOOK_PAYLOAD" | tr -d '[:space:]')" ]; then
@@ -67,8 +64,6 @@ read_hook_payload() {
     fi
 }
 
-# 從 HOOK_PAYLOAD 取得指定欄位的字串值（第一個非空的欄位）
-# 用法：get_hook_string_value "field1" "field2" ...
 get_hook_string_value() {
     for field in "$@"; do
         local val
@@ -81,8 +76,6 @@ get_hook_string_value() {
     printf ''
 }
 
-# 將事件記錄寫入 bridge JSONL 檔案
-# 用法：write_bridge_event_record <bridge_path> <provider> <event_type> [title] [error] [timestamp]
 write_bridge_event_record() {
     local bridge_path="$1"
     local provider="$2"

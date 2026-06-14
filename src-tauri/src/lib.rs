@@ -32,6 +32,8 @@ pub fn run() {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
             ensure_logs_dir();
             provider::ensure_claude_hook_scripts_installed()?;
+            provider::ensure_codex_hook_scripts_installed()?;
+            provider::ensure_copilot_hook_scripts_installed()?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(
                 app.handle(),
@@ -2043,7 +2045,12 @@ mod tests {
                     "integrationVersion": PROVIDER_INTEGRATION_VERSION
                 },
                 "hooks": {
-                    "sessionEnd": []
+                    "sessionStart": [{ "type": "command", "powershell": "pwsh -File on-session-start.ps1", "command": "sh on-session-start.sh" }],
+                    "sessionEnd": [{ "type": "command", "powershell": "pwsh -File on-session-end.ps1", "command": "sh on-session-end.sh" }],
+                    "userPromptSubmitted": [{ "type": "command", "powershell": "pwsh -File on-user-prompt-submitted.ps1", "command": "sh on-user-prompt-submitted.sh" }],
+                    "preToolUse": [{ "type": "command", "powershell": "pwsh -File on-pre-tool-use.ps1", "command": "sh on-pre-tool-use.sh" }],
+                    "postToolUse": [{ "type": "command", "powershell": "pwsh -File on-post-tool-use.ps1", "command": "sh on-post-tool-use.sh" }],
+                    "errorOccurred": [{ "type": "command", "powershell": "pwsh -File on-error-occurred.ps1", "command": "sh on-error-occurred.sh" }]
                 }
             });
             fs::write(
@@ -2093,7 +2100,12 @@ mod tests {
                     "integrationVersion": PROVIDER_INTEGRATION_VERSION - 1
                 },
                 "hooks": {
-                    "sessionEnd": []
+                    "sessionStart": [{ "type": "command", "powershell": "pwsh -File on-session-start.ps1", "command": "sh on-session-start.sh" }],
+                    "sessionEnd": [{ "type": "command", "powershell": "pwsh -File on-session-end.ps1", "command": "sh on-session-end.sh" }],
+                    "userPromptSubmitted": [{ "type": "command", "powershell": "pwsh -File on-user-prompt-submitted.ps1", "command": "sh on-user-prompt-submitted.sh" }],
+                    "preToolUse": [{ "type": "command", "powershell": "pwsh -File on-pre-tool-use.ps1", "command": "sh on-pre-tool-use.sh" }],
+                    "postToolUse": [{ "type": "command", "powershell": "pwsh -File on-post-tool-use.ps1", "command": "sh on-post-tool-use.sh" }],
+                    "errorOccurred": [{ "type": "command", "powershell": "pwsh -File on-error-occurred.ps1", "command": "sh on-error-occurred.sh" }]
                 }
             });
             fs::write(
@@ -2144,7 +2156,9 @@ mod tests {
         assert!(content.contains("\"preToolUse\""));
         assert!(content.contains("\"postToolUse\""));
         assert!(content.contains("\"errorOccurred\""));
-        assert!(content.contains("AppendAllText"));
+        assert!(content.contains("on-session-start.ps1"));
+        assert!(content.contains("on-session-start.sh"));
+        assert!(content.contains("\"command\""));
 
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
@@ -2329,8 +2343,25 @@ mod tests {
                         "matcher": "startup|resume|clear|compact",
                         "hooks": [{
                             "type": "command",
+                            "command": format!(
+                                "sh '/tmp/on-session-start.sh' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            ),
                             "commandWindows": format!(
-                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                "pwsh -NoProfile -ExecutionPolicy Bypass -File 'on-session-start.ps1' -BridgePath '{}' -Provider 'codex' # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "PreToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "sh '/tmp/on-pre-tool-use.sh' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            ),
+                            "commandWindows": format!(
+                                "pwsh -NoProfile -ExecutionPolicy Bypass -File 'on-pre-tool-use.ps1' -BridgePath '{}' -Provider 'codex' # sessionhub-provider-event-bridge",
                                 bridge_path.to_string_lossy()
                             )
                         }]
@@ -2338,8 +2369,25 @@ mod tests {
                     "PostToolUse": [{
                         "hooks": [{
                             "type": "command",
+                            "command": format!(
+                                "sh '/tmp/on-post-tool-use.sh' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            ),
                             "commandWindows": format!(
-                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                "pwsh -NoProfile -ExecutionPolicy Bypass -File 'on-post-tool-use.ps1' -BridgePath '{}' -Provider 'codex' # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "UserPromptSubmit": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "sh '/tmp/on-user-prompt-submit.sh' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            ),
+                            "commandWindows": format!(
+                                "pwsh -NoProfile -ExecutionPolicy Bypass -File 'on-user-prompt-submit.ps1' -BridgePath '{}' -Provider 'codex' # sessionhub-provider-event-bridge",
                                 bridge_path.to_string_lossy()
                             )
                         }]
@@ -2347,8 +2395,12 @@ mod tests {
                     "Stop": [{
                         "hooks": [{
                             "type": "command",
+                            "command": format!(
+                                "sh '/tmp/on-stop.sh' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            ),
                             "commandWindows": format!(
-                                "pwsh -NoProfile -Command \"provider = 'codex'; bridge = '{}'\"",
+                                "pwsh -NoProfile -ExecutionPolicy Bypass -File 'on-stop.ps1' -BridgePath '{}' -Provider 'codex' # sessionhub-provider-event-bridge",
                                 bridge_path.to_string_lossy()
                             )
                         }]
@@ -2437,10 +2489,13 @@ mod tests {
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains("\"sessionHub\""));
         assert!(content.contains("\"SessionStart\""));
+        assert!(content.contains("\"PreToolUse\""));
         assert!(content.contains("\"PostToolUse\""));
+        assert!(content.contains("\"UserPromptSubmit\""));
         assert!(content.contains("\"Stop\""));
-        assert!(content.contains("\"command\": \"true\""));
-        assert!(content.contains("provider = 'codex'"));
+        assert!(content.contains("on-session-start.ps1"));
+        assert!(content.contains("on-session-start.sh"));
+        assert!(content.contains("sessionhub-provider-event-bridge"));
 
         fs::remove_dir_all(&codex_root).expect("cleanup codex root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");

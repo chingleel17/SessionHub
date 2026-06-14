@@ -1,8 +1,5 @@
 Set-StrictMode -Version Latest
 
-Import-Module (Join-Path $PSScriptRoot "db-ops.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "task-queue.psm1") -Force
-
 function Get-SessionHubLogDirectory {
     $appData = [Environment]::GetFolderPath("ApplicationData")
     return Join-Path $appData "SessionHub\logs"
@@ -74,6 +71,31 @@ function Get-HookStringValue {
     }
 
     return $null
+}
+
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+
+        [int]$MaxAttempts = 3,
+
+        [int]$InitialDelayMs = 50
+    )
+
+    $delayMs = $InitialDelayMs
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            & $ScriptBlock
+            return
+        } catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Start-Sleep -Milliseconds $delayMs
+            $delayMs = [Math]::Min($delayMs * 2, 500)
+        }
+    }
 }
 
 function Add-BridgeRecord {

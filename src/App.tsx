@@ -48,6 +48,17 @@ function normalizePath(path: string): string {
   return path.replace(/\//g, "\\").toLowerCase();
 }
 
+function normalizePinnedProjectKey(projectKey: string): string {
+  const branchSeparatorIndex = projectKey.lastIndexOf(":");
+  if (branchSeparatorIndex <= 1) {
+    return normalizePath(projectKey);
+  }
+
+  const projectPath = projectKey.slice(0, branchSeparatorIndex);
+  const branch = projectKey.slice(branchSeparatorIndex + 1);
+  return `${normalizePath(projectPath)}:${branch}`;
+}
+
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
   const raw = session.repoRoot?.trim() || session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
@@ -402,7 +413,7 @@ function App() {
         claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
         claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
       });
-      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
+      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
   }, [settingsQuery.data]);
 

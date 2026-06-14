@@ -57,6 +57,22 @@ pub(crate) fn bundled_hook_scripts_root() -> Result<PathBuf, String> {
     Ok(default_app_data_dir()?.join(".claude").join("hooks"))
 }
 
+pub(crate) fn default_codex_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_codex_root()?.join("hooks"))
+}
+
+pub(crate) fn bundled_codex_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join(".codex").join("hooks"))
+}
+
+pub(crate) fn default_copilot_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_copilot_root()?.join("hooks"))
+}
+
+pub(crate) fn bundled_copilot_hook_scripts_root() -> Result<PathBuf, String> {
+    Ok(default_app_data_dir()?.join(".copilot").join("hooks"))
+}
+
 pub(crate) fn resolve_effective_hook_scripts_root(
     configured_path: Option<&str>,
 ) -> Result<PathBuf, String> {

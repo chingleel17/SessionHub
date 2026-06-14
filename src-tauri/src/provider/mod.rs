@@ -119,6 +119,34 @@ pub(super) fn write_provider_integration_file(
     })
 }
 
+pub(super) fn install_hook_scripts(
+    provider_name: &str,
+    root: &Path,
+    entries: &[(&str, &str)],
+    version: &str,
+) -> Result<PathBuf, String> {
+    for (relative_path, content) in entries {
+        let path = root.join(relative_path);
+        ensure_parent_dir(&path)?;
+        fs::write(&path, content).map_err(|error| {
+            format!(
+                "failed to write {provider_name} hook script {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+
+    let version_path = root.join(".version");
+    fs::write(&version_path, version).map_err(|error| {
+        format!(
+            "failed to write {provider_name} hook version marker {}: {error}",
+            version_path.display()
+        )
+    })?;
+
+    Ok(root.to_path_buf())
+}
+
 pub(super) fn build_install_failure_status(
     provider: &str,
     config_path: Option<PathBuf>,

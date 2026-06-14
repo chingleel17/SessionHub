@@ -3,18 +3,65 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::db::ensure_parent_dir;
-use crate::settings::resolve_codex_root;
+use crate::settings::{
+    bundled_codex_hook_scripts_root, default_codex_hook_scripts_root, resolve_codex_root,
+};
 use crate::types::*;
 
 use super::bridge::read_bridge_diagnostics;
 use super::{
-    build_install_failure_status, build_provider_integration_status, managed_provider_metadata,
-    validate_integration_target, validate_managed_metadata, write_provider_integration_file,
+    build_install_failure_status, build_provider_integration_status, install_hook_scripts,
+    managed_provider_metadata, validate_integration_target, validate_managed_metadata,
+    write_provider_integration_file,
 };
 
-const CODEX_MANAGED_EVENTS: [&str; 3] = ["SessionStart", "PostToolUse", "Stop"];
-const CODEX_NOOP_COMMAND: &str = "true";
+const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
+const HOOK_SCRIPT_VERSION: &str = "2";
+const CODEX_MANAGED_EVENTS: [&str; 5] = [
+    "SessionStart",
+    "PreToolUse",
+    "PostToolUse",
+    "UserPromptSubmit",
+    "Stop",
+];
+
+const MODULE_RECORD_EVENT: &str = include_str!("../../../hooks/codex/modules/record-event.psm1");
+const SCRIPT_ON_SESSION_START: &str = include_str!("../../../hooks/codex/on-session-start.ps1");
+const SCRIPT_ON_PRE_TOOL_USE: &str = include_str!("../../../hooks/codex/on-pre-tool-use.ps1");
+const SCRIPT_ON_POST_TOOL_USE: &str = include_str!("../../../hooks/codex/on-post-tool-use.ps1");
+const SCRIPT_ON_USER_PROMPT_SUBMIT: &str =
+    include_str!("../../../hooks/codex/on-user-prompt-submit.ps1");
+const SCRIPT_ON_STOP: &str = include_str!("../../../hooks/codex/on-stop.ps1");
+
+const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/codex/modules/record-event.sh");
+const SCRIPT_ON_SESSION_START_SH: &str = include_str!("../../../hooks/codex/on-session-start.sh");
+const SCRIPT_ON_PRE_TOOL_USE_SH: &str = include_str!("../../../hooks/codex/on-pre-tool-use.sh");
+const SCRIPT_ON_POST_TOOL_USE_SH: &str = include_str!("../../../hooks/codex/on-post-tool-use.sh");
+const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
+    include_str!("../../../hooks/codex/on-user-prompt-submit.sh");
+const SCRIPT_ON_STOP_SH: &str = include_str!("../../../hooks/codex/on-stop.sh");
+
+fn hook_script_entries() -> [(&'static str, &'static str); 12] {
+    [
+        ("modules/record-event.psm1", MODULE_RECORD_EVENT),
+        ("on-session-start.ps1", SCRIPT_ON_SESSION_START),
+        ("on-pre-tool-use.ps1", SCRIPT_ON_PRE_TOOL_USE),
+        ("on-post-tool-use.ps1", SCRIPT_ON_POST_TOOL_USE),
+        ("on-user-prompt-submit.ps1", SCRIPT_ON_USER_PROMPT_SUBMIT),
+        ("on-stop.ps1", SCRIPT_ON_STOP),
+        ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
+        ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
+        ("on-pre-tool-use.sh", SCRIPT_ON_PRE_TOOL_USE_SH),
+        ("on-post-tool-use.sh", SCRIPT_ON_POST_TOOL_USE_SH),
+        ("on-user-prompt-submit.sh", SCRIPT_ON_USER_PROMPT_SUBMIT_SH),
+        ("on-stop.sh", SCRIPT_ON_STOP_SH),
+    ]
+}
+
+pub(crate) fn ensure_codex_hook_scripts_installed() -> Result<PathBuf, String> {
+    let root = bundled_codex_hook_scripts_root()?;
+    install_hook_scripts("Codex", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)
+}
 
 pub(crate) fn resolve_codex_integration_path(codex_root: &Path) -> PathBuf {
     codex_root.join(CODEX_HOOK_FILE_NAME)
@@ -24,43 +71,59 @@ fn powershell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn render_codex_hook_command(bridge_path: &Path, event_type: &str) -> String {
-    let bridge_path_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
-    let bridge_parent_literal = powershell_single_quoted(
-        &bridge_path
-            .parent()
-            .unwrap_or(bridge_path)
-            .to_string_lossy(),
-    );
-    let event_type_literal = powershell_single_quoted(event_type);
+fn sh_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn render_codex_hook_command(script_path: &Path, bridge_path: &Path) -> String {
+    let script_literal = powershell_single_quoted(&script_path.to_string_lossy());
+    let bridge_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
     let provider_literal = powershell_single_quoted(CODEX_PROVIDER);
 
     format!(
-        concat!(
-            "$payload = [Console]::In.ReadToEnd(); ",
-            "if ([string]::IsNullOrWhiteSpace($payload)) {{ exit 0 }}; ",
-            "$event = $payload | ConvertFrom-Json; ",
-            "$timestamp = [DateTimeOffset]::UtcNow.ToString('o'); ",
-            "$sessionId = if ($null -ne $event.session_id -and -not [string]::IsNullOrWhiteSpace([string]$event.session_id)) {{ [string]$event.session_id }} else {{ $null }}; ",
-            "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
-            "$sourcePath = if ($null -ne $event.transcript_path -and -not [string]::IsNullOrWhiteSpace([string]$event.transcript_path)) {{ [string]$event.transcript_path }} else {{ $null }}; ",
-            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = {event_type}; timestamp = $timestamp; sessionId = $sessionId; cwd = $cwd; sourcePath = $sourcePath; title = $null; error = $null }}; ",
-            "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
-            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false));"
-        ),
-        version = PROVIDER_INTEGRATION_VERSION,
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File {script} -BridgePath {bridge} -Provider {provider} # {marker}",
+        script = script_literal,
+        bridge = bridge_literal,
         provider = provider_literal,
-        event_type = event_type_literal,
-        bridge_parent = bridge_parent_literal,
-        bridge_path = bridge_path_literal,
+        marker = SESSIONHUB_HOOK_COMMAND_MARKER,
     )
 }
 
-fn managed_hook_group(command_windows: String, matcher: Option<&str>) -> Value {
+fn render_codex_hook_command_sh(script_path: &Path, bridge_path: &Path) -> String {
+    let script_literal = sh_single_quoted(&script_path.to_string_lossy());
+    let bridge_literal = sh_single_quoted(&bridge_path.to_string_lossy());
+
+    format!(
+        "sh {script} --bridge-path {bridge} --provider {provider} # {marker}",
+        script = script_literal,
+        bridge = bridge_literal,
+        provider = CODEX_PROVIDER,
+        marker = SESSIONHUB_HOOK_COMMAND_MARKER,
+    )
+}
+
+fn is_sessionhub_hook_group(group: &Value) -> bool {
+    let contains_marker = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| s.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
+    };
+    if let Some(inner) = group.get("hooks").and_then(Value::as_array) {
+        if inner.iter().any(|h| {
+            h.get("command").is_some_and(&contains_marker)
+                || h.get("commandWindows").is_some_and(&contains_marker)
+        }) {
+            return true;
+        }
+    }
+    group.get("command").is_some_and(&contains_marker)
+        || group.get("commandWindows").is_some_and(&contains_marker)
+}
+
+fn managed_hook_group(command_windows: String, command_sh: String, matcher: Option<&str>) -> Value {
     let mut group = json!({
         "hooks": [{
             "type": "command",
-            "command": CODEX_NOOP_COMMAND,
+            "command": command_sh,
             "commandWindows": command_windows,
         }]
     });
@@ -72,6 +135,7 @@ fn managed_hook_group(command_windows: String, matcher: Option<&str>) -> Value {
 
 fn render_codex_integration(
     bridge_path: &Path,
+    hook_scripts_root: &Path,
     existing_content: Option<&str>,
 ) -> Result<String, String> {
     let mut root = existing_content
@@ -89,35 +153,36 @@ fn render_codex_integration(
         root["hooks"] = json!({});
     }
 
-    let managed_groups = [
+    let managed_groups: &[(&str, &str, &str, Option<&str>)] = &[
         (
             "SessionStart",
-            managed_hook_group(
-                render_codex_hook_command(bridge_path, "session.started"),
-                Some("startup|resume|clear|compact"),
-            ),
+            "on-session-start.ps1",
+            "on-session-start.sh",
+            Some("startup|resume|clear|compact"),
         ),
+        ("PreToolUse", "on-pre-tool-use.ps1", "on-pre-tool-use.sh", None),
+        ("PostToolUse", "on-post-tool-use.ps1", "on-post-tool-use.sh", None),
         (
-            "PostToolUse",
-            managed_hook_group(render_codex_hook_command(bridge_path, "tool.post"), None),
+            "UserPromptSubmit",
+            "on-user-prompt-submit.ps1",
+            "on-user-prompt-submit.sh",
+            None,
         ),
-        (
-            "Stop",
-            managed_hook_group(
-                render_codex_hook_command(bridge_path, "session.updated"),
-                None,
-            ),
-        ),
+        ("Stop", "on-stop.ps1", "on-stop.sh", None),
     ];
 
-    for (event_name, managed_group) in managed_groups {
+    for (event_name, script_ps1, script_sh, matcher) in managed_groups {
         let mut groups = root["hooks"]
             .get(event_name)
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        groups.retain(|group| !is_managed_codex_group(group, bridge_path));
-        groups.push(managed_group);
+        groups.retain(|group| !is_sessionhub_hook_group(group));
+        groups.push(managed_hook_group(
+            render_codex_hook_command(&hook_scripts_root.join(script_ps1), bridge_path),
+            render_codex_hook_command_sh(&hook_scripts_root.join(script_sh), bridge_path),
+            *matcher,
+        ));
         root["hooks"][event_name] = Value::Array(groups);
     }
 
@@ -125,19 +190,12 @@ fn render_codex_integration(
         .map_err(|error| format!("failed to serialize Codex integration: {error}"))
 }
 
-fn is_managed_codex_group(group: &Value, bridge_path: &Path) -> bool {
-    let Some(hooks) = group.get("hooks").and_then(Value::as_array) else {
-        return false;
-    };
-    let expected_bridge_path = bridge_path.to_string_lossy();
-    hooks.iter().any(|hook| {
-        hook.get("commandWindows")
-            .or_else(|| hook.get("command"))
-            .and_then(Value::as_str)
-            .is_some_and(|command| {
-                command.contains(expected_bridge_path.as_ref())
-                    && command.contains("provider = 'codex'")
-            })
+fn has_all_managed_codex_events(root: &Value) -> bool {
+    CODEX_MANAGED_EVENTS.iter().all(|event_name| {
+        root.get("hooks")
+            .and_then(|hooks| hooks.get(*event_name))
+            .and_then(Value::as_array)
+            .is_some_and(|arr| arr.iter().any(is_sessionhub_hook_group))
     })
 }
 
@@ -170,9 +228,17 @@ pub(crate) fn install_or_update_codex_integration(
         );
     };
 
-    let existing_content = fs::read_to_string(&config_path).ok();
-    let content = match render_codex_integration(&bridge_path, existing_content.as_deref()) {
-        Ok(content) => content,
+    if let Err(error) = ensure_codex_hook_scripts_installed() {
+        return build_install_failure_status(
+            CODEX_PROVIDER,
+            Some(config_path.clone()),
+            diagnostics,
+            error,
+        );
+    }
+
+    let hook_scripts_root = match default_codex_hook_scripts_root() {
+        Ok(path) => path,
         Err(error) => {
             return build_install_failure_status(
                 CODEX_PROVIDER,
@@ -183,9 +249,22 @@ pub(crate) fn install_or_update_codex_integration(
         }
     };
 
-    if let Err(error) = ensure_parent_dir(&bridge_path)
-        .and_then(|_| write_provider_integration_file(&config_path, &content))
-    {
+    let existing_content = fs::read_to_string(&config_path).ok();
+    let content =
+        match render_codex_integration(&bridge_path, &hook_scripts_root, existing_content.as_deref())
+        {
+            Ok(content) => content,
+            Err(error) => {
+                return build_install_failure_status(
+                    CODEX_PROVIDER,
+                    Some(config_path),
+                    diagnostics,
+                    error,
+                );
+            }
+        };
+
+    if let Err(error) = write_provider_integration_file(&config_path, &content) {
         return build_install_failure_status(CODEX_PROVIDER, Some(config_path), diagnostics, error);
     }
 
@@ -306,7 +385,7 @@ pub(crate) fn detect_codex_integration_status(
         }
     };
 
-    if !has_all_managed_codex_events(&root, &expected_bridge_path) {
+    if !has_all_managed_codex_events(&root) {
         return build_provider_integration_status(
             CODEX_PROVIDER,
             ProviderIntegrationState::Outdated,
@@ -336,19 +415,6 @@ pub(crate) fn detect_codex_integration_status(
             Some(error),
         ),
     }
-}
-
-fn has_all_managed_codex_events(root: &Value, bridge_path: &Path) -> bool {
-    CODEX_MANAGED_EVENTS.iter().all(|event_name| {
-        root.get("hooks")
-            .and_then(|hooks| hooks.get(*event_name))
-            .and_then(Value::as_array)
-            .is_some_and(|groups| {
-                groups
-                    .iter()
-                    .any(|group| is_managed_codex_group(group, bridge_path))
-            })
-    })
 }
 
 pub(crate) fn uninstall_codex_integration(codex_root: Option<&str>) -> ProviderIntegrationStatus {
@@ -409,18 +475,7 @@ pub(crate) fn uninstall_codex_integration(codex_root: Option<&str>) -> ProviderI
     if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
         for event_name in CODEX_MANAGED_EVENTS {
             if let Some(groups) = hooks.get_mut(event_name).and_then(Value::as_array_mut) {
-                groups.retain(|g| {
-                    !g.get("hooks")
-                        .and_then(Value::as_array)
-                        .is_some_and(|inner| {
-                            inner.iter().any(|h| {
-                                h.get("commandWindows")
-                                    .or_else(|| h.get("command"))
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|cmd| cmd.contains("provider = 'codex'"))
-                            })
-                        })
-                });
+                groups.retain(|g| !is_sessionhub_hook_group(g));
                 if groups.is_empty() {
                     hooks.remove(event_name);
                 }
