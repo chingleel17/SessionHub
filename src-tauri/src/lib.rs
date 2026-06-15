@@ -1556,6 +1556,8 @@ mod tests {
         assert!(data.active_changes[0].has_proposal);
         assert!(!data.active_changes[0].has_design);
         assert!(data.active_changes[0].has_tasks);
+        assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.done), Some(0));
+        assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.total), Some(1));
         assert_eq!(data.active_changes[0].specs_count, 1);
         assert_eq!(data.active_changes[0].specs.len(), 1);
         assert_eq!(data.active_changes[0].specs[0].name, "auth");
@@ -1575,6 +1577,7 @@ mod tests {
         assert!(!data.archived_changes[0].has_proposal);
         assert!(data.archived_changes[0].has_design);
         assert!(!data.archived_changes[0].has_tasks);
+        assert!(data.archived_changes[0].task_progress.is_none());
         assert!(data.archived_changes[0].specs.is_empty());
         assert_eq!(data.specs.len(), 2);
         assert_eq!(data.specs[0].name, "api");

@@ -7,6 +7,31 @@ type Props = {
   onSelect: (node: TreeNode) => void;
 };
 
+function getNodeIconLabel(icon: TreeNode["icon"]): string {
+  switch (icon) {
+    case "proposal":
+      return "P";
+    case "design":
+      return "D";
+    case "tasks":
+      return "T";
+    case "spec":
+      return "S";
+    case "change":
+      return "C";
+    case "plan":
+      return "PL";
+    case "note":
+      return "N";
+    case "evidence":
+      return "EV";
+    case "draft":
+      return "DR";
+    default:
+      return "•";
+  }
+}
+
 function TreeLeaf({
   node,
   selectedId,
@@ -33,8 +58,13 @@ function TreeLeaf({
       disabled={!isSelectable}
       title={node.label}
     >
-      <span className="tree-leaf-icon">📄</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.label}</span>
+      <span className={`tree-leaf-icon tree-leaf-icon--${node.icon ?? "folder"} tree-leaf-icon--${node.tone ?? "neutral"}`}>
+        {getNodeIconLabel(node.icon)}
+      </span>
+      <span className="tree-node-label">{node.label}</span>
+      {node.badge ? (
+        <span className={`tree-node-badge tree-node-badge--${node.tone ?? "neutral"}`}>{node.badge}</span>
+      ) : null}
     </button>
   );
 }
@@ -62,9 +92,9 @@ function TreeGroup({
         onClick={() => setIsOpen((v) => !v)}
       >
         <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.label}</span>
+        <span className="tree-node-label">{node.label}</span>
         {node.badge ? (
-          <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.7 }}>{node.badge}</span>
+          <span className={`tree-node-badge tree-node-badge--${node.tone ?? "neutral"}`}>{node.badge}</span>
         ) : null}
       </button>
       {isOpen && node.children ? (

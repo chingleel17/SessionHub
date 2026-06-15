@@ -4,6 +4,8 @@
 
 系統 SHALL 能檢測 Copilot、OpenCode、Codex 與 Claude 的 bridge integration 狀態，並允許使用者由 SessionHub 自動安裝、更新或重新安裝整合檔案；系統 SHALL 同時追蹤已安裝 integration 的版本號，並在版本落差時提示使用者更新。
 
+安裝 Codex 或 Copilot integration 時，系統 SHALL 同時確保對應的 hook 腳本已安裝至 bundled 路徑，並在 hook 設定中以腳本路徑取代內嵌命令字串。
+
 #### Scenario: 安裝 OpenCode integration
 
 - **WHEN** 使用者在設定頁對 OpenCode 點擊「安裝整合」
@@ -13,7 +15,15 @@
 #### Scenario: 安裝 Codex integration
 
 - **WHEN** 使用者在設定頁對 Codex 點擊「安裝整合」
-- **THEN** 系統建立或更新 Codex hook 設定到偵測到的設定位置
+- **THEN** 系統先確保 Codex hook 腳本已安裝至 bundled 路徑
+- **AND** 系統建立或更新 `~/.codex/hooks.json`，hook command 引用腳本路徑
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Copilot integration
+
+- **WHEN** 使用者在設定頁對 Copilot CLI 點擊「安裝整合」
+- **THEN** 系統先確保 Copilot hook 腳本已安裝至 bundled 路徑
+- **AND** 系統建立或更新 `~/.copilot/settings.json`，hook command 引用腳本路徑（Windows 用 `.ps1`，Unix 用 `.sh`）
 - **AND** 狀態更新為 `installed` 或顯示具體錯誤
 
 #### Scenario: 安裝 Claude integration

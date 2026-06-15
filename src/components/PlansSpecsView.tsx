@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { OpenSpecData, SisyphusData, TreeNode } from "../types";
 import { buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
@@ -18,7 +18,9 @@ type Props = {
   projectCwd: string;
 };
 
-const DEFAULT_EXPLORER_WIDTH = 215;
+type ExplorerViewMode = "tree" | "list" | "cols";
+
+const DEFAULT_EXPLORER_WIDTH = 300;
 const TASK_LINE_PATTERN = /^(\s*(?:[-*+]|\d+\.)\s+\[)( |x|X)(\].*)$/;
 
 function toggleMarkdownTask(content: string, taskIndex: number, checked: boolean): string {
@@ -39,6 +41,78 @@ function toggleMarkdownTask(content: string, taskIndex: number, checked: boolean
 
   return lines.join(lineEnding);
 }
+
+function findNodePath(nodes: TreeNode[], targetId: string): TreeNode[] | null {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      return [node];
+    }
+    if (!node.children) continue;
+    const childPath = findNodePath(node.children, targetId);
+    if (childPath) {
+      return [node, ...childPath];
+    }
+  }
+  return null;
+}
+
+function getFirstSelectableDescendant(node: TreeNode): TreeNode | null {
+  if (node.filePath) {
+    return node;
+  }
+  for (const child of node.children ?? []) {
+    const matched = getFirstSelectableDescendant(child);
+    if (matched) return matched;
+  }
+  return null;
+}
+
+
+
+function getSelectableNode(node: TreeNode): TreeNode | null {
+  if (node.filePath) {
+    return node;
+  }
+  return getFirstSelectableDescendant(node);
+}
+
+function ListGroup({
+  groupNode,
+  renderItem,
+}: {
+  groupNode: TreeNode;
+  renderItem: (item: TreeNode) => React.ReactNode;
+}) {
+  // Active Changes 預設展開，其餘預設折疊
+  const [isOpen, setIsOpen] = useState(groupNode.defaultOpen ?? false);
+  const children = groupNode.children ?? [];
+
+  return (
+    <section className="explorer-list-section">
+      <button
+        type="button"
+        className="explorer-list-group-header"
+        onClick={() => setIsOpen((v) => !v)}
+      >
+        <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
+        <span className="explorer-list-group-label">{groupNode.label}</span>
+        <span className="explorer-list-group-count">{children.length}</span>
+      </button>
+      {isOpen ? (
+        <div className="explorer-list-rows">
+          {children.map((item) => renderItem(item))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+
+const explorerViewLabels: Record<ExplorerViewMode, "plansSpecs.explorer.view.tree" | "plansSpecs.explorer.view.list" | "plansSpecs.explorer.view.cols"> = {
+  tree: "plansSpecs.explorer.view.tree",
+  list: "plansSpecs.explorer.view.list",
+  cols: "plansSpecs.explorer.view.cols",
+};
 
 export function PlansSpecsView({
   sisyphusData,
@@ -62,6 +136,21 @@ export function PlansSpecsView({
   const [taskSaving, setTaskSaving] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const viewModeStorageKey = `explorer-view-mode:${projectCwd}`;
+  const [viewMode, setViewMode] = useState<ExplorerViewMode>(() => {
+    const stored = localStorage.getItem(viewModeStorageKey);
+    return (stored === "tree" || stored === "list" || stored === "cols") ? stored : "tree";
+  });
+
+  const handleSetViewMode = useCallback((mode: ExplorerViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem(viewModeStorageKey, mode);
+  }, [viewModeStorageKey]);
+  const [columnsOpenGroups, setColumnsOpenGroups] = useState<Set<string>>(
+    () => new Set(["openspec:active-changes"]),
+  );
+  const [columnsChangeId, setColumnsChangeId] = useState<string | null>(null);
   const isDragging = useRef(false);
   const resizerRef = useRef<HTMLDivElement>(null);
   const cleanupDragRef = useRef<(() => void) | null>(null);
@@ -107,6 +196,15 @@ export function PlansSpecsView({
     [loadNodeContent],
   );
 
+  const handleSelectTarget = useCallback(
+    async (node: TreeNode) => {
+      const selectableNode = getSelectableNode(node);
+      if (!selectableNode) return;
+      await handleSelect(selectableNode);
+    },
+    [handleSelect],
+  );
+
   const handleToggleTask = useCallback(
     async (filePath: string, taskIndex: number, checked: boolean) => {
       if (content === null || contentFilePath !== filePath || contentFilePathType !== "openspec") {
@@ -141,7 +239,7 @@ export function PlansSpecsView({
     const onMouseMove = (ev: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = ev.clientX - startX;
-      const newWidth = Math.max(160, Math.min(480, startWidth + delta));
+      const newWidth = Math.max(260, Math.min(560, startWidth + delta));
       setExplorerWidth(newWidth);
     };
 
@@ -188,6 +286,7 @@ export function PlansSpecsView({
             {
               id: "root:sisyphus",
               label: t("plansSpecs.sisyphus.title"),
+              icon: "folder" as const,
               defaultOpen: true,
               children: sisyphusNodes,
             },
@@ -198,6 +297,7 @@ export function PlansSpecsView({
             {
               id: "root:openspec",
               label: t("plansSpecs.openspec.title"),
+              icon: "folder" as const,
               defaultOpen: true,
               children: openspecNodes,
             },
@@ -205,6 +305,55 @@ export function PlansSpecsView({
         : []),
     ];
   }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t]);
+
+  // 蒐集所有狀態群組（扁平），供 Cols 模式使用
+  const allColsStatusGroups = useMemo<TreeNode[]>(() => {
+    const groups: TreeNode[] = [];
+    for (const rootNode of rootNodes) {
+      for (const child of rootNode.children ?? []) {
+        groups.push(child);
+      }
+    }
+    return groups;
+  }, [rootNodes]);
+
+  // 同步 selectedNode → 展開對應群組 + 選中對應 change
+  useEffect(() => {
+    if (!selectedNode?.id) return;
+    const path = findNodePath(rootNodes, selectedNode.id);
+    if (!path) return;
+    // path[0] = root, path[1] = status group, path[2] = change
+    const statusGroup = path[1];
+    if (statusGroup && allColsStatusGroups.some((g) => g.id === statusGroup.id)) {
+      setColumnsOpenGroups((prev) => {
+        if (prev.has(statusGroup.id)) return prev;
+        const next = new Set(prev);
+        next.add(statusGroup.id);
+        return next;
+      });
+    }
+    const changeNode = path[2];
+    if (changeNode) {
+      setColumnsChangeId(changeNode.id);
+    }
+  }, [rootNodes, selectedNode?.id, allColsStatusGroups]);
+
+  // Cols 模式：若 columnsChangeId 失效，自動選第一個可見 change
+  useEffect(() => {
+    if (!allColsStatusGroups.length) {
+      setColumnsChangeId(null);
+      return;
+    }
+    const allVisibleChanges = allColsStatusGroups
+      .filter((g) => columnsOpenGroups.has(g.id))
+      .flatMap((g) => g.children ?? []);
+    if (!allVisibleChanges.length) return;
+    setColumnsChangeId((current) => (
+      current && allVisibleChanges.some((c) => c.id === current)
+        ? current
+        : allVisibleChanges[0].id
+    ));
+  }, [allColsStatusGroups, columnsOpenGroups]);
 
   useEffect(() => {
     if (!selectedNode?.id) return;
@@ -216,18 +365,8 @@ export function PlansSpecsView({
       return;
     }
 
-    const stack = [...rootNodes];
-    let matchedNode: TreeNode | null = null;
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      if (node.id === selectedNode.id) {
-        matchedNode = node;
-        break;
-      }
-      if (node.children) {
-        stack.push(...node.children);
-      }
-    }
+    const matchedPath = findNodePath(rootNodes, selectedNode.id);
+    const matchedNode = matchedPath?.[matchedPath.length - 1] ?? null;
 
     if (!matchedNode?.filePath) {
       setSelectedNode(null);
@@ -248,6 +387,185 @@ export function PlansSpecsView({
     void loadNodeContent(matchedNode, false);
   }, [contentFilePath, loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
 
+  const renderListChangeRow = (item: TreeNode) => {
+    const artifactNodes = item.children ?? [];
+    const specsNode = artifactNodes.find((a) => a.id.endsWith(":specs"));
+    const badgeArtifacts = artifactNodes.filter((a) => !a.id.endsWith(":specs"));
+    const specsCount = specsNode?.children?.length ?? 0;
+    const isAnyArtifactActive = badgeArtifacts.some((a) => {
+      const leaf = getSelectableNode(a);
+      return leaf && selectedNode?.id === leaf.id;
+    });
+    const isRowActive = isAnyArtifactActive
+      || (Boolean(getSelectableNode(item)) && selectedNode?.id === getSelectableNode(item)?.id);
+
+    return (
+      <div
+        key={item.id}
+        className={`explorer-list-row${isRowActive ? " explorer-list-row--active" : ""}`}
+      >
+        <div className="explorer-list-row-header">
+          <button
+            type="button"
+            className="explorer-list-row-name"
+            onClick={() => { void handleSelectTarget(item); }}
+            title={item.label}
+          >
+            {item.label}
+          </button>
+          {specsCount > 0 ? (
+            <span className="explorer-list-specs-count">{specsCount} specs</span>
+          ) : null}
+        </div>
+        {badgeArtifacts.length > 0 ? (
+          <div className="explorer-chip-row">
+            {badgeArtifacts.map((artifact) => {
+              const targetNode = getSelectableNode(artifact);
+              const isActive = Boolean(targetNode && selectedNode?.id === targetNode.id);
+              const chipLabel = artifact.icon === "proposal"
+                ? "proposal"
+                : artifact.icon === "design"
+                  ? "design"
+                  : artifact.icon === "tasks"
+                    ? "tasks"
+                    : artifact.label;
+              return (
+                <button
+                  key={artifact.id}
+                  type="button"
+                  className={`explorer-chip${isActive ? " explorer-chip--active" : ""}`}
+                  onClick={() => { void handleSelectTarget(artifact); }}
+                >
+                  <span>{chipLabel}</span>
+                  {artifact.badge ? (
+                    <span className="explorer-chip-badge">
+                      <span className={`explorer-chip-dot explorer-chip-dot--${artifact.tone ?? "neutral"}`} />
+                      {artifact.badge}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderListView = () => {
+    // 蒐集所有群組（Active Changes、Archived Changes、Specs 等）
+    const groups: TreeNode[] = [];
+    for (const rootNode of rootNodes) {
+      for (const child of rootNode.children ?? []) {
+        groups.push(child);
+      }
+    }
+
+    return (
+      <div className="explorer-list-view">
+        {groups.map((groupNode) => (
+          <ListGroup key={groupNode.id} groupNode={groupNode} renderItem={renderListChangeRow} />
+        ))}
+      </div>
+    );
+  };
+
+  const renderColumnsPanel = () => {
+    const groups = allColsStatusGroups;
+    const activeChange = groups
+      .flatMap((g) => g.children ?? [])
+      .find((c) => c.id === columnsChangeId) ?? null;
+    const detailNodes = activeChange?.children ?? [];
+
+    return (
+      <div className="explorer-cols-panel">
+        <div className="explorer-cols-master-detail">
+          {/* 左欄 master：手風琴群組 + change 進度列 */}
+          <div className="explorer-cols-master">
+            <div className="explorer-cols-entries">
+              {groups.map((groupNode) => {
+                const isOpen = columnsOpenGroups.has(groupNode.id);
+                const entryNodes = groupNode.children ?? [];
+                return (
+                  <div key={groupNode.id} className="explorer-cols-group">
+                    <button
+                      type="button"
+                      className="explorer-cols-group-header"
+                      onClick={() => setColumnsOpenGroups((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(groupNode.id)) {
+                          next.delete(groupNode.id);
+                        } else {
+                          next.add(groupNode.id);
+                        }
+                        return next;
+                      })}
+                    >
+                      <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
+                      <span className="explorer-cols-group-label">{groupNode.label}</span>
+                    </button>
+                    {isOpen ? (
+                      <div className="explorer-cols-group-items">
+                        {entryNodes.map((entryNode) => {
+                          const isActive = entryNode.id === columnsChangeId;
+                          const progress = entryNode.progress;
+                          const progressPct = progress && progress.total > 0
+                            ? Math.round((progress.done / progress.total) * 100)
+                            : null;
+                          return (
+                            <button
+                              key={entryNode.id}
+                              type="button"
+                              className={`explorer-cols-entry${isActive ? " explorer-cols-entry--active" : ""}`}
+                              onClick={() => setColumnsChangeId(entryNode.id)}
+                            >
+                              <div className="explorer-cols-entry-top">
+                                <span className="explorer-cols-entry-name">{entryNode.label}</span>
+                                {entryNode.badge ? (
+                                  <span className={`tree-node-badge tree-node-badge--${entryNode.tone ?? "neutral"}`}>
+                                    {entryNode.badge}
+                                  </span>
+                                ) : null}
+                              </div>
+                              {progressPct !== null ? (
+                                <div className="explorer-cols-progress">
+                                  <div
+                                    className={`explorer-cols-progress-bar explorer-cols-progress-bar--${entryNode.tone ?? "neutral"}`}
+                                    style={{ width: `${progressPct}%` }}
+                                  />
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {/* 右欄 detail：選中 change 的檔案清單 */}
+          <div className="explorer-cols-detail">
+            {activeChange ? (
+              detailNodes.length > 0 ? (
+                <ExplorerTree
+                  nodes={detailNodes}
+                  selectedId={selectedNode?.id ?? null}
+                  onSelect={handleSelect}
+                />
+              ) : (
+                <div className="explorer-cols-detail-empty">{t("plansSpecs.explorer.noFiles")}</div>
+              )
+            ) : (
+              <div className="explorer-cols-detail-empty">{t("plansSpecs.explorer.selectChange")}</div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (isLoading) {
     return (
       <div className="plans-specs-empty">{t("plansSpecs.loading")}</div>
@@ -265,7 +583,6 @@ export function PlansSpecsView({
       className="explorer-layout"
       style={{ "--explorer-width": `${explorerWidth}px` } as React.CSSProperties}
     >
-      {/* Left panel */}
       <div
         className={`explorer-panel${isCollapsed ? " explorer-panel--collapsed" : ""}`}
         style={isCollapsed ? undefined : { width: explorerWidth }}
@@ -274,6 +591,18 @@ export function PlansSpecsView({
           {!isCollapsed ? (
             <div className="explorer-panel-heading">
               <span className="explorer-panel-title">{t("plansSpecs.explorer.title")}</span>
+              <div className="explorer-view-switcher" aria-label={t("plansSpecs.explorer.title")}>
+                {(["tree", "list", "cols"] as ExplorerViewMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`explorer-view-btn${viewMode === mode ? " explorer-view-btn--active" : ""}`}
+                    onClick={() => handleSetViewMode(mode)}
+                  >
+                    {t(explorerViewLabels[mode])}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 className="explorer-refresh-btn"
@@ -289,22 +618,27 @@ export function PlansSpecsView({
           <button
             type="button"
             className="explorer-collapse-btn"
-            onClick={() => setIsCollapsed((v) => !v)}
+            onClick={() => setIsCollapsed((value) => !value)}
             title={isCollapsed ? t("plansSpecs.explorer.expandPanel") : t("plansSpecs.explorer.collapsePanel")}
           >
             {isCollapsed ? "»" : "«"}
           </button>
         </div>
         {!isCollapsed ? (
-          <ExplorerTree
-            nodes={rootNodes}
-            selectedId={selectedNode?.id ?? null}
-            onSelect={handleSelect}
-          />
+          viewMode === "tree" ? (
+            <ExplorerTree
+              nodes={rootNodes}
+              selectedId={selectedNode?.id ?? null}
+              onSelect={handleSelect}
+            />
+          ) : viewMode === "list" ? (
+            renderListView()
+          ) : (
+            renderColumnsPanel()
+          )
         ) : null}
       </div>
 
-      {/* Resizer */}
       {!isCollapsed ? (
         <div
           ref={resizerRef}
@@ -313,7 +647,6 @@ export function PlansSpecsView({
         />
       ) : null}
 
-      {/* Right panel */}
       <ContentViewer
         content={content}
         filePath={contentFilePath}

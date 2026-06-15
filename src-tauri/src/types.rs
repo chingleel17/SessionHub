@@ -706,11 +706,20 @@ pub(crate) struct SisyphusData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct OpenSpecTaskProgress {
+    pub(crate) done: usize,
+    pub(crate) total: usize,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct OpenSpecChange {
     pub(crate) name: String,
     pub(crate) has_proposal: bool,
     pub(crate) has_design: bool,
     pub(crate) has_tasks: bool,
+    pub(crate) task_progress: Option<OpenSpecTaskProgress>,
     pub(crate) specs_count: usize,
     pub(crate) specs: Vec<OpenSpecSpec>,
 }

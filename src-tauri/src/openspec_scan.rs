@@ -3,6 +3,71 @@ use std::path::{Path, PathBuf};
 
 use crate::types::*;
 
+fn parse_task_progress(tasks_path: &Path) -> Option<OpenSpecTaskProgress> {
+    let content = fs::read_to_string(tasks_path).ok()?;
+    let mut done = 0usize;
+    let mut total = 0usize;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("- [")
+            .or_else(|| trimmed.strip_prefix("* ["))
+            .or_else(|| trimmed.strip_prefix("+ ["))
+        {
+            if let Some(marker) = rest.chars().next() {
+                if rest.chars().nth(1) == Some(']') {
+                    total += 1;
+                    if matches!(marker, 'x' | 'X') {
+                        done += 1;
+                    }
+                }
+            }
+            continue;
+        }
+
+        let mut chars = trimmed.chars().peekable();
+        let mut has_digit = false;
+        while matches!(chars.peek(), Some(ch) if ch.is_ascii_digit()) {
+            has_digit = true;
+            chars.next();
+        }
+        if !has_digit || chars.next() != Some('.') || chars.next() != Some(' ') || chars.next() != Some('[') {
+            continue;
+        }
+        let marker = match chars.next() {
+            Some(value) => value,
+            None => continue,
+        };
+        if chars.next() != Some(']') {
+            continue;
+        }
+
+        total += 1;
+        if matches!(marker, 'x' | 'X') {
+            done += 1;
+        }
+    }
+
+    if total == 0 {
+        return None;
+    }
+
+    let status = if done == 0 {
+        "not_started"
+    } else if done == total {
+        "done"
+    } else {
+        "in_progress"
+    };
+
+    Some(OpenSpecTaskProgress {
+        done,
+        total,
+        status: status.to_string(),
+    })
+}
+
 fn scan_openspec_specs(specs_dir: &Path) -> Vec<OpenSpecSpec> {
     if !specs_dir.is_dir() {
         return Vec::new();
@@ -45,7 +110,13 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
 
     let has_proposal = change_dir.join("proposal.md").is_file();
     let has_design = change_dir.join("design.md").is_file();
-    let has_tasks = change_dir.join("tasks.md").is_file();
+    let tasks_path = change_dir.join("tasks.md");
+    let has_tasks = tasks_path.is_file();
+    let task_progress = if has_tasks {
+        parse_task_progress(&tasks_path)
+    } else {
+        None
+    };
 
     let specs_dir = change_dir.join("specs");
     let specs = scan_openspec_specs(&specs_dir);
@@ -56,6 +127,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
         has_proposal,
         has_design,
         has_tasks,
+        task_progress,
         specs_count,
         specs,
     }

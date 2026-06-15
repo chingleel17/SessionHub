@@ -38,6 +38,6 @@
 
 ## 6. 需 app 手動端到端驗證（非自動化範疇）
 
-- [ ] 6.1 於 app 安裝各 provider 整合，確認設定檔主命令為 `node <script.cjs>`、無 `powershell` / `commandWindows` 欄位
-- [ ] 6.2 確認 provider 原生 hook 目錄已寫出 `.cjs` 與 `record-event.cjs`，且舊 `.ps1` 經升版（version 3）重裝後被清除
-- [ ] 6.3 實際觸發各 provider session，確認 bridge events.jsonl 即時新增 record、app 活動狀態正確更新
+- [x] 6.1 於 app 安裝各 provider 整合，確認設定檔主命令為 `node <script.cjs>`、無 `powershell` / `commandWindows` 欄位
+- [x] 6.2 確認 provider 原生 hook 目錄已寫出 `.cjs` 與 `record-event.cjs`，且舊 `.ps1` 經升版（version 3）重裝後被清除
+- [x] 6.3 實際觸發各 provider session，確認 bridge events.jsonl 即時新增 record、app 活動狀態正確更新

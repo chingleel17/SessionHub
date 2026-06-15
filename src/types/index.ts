@@ -202,8 +202,17 @@ export type OpenSpecChange = {
     hasProposal: boolean;
     hasDesign: boolean;
     hasTasks: boolean;
+    taskProgress?: OpenSpecTaskProgress | null;
     specsCount: number;
     specs: OpenSpecSpec[];
+};
+
+export type OpenSpecTaskProgressStatus = "not_started" | "in_progress" | "done" | (string & {});
+
+export type OpenSpecTaskProgress = {
+    done: number;
+    total: number;
+    status: OpenSpecTaskProgressStatus;
 };
 
 export type OpenSpecSpec = {
@@ -222,6 +231,9 @@ export type TreeNode = {
     id: string;
     label: string;
     badge?: string;
+    icon?: "proposal" | "design" | "tasks" | "spec" | "change" | "section" | "folder" | "plan" | "note" | "evidence" | "draft";
+    tone?: "neutral" | "muted" | "not_started" | "in_progress" | "done";
+    progress?: OpenSpecTaskProgress | null;
     children?: TreeNode[];
     defaultOpen?: boolean;
     filePath?: string;
