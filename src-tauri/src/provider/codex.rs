@@ -14,7 +14,7 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "2";
+const HOOK_SCRIPT_VERSION: &str = "3";
 const CODEX_MANAGED_EVENTS: [&str; 5] = [
     "SessionStart",
     "PreToolUse",
@@ -23,14 +23,16 @@ const CODEX_MANAGED_EVENTS: [&str; 5] = [
     "Stop",
 ];
 
-const MODULE_RECORD_EVENT: &str = include_str!("../../../hooks/codex/modules/record-event.psm1");
-const SCRIPT_ON_SESSION_START: &str = include_str!("../../../hooks/codex/on-session-start.ps1");
-const SCRIPT_ON_PRE_TOOL_USE: &str = include_str!("../../../hooks/codex/on-pre-tool-use.ps1");
-const SCRIPT_ON_POST_TOOL_USE: &str = include_str!("../../../hooks/codex/on-post-tool-use.ps1");
-const SCRIPT_ON_USER_PROMPT_SUBMIT: &str =
-    include_str!("../../../hooks/codex/on-user-prompt-submit.ps1");
-const SCRIPT_ON_STOP: &str = include_str!("../../../hooks/codex/on-stop.ps1");
+// Node.js 主軌（.cjs，強制 CommonJS）
+const MODULE_RECORD_EVENT_JS: &str = include_str!("../../../hooks/codex/modules/record-event.cjs");
+const SCRIPT_ON_SESSION_START_JS: &str = include_str!("../../../hooks/codex/on-session-start.cjs");
+const SCRIPT_ON_PRE_TOOL_USE_JS: &str = include_str!("../../../hooks/codex/on-pre-tool-use.cjs");
+const SCRIPT_ON_POST_TOOL_USE_JS: &str = include_str!("../../../hooks/codex/on-post-tool-use.cjs");
+const SCRIPT_ON_USER_PROMPT_SUBMIT_JS: &str =
+    include_str!("../../../hooks/codex/on-user-prompt-submit.cjs");
+const SCRIPT_ON_STOP_JS: &str = include_str!("../../../hooks/codex/on-stop.cjs");
 
+// sh fallback（無 node 環境時的手動退路）
 const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/codex/modules/record-event.sh");
 const SCRIPT_ON_SESSION_START_SH: &str = include_str!("../../../hooks/codex/on-session-start.sh");
 const SCRIPT_ON_PRE_TOOL_USE_SH: &str = include_str!("../../../hooks/codex/on-pre-tool-use.sh");
@@ -41,12 +43,12 @@ const SCRIPT_ON_STOP_SH: &str = include_str!("../../../hooks/codex/on-stop.sh");
 
 fn hook_script_entries() -> [(&'static str, &'static str); 12] {
     [
-        ("modules/record-event.psm1", MODULE_RECORD_EVENT),
-        ("on-session-start.ps1", SCRIPT_ON_SESSION_START),
-        ("on-pre-tool-use.ps1", SCRIPT_ON_PRE_TOOL_USE),
-        ("on-post-tool-use.ps1", SCRIPT_ON_POST_TOOL_USE),
-        ("on-user-prompt-submit.ps1", SCRIPT_ON_USER_PROMPT_SUBMIT),
-        ("on-stop.ps1", SCRIPT_ON_STOP),
+        ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
+        ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
+        ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
+        ("on-user-prompt-submit.cjs", SCRIPT_ON_USER_PROMPT_SUBMIT_JS),
+        ("on-stop.cjs", SCRIPT_ON_STOP_JS),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
         ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
         ("on-pre-tool-use.sh", SCRIPT_ON_PRE_TOOL_USE_SH),
@@ -73,34 +75,18 @@ pub(crate) fn resolve_codex_integration_path(codex_root: &Path) -> PathBuf {
     codex_root.join(CODEX_HOOK_FILE_NAME)
 }
 
-fn powershell_single_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 fn sh_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// 產生 Node.js 主軌 hook 命令。Codex 以 shell 執行 `command` 欄，
+/// shell 會由 PATH 解析 `node`；無 node 環境時可改用磁碟上保留的 .sh 腳本手動退路。
 fn render_codex_hook_command(script_path: &Path, bridge_path: &Path) -> String {
-    let script_literal = powershell_single_quoted(&script_path.to_string_lossy());
-    let bridge_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
-    let provider_literal = powershell_single_quoted(CODEX_PROVIDER);
-
-    format!(
-        "pwsh -NoProfile -ExecutionPolicy Bypass -File {script} -BridgePath {bridge} -Provider {provider} # {marker}",
-        script = script_literal,
-        bridge = bridge_literal,
-        provider = provider_literal,
-        marker = SESSIONHUB_HOOK_COMMAND_MARKER,
-    )
-}
-
-fn render_codex_hook_command_sh(script_path: &Path, bridge_path: &Path) -> String {
     let script_literal = sh_single_quoted(&script_path.to_string_lossy());
     let bridge_literal = sh_single_quoted(&bridge_path.to_string_lossy());
 
     format!(
-        "sh {script} --bridge-path {bridge} --provider {provider} # {marker}",
+        "node {script} --bridge-path {bridge} --provider {provider} # {marker}",
         script = script_literal,
         bridge = bridge_literal,
         provider = CODEX_PROVIDER,
@@ -133,12 +119,11 @@ fn is_sessionhub_hook_group(group: &Value) -> bool {
         || is_legacy_codex_group(group.get("commandWindows").unwrap_or(&Value::Null))
 }
 
-fn managed_hook_group(command_windows: String, command_sh: String, matcher: Option<&str>) -> Value {
+fn managed_hook_group(command: String, matcher: Option<&str>) -> Value {
     let mut group = json!({
         "hooks": [{
             "type": "command",
-            "command": command_sh,
-            "commandWindows": command_windows,
+            "command": command,
         }]
     });
     if let Some(matcher) = matcher {
@@ -167,25 +152,19 @@ fn render_codex_integration(
         root["hooks"] = json!({});
     }
 
-    let managed_groups: &[(&str, &str, &str, Option<&str>)] = &[
+    let managed_groups: &[(&str, &str, Option<&str>)] = &[
         (
             "SessionStart",
-            "on-session-start.ps1",
-            "on-session-start.sh",
+            "on-session-start.cjs",
             Some("startup|resume|clear|compact"),
         ),
-        ("PreToolUse", "on-pre-tool-use.ps1", "on-pre-tool-use.sh", None),
-        ("PostToolUse", "on-post-tool-use.ps1", "on-post-tool-use.sh", None),
-        (
-            "UserPromptSubmit",
-            "on-user-prompt-submit.ps1",
-            "on-user-prompt-submit.sh",
-            None,
-        ),
-        ("Stop", "on-stop.ps1", "on-stop.sh", None),
+        ("PreToolUse", "on-pre-tool-use.cjs", None),
+        ("PostToolUse", "on-post-tool-use.cjs", None),
+        ("UserPromptSubmit", "on-user-prompt-submit.cjs", None),
+        ("Stop", "on-stop.cjs", None),
     ];
 
-    for (event_name, script_ps1, script_sh, matcher) in managed_groups {
+    for (event_name, script_cjs, matcher) in managed_groups {
         let mut groups = root["hooks"]
             .get(event_name)
             .and_then(Value::as_array)
@@ -193,8 +172,7 @@ fn render_codex_integration(
             .unwrap_or_default();
         groups.retain(|group| !is_sessionhub_hook_group(group));
         groups.push(managed_hook_group(
-            render_codex_hook_command(&hook_scripts_root.join(script_ps1), bridge_path),
-            render_codex_hook_command_sh(&hook_scripts_root.join(script_sh), bridge_path),
+            render_codex_hook_command(&hook_scripts_root.join(script_cjs), bridge_path),
             *matcher,
         ));
         root["hooks"][event_name] = Value::Array(groups);

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tauri::State;
 
@@ -48,7 +49,7 @@ pub(crate) fn get_all_session_stats_internal(
 }
 
 #[tauri::command]
-pub fn get_sessions(
+pub async fn get_sessions(
     root_dir: Option<String>,
     opencode_root: Option<String>,
     codex_root: Option<String>,
@@ -56,24 +57,29 @@ pub fn get_sessions(
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
-    scan_cache: State<'_, ScanCache>,
-    db: State<'_, DbState>,
+    scan_cache: State<'_, Arc<ScanCache>>,
+    _db: State<'_, DbState>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|e| format!("db lock poisoned: {e}"))?;
-    get_sessions_internal(
-        root_dir,
-        opencode_root,
-        codex_root,
-        claude_root,
-        show_archived,
-        enabled_providers,
-        force_full,
-        scan_cache.inner(),
-        &*conn,
-    )
+    // 將整個掃描（磁碟 I/O + git 子程序）移至背景執行緒，避免阻塞 Tauri 主執行緒導致 UI 白屏無回應。
+    // ScanCache 以 Arc 共享，可安全移入 spawn_blocking 閉包；DB 則於背景執行緒另開連線，
+    // 與 trigger_stats_backfill 採相同模式。
+    let scan_cache = Arc::clone(scan_cache.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_db_connection()?;
+        get_sessions_internal(
+            root_dir,
+            opencode_root,
+            codex_root,
+            claude_root,
+            show_archived,
+            enabled_providers,
+            force_full,
+            &scan_cache,
+            &conn,
+        )
+    })
+    .await
+    .map_err(|error| format!("failed to join sessions scan task: {error}"))?
 }
 
 #[tauri::command]
@@ -146,7 +152,7 @@ pub fn check_directory_exists(path: String) -> bool {
 pub fn get_session_activity_statuses(
     sessions: Vec<serde_json::Value>,
     opencode_root: Option<String>,
-    scan_cache: State<'_, ScanCache>,
+    scan_cache: State<'_, Arc<ScanCache>>,
 ) -> Vec<SessionActivityStatus> {
     get_session_activity_statuses_internal(&sessions, opencode_root.as_deref(), &scan_cache.activity)
 }

@@ -12,20 +12,24 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "2";
+const HOOK_SCRIPT_VERSION: &str = "3";
 
-const MODULE_RECORD_EVENT: &str =
-    include_str!("../../../hooks/copilot/modules/record-event.psm1");
-const SCRIPT_ON_SESSION_START: &str = include_str!("../../../hooks/copilot/on-session-start.ps1");
-const SCRIPT_ON_SESSION_END: &str = include_str!("../../../hooks/copilot/on-session-end.ps1");
-const SCRIPT_ON_USER_PROMPT_SUBMITTED: &str =
-    include_str!("../../../hooks/copilot/on-user-prompt-submitted.ps1");
-const SCRIPT_ON_PRE_TOOL_USE: &str = include_str!("../../../hooks/copilot/on-pre-tool-use.ps1");
-const SCRIPT_ON_POST_TOOL_USE: &str =
-    include_str!("../../../hooks/copilot/on-post-tool-use.ps1");
-const SCRIPT_ON_ERROR_OCCURRED: &str =
-    include_str!("../../../hooks/copilot/on-error-occurred.ps1");
+// Node.js 主軌（.cjs，強制 CommonJS）
+const MODULE_RECORD_EVENT_JS: &str =
+    include_str!("../../../hooks/copilot/modules/record-event.cjs");
+const SCRIPT_ON_SESSION_START_JS: &str =
+    include_str!("../../../hooks/copilot/on-session-start.cjs");
+const SCRIPT_ON_SESSION_END_JS: &str = include_str!("../../../hooks/copilot/on-session-end.cjs");
+const SCRIPT_ON_USER_PROMPT_SUBMITTED_JS: &str =
+    include_str!("../../../hooks/copilot/on-user-prompt-submitted.cjs");
+const SCRIPT_ON_PRE_TOOL_USE_JS: &str =
+    include_str!("../../../hooks/copilot/on-pre-tool-use.cjs");
+const SCRIPT_ON_POST_TOOL_USE_JS: &str =
+    include_str!("../../../hooks/copilot/on-post-tool-use.cjs");
+const SCRIPT_ON_ERROR_OCCURRED_JS: &str =
+    include_str!("../../../hooks/copilot/on-error-occurred.cjs");
 
+// sh fallback（無 node 環境時的手動退路）
 const MODULE_RECORD_EVENT_SH: &str =
     include_str!("../../../hooks/copilot/modules/record-event.sh");
 const SCRIPT_ON_SESSION_START_SH: &str =
@@ -42,16 +46,16 @@ const SCRIPT_ON_ERROR_OCCURRED_SH: &str =
 
 fn hook_script_entries() -> [(&'static str, &'static str); 14] {
     [
-        ("modules/record-event.psm1", MODULE_RECORD_EVENT),
-        ("on-session-start.ps1", SCRIPT_ON_SESSION_START),
-        ("on-session-end.ps1", SCRIPT_ON_SESSION_END),
+        ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
+        ("on-session-end.cjs", SCRIPT_ON_SESSION_END_JS),
         (
-            "on-user-prompt-submitted.ps1",
-            SCRIPT_ON_USER_PROMPT_SUBMITTED,
+            "on-user-prompt-submitted.cjs",
+            SCRIPT_ON_USER_PROMPT_SUBMITTED_JS,
         ),
-        ("on-pre-tool-use.ps1", SCRIPT_ON_PRE_TOOL_USE),
-        ("on-post-tool-use.ps1", SCRIPT_ON_POST_TOOL_USE),
-        ("on-error-occurred.ps1", SCRIPT_ON_ERROR_OCCURRED),
+        ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
+        ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
+        ("on-error-occurred.cjs", SCRIPT_ON_ERROR_OCCURRED_JS),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
         ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
         ("on-session-end.sh", SCRIPT_ON_SESSION_END_SH),
@@ -78,34 +82,18 @@ fn remove_copilot_hook_scripts() {
     super::uninstall_hook_scripts(&root, &hook_script_entries());
 }
 
-fn powershell_single_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 fn sh_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// 產生 Node.js 主軌 hook 命令。Copilot 在各平台以 shell 執行 `command` 欄，
+/// shell 會由 PATH 解析 `node`；無 node 環境時可改用磁碟上保留的 .sh 腳本手動退路。
 fn render_copilot_hook_command(script_path: &Path, bridge_path: &Path) -> String {
-    let script_literal = powershell_single_quoted(&script_path.to_string_lossy());
-    let bridge_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
-    let provider_literal = powershell_single_quoted(COPILOT_PROVIDER);
-
-    format!(
-        "pwsh -NoProfile -ExecutionPolicy Bypass -File {script} -BridgePath {bridge} -Provider {provider} # {marker}",
-        script = script_literal,
-        bridge = bridge_literal,
-        provider = provider_literal,
-        marker = SESSIONHUB_HOOK_COMMAND_MARKER,
-    )
-}
-
-fn render_copilot_hook_command_sh(script_path: &Path, bridge_path: &Path) -> String {
     let script_literal = sh_single_quoted(&script_path.to_string_lossy());
     let bridge_literal = sh_single_quoted(&bridge_path.to_string_lossy());
 
     format!(
-        "sh {script} --bridge-path {bridge} --provider {provider} # {marker}",
+        "node {script} --bridge-path {bridge} --provider {provider} # {marker}",
         script = script_literal,
         bridge = bridge_literal,
         provider = COPILOT_PROVIDER,
@@ -118,12 +106,12 @@ fn render_copilot_integration(bridge_path: &Path, hook_scripts_root: &Path) -> R
         "version": 1,
         "sessionHub": managed_provider_metadata(COPILOT_PROVIDER, bridge_path),
         "hooks": {
-            "sessionStart": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-session-start.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-session-start.sh"), bridge_path) }],
-            "sessionEnd": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-session-end.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-session-end.sh"), bridge_path) }],
-            "userPromptSubmitted": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-user-prompt-submitted.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-user-prompt-submitted.sh"), bridge_path) }],
-            "preToolUse": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-pre-tool-use.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-pre-tool-use.sh"), bridge_path) }],
-            "postToolUse": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-post-tool-use.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-post-tool-use.sh"), bridge_path) }],
-            "errorOccurred": [{ "type": "command", "powershell": render_copilot_hook_command(&hook_scripts_root.join("on-error-occurred.ps1"), bridge_path), "command": render_copilot_hook_command_sh(&hook_scripts_root.join("on-error-occurred.sh"), bridge_path) }],
+            "sessionStart": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-session-start.cjs"), bridge_path) }],
+            "sessionEnd": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-session-end.cjs"), bridge_path) }],
+            "userPromptSubmitted": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-user-prompt-submitted.cjs"), bridge_path) }],
+            "preToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-pre-tool-use.cjs"), bridge_path) }],
+            "postToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-post-tool-use.cjs"), bridge_path) }],
+            "errorOccurred": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-error-occurred.cjs"), bridge_path) }],
         }
     });
 

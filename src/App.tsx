@@ -275,7 +275,9 @@ function App() {
     "connecting",
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
-  const [forceFull, setForceFull] = useState(false);
+  // 下一次 sessions 掃描是否強制全掃。用 ref 而非 state，避免它進入 queryKey 造成 fetch 過程中
+  // queryKey 變動而連續觸發兩次掃描（async 化後會讓 isFetching 永遠為 true，狀態列卡在「掃描中」）。
+  const forceFullRef = useRef(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
 
   const [bridgeEventLog, setBridgeEventLog] = useState<BridgeEventLogEntry[]>([]);
@@ -344,12 +346,14 @@ function App() {
       settingsQuery.data?.claudeRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
-      forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
     placeholderData: sessionsCachedQuery.data,
-    queryFn: () =>
-      invoke<SessionInfo[]>("get_sessions", {
+    queryFn: () => {
+      // 讀取並立即清除全掃旗標：本次 fetch 用完即重置，不影響 queryKey。
+      const forceFull = forceFullRef.current;
+      forceFullRef.current = false;
+      return invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
         opencodeRoot: settingsQuery.data?.opencodeRoot,
         codexRoot: settingsQuery.data?.codexRoot,
@@ -357,11 +361,8 @@ function App() {
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
         forceFull,
-      }).then((result) => {
-        // 全掃完成後重置 forceFull flag
-        if (forceFull) setForceFull(false);
-        return result;
-      }),
+      });
+    },
   });
 
   const providerQuotaQuery = useQuery({
@@ -564,7 +565,7 @@ function App() {
       invoke("archive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionArchived"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -574,7 +575,7 @@ function App() {
       invoke("unarchive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionUnarchived"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -584,7 +585,7 @@ function App() {
       invoke("delete_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionDeleted"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -710,7 +711,7 @@ function App() {
       invoke<number>("delete_empty_sessions", { rootDir: settingsQuery.data?.copilotRoot }),
     onSuccess: async (count) => {
       showToast(t("toast.emptySessionsDeleted").replace("{count}", String(count)));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -1199,29 +1200,6 @@ function App() {
     return m;
   }, [activityStatusQuery.data]);
 
-  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
-    const sessions = sessionsQuery.data ?? [];
-    let active = 0;
-    let waiting = 0;
-    let idle = 0;
-    let done = 0;
-    for (const s of sessions) {
-      if (s.isArchived) {
-        done++;
-        continue;
-      }
-      const activityStatus = activityStatusMap.get(s.id)?.status;
-      if (activityStatus === "active") {
-        active++;
-      } else if (activityStatus === "waiting") {
-        waiting++;
-      } else if (activityStatus === "idle") {
-        idle++;
-      }
-    }
-    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
-  }, [sessionsQuery.data, activityStatusMap]);
-
   // 偵測 session 狀態轉換，發送 Windows 通知
   useEffect(() => {
     const currentStatuses = activityStatusQuery.data ?? [];
@@ -1345,6 +1323,29 @@ function App() {
     () => (sessionsQuery.data ?? []).filter((session) => isSessionInUpdatedRange(session, dashboardPeriodStart)),
     [dashboardPeriodStart, sessionsQuery.data],
   );
+
+  // 狀態列統計範圍與看板目前選定的週期(本周/本月)一致，避免顯示歷史全部 session 造成數字落差。
+  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
+    let active = 0;
+    let waiting = 0;
+    let idle = 0;
+    let done = 0;
+    for (const s of filteredDashboardSessions) {
+      if (s.isArchived) {
+        done++;
+        continue;
+      }
+      const activityStatus = activityStatusMap.get(s.id)?.status;
+      if (activityStatus === "active") {
+        active++;
+      } else if (activityStatus === "waiting") {
+        waiting++;
+      } else if (activityStatus === "idle") {
+        idle++;
+      }
+    }
+    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
+  }, [filteredDashboardSessions, activityStatusMap]);
 
   const filteredDashboardProjects = useMemo(
     () => buildProjectGroups(filteredDashboardSessions, uncategorizedLabel, locale),
