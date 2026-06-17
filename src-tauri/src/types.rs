@@ -722,6 +722,7 @@ pub(crate) struct OpenSpecChange {
     pub(crate) task_progress: Option<OpenSpecTaskProgress>,
     pub(crate) specs_count: usize,
     pub(crate) specs: Vec<OpenSpecSpec>,
+    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { OpenSpecData, SisyphusData, TreeNode } from "../types";
+import type { OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
 import { buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
 import { ContentViewer } from "./ContentViewer";
 import { ExplorerTree } from "./ExplorerTree";
@@ -19,6 +19,62 @@ type Props = {
 };
 
 type ExplorerViewMode = "tree" | "list" | "cols";
+type SortField = "progress" | "name" | "createdAt";
+type SortDir = "asc" | "desc";
+
+type ChangeAction = {
+  label: string;
+  command: string;
+  tone: "not_started" | "in_progress" | "done";
+};
+
+function resolveChangeAction(entryNode: TreeNode): ChangeAction {
+  const changeName = entryNode.id.replace(/^openspec:change:/, "");
+  const children = entryNode.children ?? [];
+  const hasProposal = children.some((c) => c.icon === "proposal");
+  const hasTasks = children.some((c) => c.icon === "tasks");
+  const progress = entryNode.progress;
+
+  if (!hasProposal) {
+    return { label: "待 propose", command: `/opsx:propose ${changeName}`, tone: "not_started" };
+  }
+  if (!hasTasks || !progress) {
+    return { label: "可 apply", command: `/opsx:apply ${changeName}`, tone: "not_started" };
+  }
+  if (progress.done >= progress.total && progress.total > 0) {
+    return { label: "可封存", command: `/opsx:archive ${changeName}`, tone: "done" };
+  }
+  return {
+    label: `進行中 ${progress.done}/${progress.total}`,
+    command: `/opsx:apply ${changeName}`,
+    tone: "in_progress",
+  };
+}
+
+function sortChanges(changes: OpenSpecChange[], field: SortField, dir: SortDir): OpenSpecChange[] {
+  const sorted = [...changes].sort((a, b) => {
+    let cmp = 0;
+    if (field === "name") {
+      cmp = a.name.localeCompare(b.name);
+    } else if (field === "progress") {
+      const aVal = a.taskProgress && a.taskProgress.total > 0
+        ? a.taskProgress.done / a.taskProgress.total
+        : -1;
+      const bVal = b.taskProgress && b.taskProgress.total > 0
+        ? b.taskProgress.done / b.taskProgress.total
+        : -1;
+      cmp = aVal - bVal;
+    } else {
+      // createdAt: null 維持相對原序
+      if (!a.createdAt && !b.createdAt) return 0;
+      if (!a.createdAt) return 1;
+      if (!b.createdAt) return -1;
+      cmp = a.createdAt.localeCompare(b.createdAt);
+    }
+    return dir === "asc" ? cmp : -cmp;
+  });
+  return sorted;
+}
 
 const DEFAULT_EXPLORER_WIDTH = 300;
 const TASK_LINE_PATTERN = /^(\s*(?:[-*+]|\d+\.)\s+\[)( |x|X)(\].*)$/;
@@ -114,6 +170,12 @@ const explorerViewLabels: Record<ExplorerViewMode, "plansSpecs.explorer.view.tre
   cols: "plansSpecs.explorer.view.cols",
 };
 
+const explorerSortFields: Array<{ field: SortField; labelKey: "plansSpecs.explorer.sort.progress" | "plansSpecs.explorer.sort.name" | "plansSpecs.explorer.sort.createdAt" }> = [
+  { field: "progress", labelKey: "plansSpecs.explorer.sort.progress" },
+  { field: "name", labelKey: "plansSpecs.explorer.sort.name" },
+  { field: "createdAt", labelKey: "plansSpecs.explorer.sort.createdAt" },
+];
+
 export function PlansSpecsView({
   sisyphusData,
   openspecData,
@@ -134,7 +196,11 @@ export function PlansSpecsView({
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [taskSaving, setTaskSaving] = useState(false);
-  const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
+  const [explorerWidth, setExplorerWidth] = useState(() => {
+    const stored = localStorage.getItem("explorer-width");
+    const parsed = stored ? parseInt(stored, 10) : NaN;
+    return Number.isNaN(parsed) ? DEFAULT_EXPLORER_WIDTH : Math.max(260, Math.min(560, parsed));
+  });
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const viewModeStorageKey = `explorer-view-mode:${projectCwd}`;
@@ -142,6 +208,39 @@ export function PlansSpecsView({
     const stored = localStorage.getItem(viewModeStorageKey);
     return (stored === "tree" || stored === "list" || stored === "cols") ? stored : "tree";
   });
+
+  const sortStorageKey = `explorer-sort:${projectCwd}`;
+  const [sortField, setSortField] = useState<SortField>(() => {
+    try {
+      const raw = localStorage.getItem(sortStorageKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return (parsed?.field === "progress" || parsed?.field === "name" || parsed?.field === "createdAt")
+        ? parsed.field
+        : "name";
+    } catch {
+      return "name";
+    }
+  });
+  const [sortDir, setSortDir] = useState<SortDir>(() => {
+    try {
+      const raw = localStorage.getItem(sortStorageKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed?.dir === "desc" ? "desc" : "asc";
+    } catch {
+      return "asc";
+    }
+  });
+
+  const handleSortClick = useCallback((field: SortField) => {
+    setSortField((prevField) => {
+      const newDir = prevField === field
+        ? (sortDir === "asc" ? "desc" : "asc")
+        : "asc";
+      setSortDir(newDir);
+      localStorage.setItem(sortStorageKey, JSON.stringify({ field, dir: newDir }));
+      return field;
+    });
+  }, [sortDir, sortStorageKey]);
 
   const handleSetViewMode = useCallback((mode: ExplorerViewMode) => {
     setViewMode(mode);
@@ -151,6 +250,7 @@ export function PlansSpecsView({
     () => new Set(["openspec:active-changes"]),
   );
   const [columnsChangeId, setColumnsChangeId] = useState<string | null>(null);
+  const [copiedEntryId, setCopiedEntryId] = useState<string | null>(null);
   const isDragging = useRef(false);
   const resizerRef = useRef<HTMLDivElement>(null);
   const cleanupDragRef = useRef<(() => void) | null>(null);
@@ -239,11 +339,15 @@ export function PlansSpecsView({
     const onMouseMove = (ev: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = ev.clientX - startX;
-      const newWidth = Math.max(260, Math.min(560, startWidth + delta));
-      setExplorerWidth(newWidth);
+      currentWidth = Math.max(260, Math.min(560, startWidth + delta));
+      setExplorerWidth(currentWidth);
     };
 
+    let currentWidth = startWidth;
     const onMouseUp = () => {
+      if (isDragging.current) {
+        localStorage.setItem("explorer-width", String(currentWidth));
+      }
       isDragging.current = false;
       cleanupDragRef.current = null;
       resizerRef.current?.classList.remove("explorer-resizer--dragging");
@@ -278,7 +382,14 @@ export function PlansSpecsView({
 
   const rootNodes = useMemo<TreeNode[]>(() => {
     const sisyphusNodes = hasSisyphus && sisyphusData ? buildSisyphusTree(sisyphusData, t) : [];
-    const openspecNodes = hasOpenSpec && openspecData ? buildOpenSpecTree(openspecData, t) : [];
+    const sortedOpenspecData = hasOpenSpec && openspecData
+      ? {
+          ...openspecData,
+          activeChanges: sortChanges(openspecData.activeChanges, sortField, sortDir),
+          archivedChanges: sortChanges(openspecData.archivedChanges, sortField, sortDir),
+        }
+      : openspecData;
+    const openspecNodes = hasOpenSpec && sortedOpenspecData ? buildOpenSpecTree(sortedOpenspecData, t) : [];
 
     return [
       ...(sisyphusNodes.length > 0
@@ -304,7 +415,7 @@ export function PlansSpecsView({
           ]
         : []),
     ];
-  }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t]);
+  }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t, sortField, sortDir]);
 
   // 蒐集所有狀態群組（扁平），供 Cols 模式使用
   const allColsStatusGroups = useMemo<TreeNode[]>(() => {
@@ -402,17 +513,16 @@ export function PlansSpecsView({
     return (
       <div
         key={item.id}
+        role="button"
+        tabIndex={0}
         className={`explorer-list-row${isRowActive ? " explorer-list-row--active" : ""}`}
+        onClick={() => { void handleSelectTarget(item); }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") void handleSelectTarget(item); }}
       >
         <div className="explorer-list-row-header">
-          <button
-            type="button"
-            className="explorer-list-row-name"
-            onClick={() => { void handleSelectTarget(item); }}
-            title={item.label}
-          >
+          <span className="explorer-list-row-name" title={item.label}>
             {item.label}
-          </button>
+          </span>
           {specsCount > 0 ? (
             <span className="explorer-list-specs-count">{specsCount} specs</span>
           ) : null}
@@ -434,12 +544,14 @@ export function PlansSpecsView({
                   key={artifact.id}
                   type="button"
                   className={`explorer-chip${isActive ? " explorer-chip--active" : ""}`}
-                  onClick={() => { void handleSelectTarget(artifact); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleSelectTarget(artifact);
+                  }}
                 >
                   <span>{chipLabel}</span>
                   {artifact.badge ? (
-                    <span className="explorer-chip-badge">
-                      <span className={`explorer-chip-dot explorer-chip-dot--${artifact.tone ?? "neutral"}`} />
+                    <span className={`tree-node-badge tree-node-badge--${artifact.tone ?? "neutral"}`}>
                       {artifact.badge}
                     </span>
                   ) : null}
@@ -517,7 +629,14 @@ export function PlansSpecsView({
                               key={entryNode.id}
                               type="button"
                               className={`explorer-cols-entry${isActive ? " explorer-cols-entry--active" : ""}`}
-                              onClick={() => setColumnsChangeId(entryNode.id)}
+                              onClick={() => {
+                                setColumnsChangeId(entryNode.id);
+                                const tasksNode = (entryNode.children ?? []).find((c) => c.id.endsWith(":tasks"));
+                                if (tasksNode) {
+                                  const selectableNode = getSelectableNode(tasksNode);
+                                  if (selectableNode) void handleSelect(selectableNode);
+                                }
+                              }}
                             >
                               <div className="explorer-cols-entry-top">
                                 <span className="explorer-cols-entry-name">{entryNode.label}</span>
@@ -535,6 +654,31 @@ export function PlansSpecsView({
                                   />
                                 </div>
                               ) : null}
+                              {(() => {
+                                const action = resolveChangeAction(entryNode);
+                                const isCopied = copiedEntryId === entryNode.id;
+                                return (
+                                  <div className="explorer-cols-action">
+                                    <span className={`explorer-cols-action-label explorer-cols-action-label--${action.tone}`}>
+                                      {action.label}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className={`explorer-cols-action-copy${isCopied ? " explorer-cols-action-copy--copied" : ""}`}
+                                      title={action.command}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        navigator.clipboard.writeText(action.command).then(() => {
+                                          setCopiedEntryId(entryNode.id);
+                                          setTimeout(() => setCopiedEntryId((prev) => prev === entryNode.id ? null : prev), 500);
+                                        }).catch(() => { /* 靜默失敗 */ });
+                                      }}
+                                    >
+                                      {isCopied ? "✓" : "⎘"}
+                                    </button>
+                                  </div>
+                                );
+                              })()}
                             </button>
                           );
                         })}
@@ -602,6 +746,22 @@ export function PlansSpecsView({
                     {t(explorerViewLabels[mode])}
                   </button>
                 ))}
+              </div>
+              <div className="explorer-sort-switcher">
+                {explorerSortFields.map(({ field, labelKey }) => {
+                  const isActive = sortField === field;
+                  const icon = isActive ? (sortDir === "asc" ? "↑" : "↓") : "⇅";
+                  return (
+                    <button
+                      key={field}
+                      type="button"
+                      className={`explorer-sort-btn${isActive ? " explorer-sort-btn--active" : ""}`}
+                      onClick={() => handleSortClick(field)}
+                    >
+                      {t(labelKey)}{icon}
+                    </button>
+                  );
+                })}
               </div>
               <button
                 type="button"

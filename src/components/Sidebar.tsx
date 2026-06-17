@@ -127,10 +127,10 @@ export function Sidebar({
     group.branchLabel ? `${group.title} · ${group.branchLabel}` : group.title;
 
   const renderGroupLabel = (group: ProjectGroup) => (
-    <>
+    <span className="sidebar-group-label-wrap">
       <span className="sidebar-pinned-item-label">{group.title}</span>
       {group.branchLabel ? <span className="sidebar-branch-label">· {group.branchLabel}</span> : null}
-    </>
+    </span>
   );
 
   return (

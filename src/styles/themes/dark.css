@@ -1,7 +1,11 @@
 :root[data-theme="dark"] {
   --color-surface-app: #0f1117;
   --color-surface-panel: #1a1d27;
+  --color-surface: #1a1d27;
+  --color-surface-secondary: #22263a;
+  --color-surface-tertiary: #2a2f3d;
   --color-surface-accent: rgba(77, 132, 255, 0.12);
+  --color-border: #2a2f3d;
 
   --color-text-primary: #e8edf5;
   --color-text-secondary: #7f8fa8;
@@ -50,4 +54,166 @@
   --color-provider-opencode-text: #4dd88a;
   --color-provider-codex-bg: #2a1e46;
   --color-provider-codex-text: #c39bff;
+}
+
+/* ── Explorer Panel 深色模式覆寫 ── */
+[data-theme="dark"] .explorer-panel {
+  background: var(--color-surface-panel);
+}
+
+[data-theme="dark"] .explorer-panel-header {
+  background: rgba(26, 29, 39, 0.92);
+}
+
+[data-theme="dark"] .explorer-refresh-btn {
+  background: var(--color-surface-input);
+}
+
+[data-theme="dark"] .explorer-refresh-btn:hover:not(:disabled) {
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
+}
+
+[data-theme="dark"] .explorer-view-switcher {
+  background: var(--color-surface-input);
+}
+
+[data-theme="dark"] .explorer-view-btn--active {
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-text);
+}
+
+[data-theme="dark"] .explorer-sort-btn--active {
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-text);
+}
+
+/* ── Sticky Project Shell（Sub-tab Bar 容器）深色模式覆寫 ── */
+[data-theme="dark"] .sticky-project-shell::before {
+  border-color: var(--color-border-subtle);
+  background: linear-gradient(
+    180deg,
+    rgba(26, 29, 39, 0.9) 0%,
+    rgba(20, 23, 32, 0.85) 100%
+  );
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Sub-tab Bar 深色模式 box-shadow 覆寫 ── */
+[data-theme="dark"] .sub-tab-bar {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .sub-tab-item--active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ── Explorer Tree 深色模式 hover/selected 覆寫 ── */
+[data-theme="dark"] .tree-leaf-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .tree-leaf-btn--selected {
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-action-primary);
+}
+
+[data-theme="dark"] .tree-subgroup-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Explorer List 深色模式 hover/selected 覆寫 ── */
+[data-theme="dark"] .explorer-list-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .explorer-list-row--active {
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
+}
+
+[data-theme="dark"] .explorer-list-row--active .explorer-list-row-name {
+  color: var(--color-action-primary);
+}
+
+[data-theme="dark"] .explorer-list-row-name:hover {
+  color: var(--color-action-primary);
+}
+
+[data-theme="dark"] .explorer-chip:hover,
+[data-theme="dark"] .explorer-chip--active {
+  border-color: var(--color-action-primary-subtle-border);
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-action-primary);
+}
+
+/* ── Explorer Cols 深色模式 hover/selected 覆寫 ── */
+[data-theme="dark"] .explorer-cols-entry:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .explorer-cols-entry--active {
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
+  color: var(--color-action-primary);
+}
+
+[data-theme="dark"] .explorer-cols-group-header:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Stat Cards 深色模式 ── */
+[data-theme="dark"] .stat-card--sessions {
+  background: #0d1f3c;
+  border-color: #1e3a6e;
+}
+[data-theme="dark"] .stat-card--projects {
+  background: #0a2418;
+  border-color: #1a4a30;
+}
+[data-theme="dark"] .stat-card--archived {
+  background: #241b00;
+  border-color: #4a3800;
+}
+[data-theme="dark"] .stat-card--errors {
+  background: #2a0f0f;
+  border-color: #5a2020;
+}
+[data-theme="dark"] .stat-card--tokens {
+  background: #1a0f2e;
+  border-color: #3a1f5a;
+}
+[data-theme="dark"] .stat-card--interactions {
+  background: #062428;
+  border-color: #0e4a52;
+}
+[data-theme="dark"] .stat-card--cost {
+  background: #1a1500;
+  border-color: #3a2e00;
+}
+
+/* ── Activity Badge / Kanban Status 深色模式 ── */
+[data-theme="dark"] .activity-badge--active,
+[data-theme="dark"] .kanban-status-active {
+  background: #0a2418;
+  color: #4ade80;
+  border-color: #166534;
+}
+[data-theme="dark"] .activity-badge--waiting,
+[data-theme="dark"] .kanban-status-waiting {
+  background: #241b00;
+  color: #fbbf24;
+  border-color: #78350f;
+}
+[data-theme="dark"] .activity-badge--idle,
+[data-theme="dark"] .kanban-status-idle {
+  background: #1e2230;
+  color: #94a3b8;
+  border-color: #334155;
+}
+[data-theme="dark"] .activity-badge--done,
+[data-theme="dark"] .kanban-status-done {
+  background: #1a0f2e;
+  color: #a78bfa;
+  border-color: #4c1d95;
 }

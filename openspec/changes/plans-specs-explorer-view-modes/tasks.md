@@ -2,7 +2,7 @@
 
 - [x] 1.1 Extend Rust OpenSpec scanning to parse `tasks.md` checklist progress and include `done` / `total` / `status` on each change payload
 - [x] 1.2 Update Rust and TypeScript shared types so Plans & Specs consumers can read progress metadata safely
-- [ ] 1.3 Add or update focused tests for OpenSpec scan results covering change progress with tasks, without tasks, and without checklist items
+- [x] 1.3 Add or update focused tests for OpenSpec scan results covering change progress with tasks, without tasks, and without checklist items
 
 ## 2. Explorer View Models
 

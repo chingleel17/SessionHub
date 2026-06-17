@@ -944,6 +944,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .checkbox-group-label {
@@ -2378,6 +2379,15 @@ textarea {
   flex-shrink: 0;
 }
 
+.sidebar-group-label-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+}
+
 .sidebar-pinned-item-label {
   min-width: 0;
   overflow: hidden;
@@ -3235,6 +3245,7 @@ textarea {
   font-size: 13px;
   font-weight: 600;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3376,6 +3387,12 @@ textarea {
   overflow: hidden;
 }
 
+.explorer-panel--collapsed .explorer-panel-header {
+  border-bottom: none;
+  min-height: unset;
+  padding: 10px 9px;
+}
+
 .explorer-panel-header {
   display: flex;
   align-items: center;
@@ -3485,6 +3502,34 @@ textarea {
 }
 
 .explorer-view-btn--active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.explorer-sort-switcher {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.explorer-sort-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 0.01em;
+}
+
+.explorer-sort-btn:hover {
+  color: var(--color-text-primary);
+}
+
+.explorer-sort-btn--active {
   background: #2563eb;
   color: #ffffff;
 }
@@ -3986,11 +4031,16 @@ textarea {
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid transparent;
+  cursor: pointer;
 }
 
 .explorer-list-row--active {
   background: #eff6ff;
   border-color: #bfdbfe;
+}
+
+.explorer-list-row--active .explorer-list-row-name {
+  color: #1d4ed8;
 }
 
 .explorer-list-row-header {
@@ -4011,7 +4061,7 @@ textarea {
   text-align: left;
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   font-family: var(--font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4270,6 +4320,7 @@ textarea {
 /* Cols 模式：change 列（含進度條） */
 .explorer-cols-entry {
   width: 100%;
+  box-sizing: border-box;
   display: grid;
   gap: 4px;
   padding: 7px 8px;
@@ -4307,6 +4358,7 @@ textarea {
   white-space: nowrap;
   font-size: 11px;
   font-family: var(--font-mono, monospace);
+  font-weight: 600;
 }
 
 .explorer-cols-progress {
@@ -4333,6 +4385,62 @@ textarea {
 
 .explorer-cols-progress-bar--not_started {
   background: #94a3b8;
+}
+
+.explorer-cols-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 18px;
+}
+
+.explorer-cols-action-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.explorer-cols-action-label--in_progress {
+  color: #f59e0b;
+}
+
+.explorer-cols-action-label--done {
+  color: #22c55e;
+}
+
+.explorer-cols-action-label--not_started {
+  color: #94a3b8;
+}
+
+.explorer-cols-action-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+  border-radius: 3px;
+}
+
+.explorer-cols-entry:hover .explorer-cols-action-copy {
+  opacity: 1;
+}
+
+.explorer-cols-action-copy:hover {
+  color: var(--color-text-primary);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.explorer-cols-action-copy--copied {
+  opacity: 1 !important;
+  color: #22c55e !important;
 }
 
 /* ── Bridge Event Monitor ─────────────────────────────────────── */

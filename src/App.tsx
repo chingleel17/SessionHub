@@ -31,6 +31,7 @@ import type {
   ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
+import { parseTaskProgress } from "./utils/parseTaskProgress";
 
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
@@ -822,6 +823,11 @@ function App() {
   );
 
   const planSpecsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 樂觀更新期間壓制 openspec 重整，防止 watcher 觸發的 refetch 引發 UI 閃爍。
+  // handleWriteOpenspecFile 寫入 tasks.md 後設定此時間戳，期間 watcher 事件只
+  // invalidate sisyphus 快取，不碰 openspec 快取。超過時間後下一次 watcher 事件
+  // 才會正常重整 openspec，以真實掃描結果覆蓋樂觀值。
+  const openspecOptimisticUntilRef = useRef<number>(0);
   const refreshProjectPlansSpecs = useCallback(
     async (projectDir: string) => {
       // 清除之前的計時器，實現去抖動
@@ -829,14 +835,17 @@ function App() {
         clearTimeout(planSpecsRefreshTimerRef.current);
       }
 
-      // 延遲 500ms 再執行掃描，避免大量檔案變更時频繁掃描
+      // 延遲 100ms 再執行掃描，避免同一批次多個檔案變更時重複掃描
       planSpecsRefreshTimerRef.current = setTimeout(async () => {
+        const suppressOpenspec = Date.now() < openspecOptimisticUntilRef.current;
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
-          queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] }),
+          ...(!suppressOpenspec
+            ? [queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] })]
+            : []),
         ]);
         planSpecsRefreshTimerRef.current = null;
-      }, 500);
+      }, 100);
     },
     [queryClient],
   );
@@ -1051,7 +1060,8 @@ function App() {
       });
 
       const unlistenProjectFiles = await listen<string>("project-files-changed", async (event) => {
-        if (!activeProject || event.payload !== activeProject.pathLabel) return;
+        const normalizePath = (p: string) => p.toLowerCase().replace(/\\/g, "/");
+        if (!activeProject || normalizePath(event.payload) !== normalizePath(activeProject.pathLabel)) return;
         await refreshProjectPlansSpecs(activeProject.pathLabel);
         if (mounted) {
           setRealtimeStatus("active");
@@ -1265,9 +1275,41 @@ function App() {
     relativePath: string,
     content: string,
   ): Promise<void> => {
+    // 樂觀更新：若寫入的是某個 change 的 tasks.md，立即以前端解析的進度更新
+    // openspecQuery 快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
+    // 真實數字覆蓋此處的樂觀值。
+    const projectKey = activeProject?.pathLabel ?? "";
+    const normalizedPath = relativePath.replace(/\\/g, "/");
+    const tasksMatch = /^changes\/(?:archive\/)?([^/]+)\/tasks\.md$/.exec(normalizedPath);
+    let previousData: OpenSpecData | undefined;
+    if (projectKey && tasksMatch) {
+      const changeName = tasksMatch[1];
+      const nextProgress = parseTaskProgress(content);
+      const snapshot = queryClient.getQueryData<OpenSpecData>(["project_specs", projectKey]);
+      if (snapshot) {
+        previousData = snapshot;
+        const applyProgress = (changes: OpenSpecData["activeChanges"]) =>
+          changes.map((change) =>
+            change.name === changeName ? { ...change, taskProgress: nextProgress } : change,
+          );
+        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], {
+          ...snapshot,
+          activeChanges: applyProgress(snapshot.activeChanges),
+          archivedChanges: applyProgress(snapshot.archivedChanges),
+        });
+        // 壓制接下來 2 秒內 watcher 觸發的 openspec invalidate，避免 refetch 閃爍。
+        // 2 秒後下一次 watcher 事件才會以真實掃描結果覆蓋樂觀值。
+        openspecOptimisticUntilRef.current = Date.now() + 2000;
+      }
+    }
+
     try {
       await invoke("write_openspec_file", { projectCwd, relativePath, content });
     } catch (error) {
+      // 寫入失敗：回滾樂觀更新
+      if (projectKey && previousData) {
+        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], previousData);
+      }
       showToast(resolveErrorMessage(error, t("toast.openspecWriteFailed")));
       throw error;
     }

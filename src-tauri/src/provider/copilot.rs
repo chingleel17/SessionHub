@@ -17,6 +17,7 @@ const HOOK_SCRIPT_VERSION: &str = "3";
 // Node.js 主軌（.cjs，強制 CommonJS）
 const MODULE_RECORD_EVENT_JS: &str =
     include_str!("../../../hooks/copilot/modules/record-event.cjs");
+const MODULE_NOTIFY_JS: &str = include_str!("../../../hooks/copilot/modules/notify.cjs");
 const SCRIPT_ON_SESSION_START_JS: &str =
     include_str!("../../../hooks/copilot/on-session-start.cjs");
 const SCRIPT_ON_SESSION_END_JS: &str = include_str!("../../../hooks/copilot/on-session-end.cjs");
@@ -44,9 +45,10 @@ const SCRIPT_ON_POST_TOOL_USE_SH: &str =
 const SCRIPT_ON_ERROR_OCCURRED_SH: &str =
     include_str!("../../../hooks/copilot/on-error-occurred.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 14] {
+fn hook_script_entries() -> [(&'static str, &'static str); 15] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("modules/notify.cjs", MODULE_NOTIFY_JS),
         ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
         ("on-session-end.cjs", SCRIPT_ON_SESSION_END_JS),
         (
@@ -71,7 +73,9 @@ fn hook_script_entries() -> [(&'static str, &'static str); 14] {
 
 pub(crate) fn ensure_copilot_hook_scripts_installed() -> Result<PathBuf, String> {
     let root = default_copilot_hook_scripts_root()?;
-    install_hook_scripts("Copilot", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)
+    install_hook_scripts("Copilot", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)?;
+    super::install_notification_binary(&root)?;
+    Ok(root)
 }
 
 /// 移除 SessionHub 安裝的 Copilot hook 腳本（`~/.copilot/hooks`），保留使用者自訂檔案
@@ -80,6 +84,7 @@ fn remove_copilot_hook_scripts() {
         return;
     };
     super::uninstall_hook_scripts(&root, &hook_script_entries());
+    super::uninstall_notification_binary(&root);
 }
 
 fn sh_single_quoted(value: &str) -> String {

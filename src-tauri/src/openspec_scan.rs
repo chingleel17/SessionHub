@@ -101,6 +101,21 @@ fn scan_openspec_specs(specs_dir: &Path) -> Vec<OpenSpecSpec> {
     result
 }
 
+fn parse_openspec_yaml_created(change_dir: &Path) -> Option<String> {
+    let yaml_path = change_dir.join(".openspec.yaml");
+    let content = fs::read_to_string(yaml_path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("created:") {
+            let value = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let name = change_dir
         .file_name()
@@ -121,6 +136,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let specs_dir = change_dir.join("specs");
     let specs = scan_openspec_specs(&specs_dir);
     let specs_count = specs.len();
+    let created_at = parse_openspec_yaml_created(change_dir);
 
     OpenSpecChange {
         name,
@@ -130,6 +146,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
         task_progress,
         specs_count,
         specs,
+        created_at,
     }
 }
 

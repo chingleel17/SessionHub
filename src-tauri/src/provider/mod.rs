@@ -147,6 +147,36 @@ pub(super) fn install_hook_scripts(
     Ok(root.to_path_buf())
 }
 
+/// 安裝通知所需的 binary 資源（snoretoast.exe）至 hook 落地目錄的 `_bin/` 子目錄。
+/// 僅在 Windows 平台有效，其他平台直接略過（不報錯）。
+pub(super) fn install_notification_binary(root: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let snoretoast_bytes: &[u8] = include_bytes!("../../../hooks/_bin/snoretoast.exe");
+        let bin_dir = root.join("_bin");
+        ensure_parent_dir(&bin_dir.join("placeholder"))?;
+        let dest = bin_dir.join("snoretoast.exe");
+        fs::write(&dest, snoretoast_bytes).map_err(|error| {
+            format!(
+                "failed to write snoretoast.exe to {}: {error}",
+                dest.display()
+            )
+        })?;
+    }
+    let _ = root; // 非 Windows 靜默略過
+    Ok(())
+}
+
+/// 移除通知 binary（`_bin/snoretoast.exe`）。目錄若清空一併移除。
+pub(super) fn uninstall_notification_binary(root: &Path) {
+    let dest = root.join("_bin").join("snoretoast.exe");
+    if dest.exists() {
+        let _ = fs::remove_file(&dest);
+    }
+    let bin_dir = root.join("_bin");
+    remove_dir_if_empty(&bin_dir);
+}
+
 /// 移除由 SessionHub 安裝的 hook 腳本檔案。僅刪除 `entries` 列出的檔案與 `.version`
 /// 標記，不刪除使用者自訂的其他檔案；清理後若 `modules/` 子目錄或 root 變空才一併移除。
 pub(super) fn uninstall_hook_scripts(root: &Path, entries: &[(&str, &str)]) {

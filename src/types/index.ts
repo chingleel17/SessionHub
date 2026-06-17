@@ -205,6 +205,7 @@ export type OpenSpecChange = {
     taskProgress?: OpenSpecTaskProgress | null;
     specsCount: number;
     specs: OpenSpecSpec[];
+    createdAt?: string | null;
 };
 
 export type OpenSpecTaskProgressStatus = "not_started" | "in_progress" | "done" | (string & {});

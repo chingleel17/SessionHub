@@ -13,18 +13,20 @@ use super::{build_install_failure_status, build_provider_integration_status};
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
 const HOOK_SCRIPT_VERSION: &str = "3";
 
-const CLAUDE_MANAGED_EVENTS: [&str; 5] = [
+const CLAUDE_MANAGED_EVENTS: [&str; 6] = [
     "SessionStart",
     "PreToolUse",
     "PostToolUse",
     "UserPromptSubmit",
     "Stop",
+    "Notification",
 ];
 
 // Node.js 主軌（.cjs，強制 CommonJS）。record-event.cjs 自帶 retry，
 // 不再需要 db-ops / task-queue 輔助模組。
 const MODULE_RECORD_EVENT_JS: &str =
     include_str!("../../../.claude/hooks/modules/record-event.cjs");
+const MODULE_NOTIFY_JS: &str = include_str!("../../../.claude/hooks/modules/notify.cjs");
 const SCRIPT_ON_SESSION_START_JS: &str =
     include_str!("../../../.claude/hooks/on-session-start.cjs");
 const SCRIPT_ON_PRE_TOOL_USE_JS: &str = include_str!("../../../.claude/hooks/on-pre-tool-use.cjs");
@@ -33,6 +35,7 @@ const SCRIPT_ON_POST_TOOL_USE_JS: &str =
 const SCRIPT_ON_USER_PROMPT_SUBMIT_JS: &str =
     include_str!("../../../.claude/hooks/on-user-prompt-submit.cjs");
 const SCRIPT_ON_STOP_JS: &str = include_str!("../../../.claude/hooks/on-stop.cjs");
+const SCRIPT_ON_NOTIFICATION_JS: &str = include_str!("../../../.claude/hooks/on-notification.cjs");
 
 // sh fallback（無 node 環境時的手動退路）
 const MODULE_DB_OPS_SH: &str = include_str!("../../../.claude/hooks/modules/db-ops.sh");
@@ -49,14 +52,16 @@ const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
     include_str!("../../../.claude/hooks/on-user-prompt-submit.sh");
 const SCRIPT_ON_STOP_SH: &str = include_str!("../../../.claude/hooks/on-stop.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 14] {
+fn hook_script_entries() -> [(&'static str, &'static str); 16] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("modules/notify.cjs", MODULE_NOTIFY_JS),
         ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
         ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
         ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
         ("on-user-prompt-submit.cjs", SCRIPT_ON_USER_PROMPT_SUBMIT_JS),
         ("on-stop.cjs", SCRIPT_ON_STOP_JS),
+        ("on-notification.cjs", SCRIPT_ON_NOTIFICATION_JS),
         ("modules/db-ops.sh", MODULE_DB_OPS_SH),
         ("modules/task-queue.sh", MODULE_TASK_QUEUE_SH),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
@@ -90,6 +95,8 @@ pub(crate) fn ensure_claude_hook_scripts_installed(
             version_path.display()
         )
     })?;
+
+    super::install_notification_binary(&root)?;
 
     Ok(root)
 }
@@ -178,6 +185,11 @@ fn render_claude_integration(
         ("PostToolUse", "on-post-tool-use.cjs", None),
         ("UserPromptSubmit", "on-user-prompt-submit.cjs", None),
         ("Stop", "on-stop.cjs", None),
+        (
+            "Notification",
+            "on-notification.cjs",
+            Some("permission_prompt|idle_prompt"),
+        ),
     ];
 
     for (event_name, script_cjs, matcher) in managed_groups {
@@ -432,6 +444,7 @@ fn remove_hook_scripts(hook_scripts_path: Option<&str>) {
         return;
     };
     super::uninstall_hook_scripts(&root, &hook_script_entries());
+    super::uninstall_notification_binary(&root);
 }
 
 pub(crate) fn uninstall_claude_integration(

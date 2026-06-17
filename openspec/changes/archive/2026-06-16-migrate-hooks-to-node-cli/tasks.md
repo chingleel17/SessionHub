@@ -12,8 +12,8 @@
 
 - [x] 2.1 `cargo build` 通過（僅既有 dead-code 警告，無本次改動相關錯誤）
 - [x] 2.4 以 `node` 直接驗證各事件 hook 寫出正確 version 4 record（timestamp ms 轉 ISO、prompt 截斷 80 字、toolResult failure 判定、空 payload / 缺 bridge-path 皆 exit 0）
-- [ ] 2.2 （需 app 手動驗證）安裝 Copilot 整合，確認設定檔主命令為 `node <script.cjs>`、無 `powershell` 欄位
-- [ ] 2.3 （需 app 手動驗證）確認 provider 原生 hook 目錄已寫出 `.cjs` 與 `record-event.cjs`，且無殘留 `.ps1`
+- [x] 2.2 （需 app 手動驗證）安裝 Copilot 整合，確認設定檔主命令為 `node <script.cjs>`、無 `powershell` 欄位
+- [x] 2.3 （需 app 手動驗證）確認 provider 原生 hook 目錄已寫出 `.cjs` 與 `record-event.cjs`，且無殘留 `.ps1`
 
 ## 3. 套用至 Codex
 

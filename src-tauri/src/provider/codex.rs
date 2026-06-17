@@ -25,6 +25,7 @@ const CODEX_MANAGED_EVENTS: [&str; 5] = [
 
 // Node.js 主軌（.cjs，強制 CommonJS）
 const MODULE_RECORD_EVENT_JS: &str = include_str!("../../../hooks/codex/modules/record-event.cjs");
+const MODULE_NOTIFY_JS: &str = include_str!("../../../hooks/codex/modules/notify.cjs");
 const SCRIPT_ON_SESSION_START_JS: &str = include_str!("../../../hooks/codex/on-session-start.cjs");
 const SCRIPT_ON_PRE_TOOL_USE_JS: &str = include_str!("../../../hooks/codex/on-pre-tool-use.cjs");
 const SCRIPT_ON_POST_TOOL_USE_JS: &str = include_str!("../../../hooks/codex/on-post-tool-use.cjs");
@@ -41,9 +42,10 @@ const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
     include_str!("../../../hooks/codex/on-user-prompt-submit.sh");
 const SCRIPT_ON_STOP_SH: &str = include_str!("../../../hooks/codex/on-stop.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 12] {
+fn hook_script_entries() -> [(&'static str, &'static str); 13] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("modules/notify.cjs", MODULE_NOTIFY_JS),
         ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
         ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
         ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
@@ -60,7 +62,9 @@ fn hook_script_entries() -> [(&'static str, &'static str); 12] {
 
 pub(crate) fn ensure_codex_hook_scripts_installed() -> Result<PathBuf, String> {
     let root = default_codex_hook_scripts_root()?;
-    install_hook_scripts("Codex", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)
+    install_hook_scripts("Codex", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)?;
+    super::install_notification_binary(&root)?;
+    Ok(root)
 }
 
 /// 移除 SessionHub 安裝的 Codex hook 腳本（`~/.codex/hooks`），保留使用者自訂檔案
@@ -69,6 +73,7 @@ fn remove_codex_hook_scripts() {
         return;
     };
     super::uninstall_hook_scripts(&root, &hook_script_entries());
+    super::uninstall_notification_binary(&root);
 }
 
 pub(crate) fn resolve_codex_integration_path(codex_root: &Path) -> PathBuf {
