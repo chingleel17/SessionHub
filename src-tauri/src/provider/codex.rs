@@ -9,8 +9,7 @@ use crate::types::*;
 use super::bridge::read_bridge_diagnostics;
 use super::{
     build_install_failure_status, build_provider_integration_status, install_hook_scripts,
-    managed_provider_metadata, validate_integration_target, validate_managed_metadata,
-    write_provider_integration_file,
+    validate_integration_target, write_provider_integration_file,
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
@@ -149,10 +148,6 @@ fn render_codex_integration(
         root = json!({});
     }
 
-    root["sessionHub"] =
-        serde_json::to_value(managed_provider_metadata(CODEX_PROVIDER, bridge_path))
-            .map_err(|error| format!("failed to serialize Codex integration metadata: {error}"))?;
-
     if !root.get("hooks").is_some_and(Value::is_object) {
         root["hooks"] = json!({});
     }
@@ -185,6 +180,41 @@ fn render_codex_integration(
 
     serde_json::to_string_pretty(&root)
         .map_err(|error| format!("failed to serialize Codex integration: {error}"))
+}
+
+/// 從 Codex hook command 字串中提取 --bridge-path 的值（sh single-quoted 格式）
+fn extract_bridge_path_from_command(command: &str) -> Option<&str> {
+    let marker = "--bridge-path '";
+    let start = command.find(marker)? + marker.len();
+    let end = command[start..].find("' ")?;
+    Some(&command[start..start + end])
+}
+
+/// 取得 hooks.json 中第一個 SessionHub managed hook 的 bridge_path
+fn extract_codex_bridge_path(root: &Value) -> Option<String> {
+    for event_name in CODEX_MANAGED_EVENTS {
+        if let Some(groups) = root
+            .get("hooks")
+            .and_then(|h| h.get(event_name))
+            .and_then(Value::as_array)
+        {
+            for group in groups {
+                if !is_sessionhub_hook_group(group) {
+                    continue;
+                }
+                if let Some(hooks) = group.get("hooks").and_then(Value::as_array) {
+                    for hook in hooks {
+                        if let Some(cmd) = hook.get("command").and_then(Value::as_str) {
+                            if let Some(path) = extract_bridge_path_from_command(cmd) {
+                                return Some(path.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn has_all_managed_codex_events(root: &Value) -> bool {
@@ -337,8 +367,8 @@ pub(crate) fn detect_codex_integration_status(
         }
     };
 
-    let parsed = match serde_json::from_str::<CopilotIntegrationConfig>(&content) {
-        Ok(parsed) => parsed,
+    let root: Value = match serde_json::from_str(&content) {
+        Ok(root) => root,
         Err(error) => {
             return build_provider_integration_status(
                 CODEX_PROVIDER,
@@ -354,64 +384,42 @@ pub(crate) fn detect_codex_integration_status(
         }
     };
 
-    let Some(metadata) = parsed.session_hub else {
-        return build_provider_integration_status(
-            CODEX_PROVIDER,
-            ProviderIntegrationState::Outdated,
-            Some(config_path),
-            diagnostics,
-            None,
-            Some("missing SessionHub integration metadata".to_string()),
-        );
-    };
-
-    let root: Value = match serde_json::from_str(&content) {
-        Ok(root) => root,
-        Err(error) => {
-            return build_provider_integration_status(
-                CODEX_PROVIDER,
-                ProviderIntegrationState::Error,
-                Some(config_path.clone()),
-                diagnostics,
-                None,
-                Some(format!(
-                    "failed to parse Codex integration hooks {}: {error}",
-                    config_path.display()
-                )),
-            );
-        }
-    };
-
     if !has_all_managed_codex_events(&root) {
         return build_provider_integration_status(
             CODEX_PROVIDER,
             ProviderIntegrationState::Outdated,
             Some(config_path),
             diagnostics,
-            Some(metadata.integration_version),
+            None,
             Some("missing managed Codex hook entries".to_string()),
         );
     }
 
-    let installed_version = Some(metadata.integration_version);
-    match validate_managed_metadata(&metadata, CODEX_PROVIDER, &expected_bridge_path) {
-        Ok(()) => build_provider_integration_status(
-            CODEX_PROVIDER,
-            ProviderIntegrationState::Installed,
-            Some(config_path),
-            diagnostics,
-            installed_version,
-            None,
-        ),
-        Err(error) => build_provider_integration_status(
+    let installed_bridge = extract_codex_bridge_path(&root);
+    let expected_path = expected_bridge_path.to_string_lossy();
+    if installed_bridge.as_deref() != Some(expected_path.as_ref()) {
+        return build_provider_integration_status(
             CODEX_PROVIDER,
             ProviderIntegrationState::Outdated,
             Some(config_path),
             diagnostics,
-            installed_version,
-            Some(error),
-        ),
+            None,
+            Some(format!(
+                "bridge path mismatch: expected {}, found {}",
+                expected_path,
+                installed_bridge.as_deref().unwrap_or("(none)")
+            )),
+        );
     }
+
+    build_provider_integration_status(
+        CODEX_PROVIDER,
+        ProviderIntegrationState::Installed,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
 }
 
 pub(crate) fn uninstall_codex_integration(codex_root: Option<&str>) -> ProviderIntegrationStatus {

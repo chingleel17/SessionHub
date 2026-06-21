@@ -2413,7 +2413,7 @@ mod tests {
             status.config_path.as_deref(),
             Some(config_path.to_string_lossy().as_ref())
         );
-        assert_eq!(status.installed_version, Some(PROVIDER_INTEGRATION_VERSION));
+        assert_eq!(status.installed_version, None);
 
         fs::remove_dir_all(&codex_root).expect("cleanup codex root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
@@ -2473,7 +2473,6 @@ mod tests {
         let content = fs::read_to_string(&config_path).expect("read codex hook file");
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);
-        assert!(content.contains("\"sessionHub\""));
         assert!(content.contains("\"SessionStart\""));
         assert!(content.contains("\"PreToolUse\""));
         assert!(content.contains("\"PostToolUse\""));
