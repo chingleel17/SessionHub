@@ -184,9 +184,9 @@ function getSessionOpenCommand(provider: string, sessionId: string): string {
     case "opencode":
       return `opencode session ${sessionId}`;
     case "codex":
-      return `codex session ${sessionId}`;
+      return `codex resume ${sessionId}`;
     case "claude":
-      return `claude code --session=${sessionId}`;
+      return `claude --resume=${sessionId}`;
     default:
       return "";
   }

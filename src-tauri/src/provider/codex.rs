@@ -148,6 +148,11 @@ fn render_codex_integration(
         root = json!({});
     }
 
+    // Codex 不允許 sessionHub 欄位，安裝時一律移除
+    if let Some(obj) = root.as_object_mut() {
+        obj.remove("sessionHub");
+    }
+
     if !root.get("hooks").is_some_and(Value::is_object) {
         root["hooks"] = json!({});
     }
