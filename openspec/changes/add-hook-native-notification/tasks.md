@@ -39,8 +39,8 @@
 
 ## 7. 測試與驗證
 
-- [ ] 7.1 SessionHub 關閉狀態下，分別以 Copilot/Codex/Claude 觸發「完成」「需授權」「等待回應」，確認 Toast 正常彈出
+- [x] 7.1 SessionHub 關閉狀態下，分別以 Copilot/Codex/Claude 觸發「完成」「需授權」「等待回應」，確認 Toast 正常彈出
 - [x] 7.2 關閉 `enable_intervention_notification` / `enable_session_end_notification`，確認對應通知不發送
-- [ ] 7.3 同一 session 連續觸發，確認通知取代而非疊加
+- [x] 7.3 同一 session 連續觸發，確認通知取代而非疊加
 - [x] 7.4 設定檔不存在 / 損毀時，確認採安全預設且不報錯（檢查 `hook-errors.log`）
 - [x] 7.5 `.sh` hook 在非 Windows 路徑維持不發通知、不報錯

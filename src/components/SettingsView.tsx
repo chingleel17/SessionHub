@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ProviderIntegrationState,
   ProviderIntegrationStatus,
+  QuotaSnapshot,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 
@@ -22,6 +23,8 @@ type Props = {
   pendingProviderAction: string | null;
   onOpenEventMonitor: () => void;
   jqAvailable?: boolean | null;
+  quotaSnapshots?: QuotaSnapshot[];
+  onRefreshQuota?: (provider?: string) => void;
 };
 
 function getProviderLabel(
@@ -130,6 +133,8 @@ export function SettingsView({
   pendingProviderAction,
   onOpenEventMonitor,
   jqAvailable,
+  quotaSnapshots = [],
+  onRefreshQuota,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
@@ -571,12 +576,117 @@ export function SettingsView({
                       <p>{integration.lastError}</p>
                     </div>
                   ) : null}
+
+                  {(settingsForm.enableQuotaMonitoring ?? true) ? (() => {
+                    const snap = quotaSnapshots.find((s) => s.provider === integration.provider);
+                    if (!snap) return null;
+                    return (
+                      <div className="provider-quota-inline">
+                        <div className="provider-quota-inline-header">
+                          <span className={`quota-status-chip quota-status--${snap.status}`}>
+                            quota: {t(`quota.monitoring.status.${snap.status}` as Parameters<typeof t>[0])}
+                          </span>
+                          <span className="quota-source-badge">
+                            {t(`quota.monitoring.source.${snap.source}` as Parameters<typeof t>[0])}
+                            {snap.source === "local_scan" && snap.provider === "opencode"
+                              ? "（各 AI 供應商合計）"
+                              : null}
+                          </span>
+                          {snap.fetchedAt ? (
+                            <span className="quota-fetched-at">
+                              {formatDateTime(snap.fetchedAt, locale)}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button ghost-button--sm"
+                            onClick={() => onRefreshQuota?.(integration.provider)}
+                          >
+                            {t("quota.monitoring.manualRefresh")}
+                          </button>
+                        </div>
+                        {snap.status === "ok" && snap.windows && snap.windows.length > 0 ? (
+                          <div className="provider-quota-windows">
+                            {snap.windows.map((w) => (
+                              <span key={w.windowKey} className="provider-quota-window-chip">
+                                {w.label}: {Math.round(w.utilization * 100)}%
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {snap.status === "ok" && snap.source === "local_scan" && snap.localTokens ? (
+                          <span className="provider-quota-local">
+                            {((snap.localTokens.inputTokens + snap.localTokens.outputTokens) / 1000).toFixed(0)}k tok ·{" "}
+                            {snap.localTokens.periodLabel}
+                          </span>
+                        ) : null}
+                        {snap.errorMessage ? (
+                          <p className="provider-quota-error" title={snap.errorMessage}>
+                            {snap.errorMessage}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })() : null}
                 </article>
               );
             })}
           </div>
         )}
       </article>
+
+      {(settingsForm.enableQuotaMonitoring ?? true) || true ? (
+        <article className="info-card">
+          <div className="section-heading">
+            <h3>{t("quota.monitoring.title")}</h3>
+            {(settingsForm.enableQuotaMonitoring ?? true) ? (
+              <button type="button" className="ghost-button" onClick={() => onRefreshQuota?.()}>
+                {t("quota.monitoring.manualRefresh")}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="settings-form">
+            <label className="checkbox-group">
+              <input
+                type="checkbox"
+                checked={settingsForm.enableQuotaMonitoring ?? true}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, enableQuotaMonitoring: event.currentTarget.checked })
+                }
+              />
+              <span>
+                {t("quota.monitoring.enable")}
+                <small className="settings-field-desc">{t("quota.monitoring.enableDesc")}</small>
+              </span>
+            </label>
+
+            {(settingsForm.enableQuotaMonitoring ?? true) ? (
+              <div className="settings-field">
+                <label htmlFor="quota-refresh-interval-select">
+                  {t("quota.monitoring.refreshInterval")}
+                </label>
+                <select
+                  id="quota-refresh-interval-select"
+                  className="settings-select"
+                  value={settingsForm.quotaRefreshInterval ?? 30}
+                  onChange={(event) =>
+                    onFormChange({
+                      ...settingsForm,
+                      quotaRefreshInterval: Number(event.currentTarget.value) as 5 | 15 | 30 | 60,
+                    })
+                  }
+                >
+                  <option value="5">5 {t("quota.monitoring.refreshIntervalUnit")}</option>
+                  <option value="15">15 {t("quota.monitoring.refreshIntervalUnit")}</option>
+                  <option value="30">30 {t("quota.monitoring.refreshIntervalUnit")}</option>
+                  <option value="60">60 {t("quota.monitoring.refreshIntervalUnit")}</option>
+                </select>
+              </div>
+            ) : null}
+          </div>
+        </article>
+      ) : null}
     </section>
   );
 }

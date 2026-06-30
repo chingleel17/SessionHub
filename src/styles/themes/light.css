@@ -55,4 +55,31 @@
   --color-provider-opencode-text: #1a7a42;
   --color-provider-codex-bg: #f3ebff;
   --color-provider-codex-text: #6e3ad0;
+
+  /* Quota overview */
+  --quota-bar-track: #e2e8f4;
+  --quota-bar-ok: #f59e0b;
+  --quota-bar-warning: #f97316;
+  --quota-bar-danger: #ef4444;
+  --quota-tab-active-bg: #ffffff;
+  --quota-tab-hover-bg: rgba(0,0,0,0.04);
+  --quota-panel-bg: #ffffff;
+  --quota-divider: #e8edf5;
+  --quota-hint-muted: #8a99b0;
+  --quota-source-api-bg: #e8f0ff;
+  --quota-source-api-text: #2a5bd7;
+  --quota-source-local-bg: #e6f9ee;
+  --quota-source-local-text: #1a7a42;
+  --quota-reset-text: #5a6780;
+  --quota-pct-text: #162033;
+
+  /* Provider accent colours (tab underline) */
+  --quota-accent-claude: #f97316;
+  --quota-accent-copilot: #2563eb;
+  --quota-accent-opencode: #10b981;
+  --quota-accent-codex: #7c3aed;
+
+  /* Window bar colours */
+  --quota-bar-5h: #f59e0b;
+  --quota-bar-7d: #7c3aed;
 }

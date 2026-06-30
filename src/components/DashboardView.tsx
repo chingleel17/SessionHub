@@ -5,11 +5,13 @@ import type {
   AnalyticsDataPoint,
   IdeLauncherType,
   ProjectGroup,
+  QuotaSnapshot,
   SessionActivityStatus,
   SessionInfo,
   ToolAvailability,
 } from "../types";
 import { DashboardAnalyticsPanel } from "./DashboardAnalyticsPanel";
+import { QuotaOverview } from "./QuotaOverview";
 
 type Props = {
   sessionsIsLoading: boolean;
@@ -40,6 +42,9 @@ type Props = {
   analyticsError: string | null;
   onAnalyticsRetry: () => void;
   onAnalyticsToggleCollapsed: () => void;
+  quotaSnapshots?: QuotaSnapshot[];
+  enableQuotaMonitoring?: boolean;
+  onRefreshQuota?: (provider?: string) => void;
 };
 
 const RECENT_TITLE_MAX_LEN = 80;
@@ -520,6 +525,9 @@ export function DashboardView({
   analyticsError,
   onAnalyticsRetry,
   onAnalyticsToggleCollapsed,
+  quotaSnapshots = [],
+  enableQuotaMonitoring = true,
+  onRefreshQuota,
 }: Props) {
   const { t } = useI18n();
 
@@ -723,6 +731,16 @@ export function DashboardView({
           </article>
         </section>
       )}
+
+      {enableQuotaMonitoring && quotaSnapshots.length > 0 ? (
+        <article className="info-card" style={{ padding: 0, overflow: "hidden" }}>
+          <QuotaOverview
+            snapshots={quotaSnapshots}
+            onRefresh={onRefreshQuota}
+            onRefreshProvider={(provider) => onRefreshQuota?.(provider)}
+          />
+        </article>
+      ) : null}
 
       <DashboardAnalyticsPanel
         data={analyticsData}

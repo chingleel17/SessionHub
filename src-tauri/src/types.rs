@@ -178,6 +178,10 @@ pub(crate) struct AppSettings {
     pub(crate) claude_quota_reset_day: u8,
     #[serde(default = "default_minimize_to_tray")]
     pub(crate) minimize_to_tray: bool,
+    #[serde(default = "default_true")]
+    pub(crate) enable_quota_monitoring: bool,
+    #[serde(default = "default_quota_refresh_interval")]
+    pub(crate) quota_refresh_interval: u32,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;
@@ -198,6 +202,65 @@ pub(crate) fn default_provider_bridge_version() -> u32 {
 
 pub(crate) fn default_analytics_refresh_interval() -> u32 {
     30
+}
+
+pub(crate) fn default_quota_refresh_interval() -> u32 {
+    30
+}
+
+// ── Quota Snapshot 相關型別 ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuotaWindow {
+    pub(crate) window_key: String,
+    pub(crate) label: String,
+    pub(crate) utilization: f64,
+    pub(crate) resets_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalTokenUsage {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) period_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExtraCredits {
+    pub(crate) is_enabled: bool,
+    pub(crate) monthly_limit: Option<u64>,
+    pub(crate) used_credits: f64,
+    pub(crate) utilization: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuotaSnapshot {
+    pub(crate) provider: String,
+    /// "ok" | "error" | "unsupported" | "no_auth"
+    pub(crate) status: String,
+    /// "remote_api" | "local_scan"
+    pub(crate) source: String,
+    pub(crate) fetched_at: String,
+    pub(crate) error_message: Option<String>,
+    pub(crate) windows: Option<Vec<QuotaWindow>>,
+    pub(crate) local_tokens: Option<LocalTokenUsage>,
+    pub(crate) extra_credits: Option<ExtraCredits>,
+}
+
+pub(crate) struct QuotaCache {
+    pub(crate) snapshots: Mutex<HashMap<String, QuotaSnapshot>>,
+}
+
+impl Default for QuotaCache {
+    fn default() -> Self {
+        QuotaCache {
+            snapshots: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -441,6 +504,8 @@ pub(crate) struct WatcherState {
     pub(crate) last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
     /// 最後一次 get_settings 取得的 integration 狀態，供 restart_session_watcher 使用，避免重讀磁碟
     pub(crate) known_integrations: Mutex<Vec<ProviderIntegrationStatus>>,
+    /// per-provider quota refresh 的最後觸發時間（用於 bridge 事件後 30 秒 debounce）
+    pub(crate) last_quota_refresh_trigger: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl Default for WatcherState {
@@ -456,6 +521,7 @@ impl Default for WatcherState {
             last_provider_refresh: Arc::new(Mutex::new(HashMap::new())),
             last_bridge_records: Arc::new(Mutex::new(HashMap::new())),
             known_integrations: Mutex::new(Vec::new()),
+            last_quota_refresh_trigger: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

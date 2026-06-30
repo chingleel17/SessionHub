@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use notify::{recommended_watcher, RecursiveMode, Watcher};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::provider::{
     build_copilot_watch_snapshot, build_opencode_watch_snapshot, emit_provider_refresh,
@@ -317,6 +317,7 @@ pub(crate) fn create_provider_bridge_watcher(
     providers: Vec<String>,
     refresh_state: Arc<Mutex<HashMap<String, Instant>>>,
     last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
+    last_quota_trigger: Arc<Mutex<HashMap<String, Instant>>>,
 ) -> Result<notify::RecommendedWatcher, String> {
     let bridge_dir = provider_bridge_dir()?;
     fs::create_dir_all(&bridge_dir).map_err(|error| {
@@ -368,6 +369,7 @@ pub(crate) fn create_provider_bridge_watcher(
             let tracked_records = Arc::clone(&last_bridge_records);
             let watched_providers = providers.clone();
             let pending = Arc::clone(&pending_providers);
+            let quota_trigger = Arc::clone(&last_quota_trigger);
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_millis(PROVIDER_BRIDGE_DEBOUNCE_MS));
                 let elapsed = le
@@ -396,6 +398,44 @@ pub(crate) fn create_provider_bridge_watcher(
                         ) {
                             eprintln!("failed to process {provider} bridge event: {error}");
                             let _ = emit_provider_refresh(&handle, &refreshes, provider);
+                        }
+
+                        // Quota refresh debounce: trigger at most once per 30s per provider
+                        let should_refresh_quota = quota_trigger
+                            .lock()
+                            .map(|mut state| {
+                                let now = Instant::now();
+                                let last = state.get(provider.as_str()).copied();
+                                let debounce = Duration::from_secs(30);
+                                let should = last.map_or(true, |t| now.saturating_duration_since(t) >= debounce);
+                                if should {
+                                    state.insert(provider.clone(), now);
+                                }
+                                should
+                            })
+                            .unwrap_or(false);
+
+                        if should_refresh_quota {
+                            let provider_key = provider.clone();
+                            let h = handle.clone();
+                            thread::spawn(move || {
+                                let settings = match crate::settings::load_settings_internal() {
+                                    Ok(s) => s,
+                                    Err(_) => return,
+                                };
+                                if !settings.enable_quota_monitoring {
+                                    return;
+                                }
+                                let db_state = h.state::<crate::db::DbState>();
+                                let quota_cache = h.state::<crate::types::QuotaCache>();
+                                crate::commands::quota::refresh_quota_internal(
+                                    &db_state,
+                                    &quota_cache,
+                                    &settings,
+                                    Some(&provider_key),
+                                );
+                                let _ = h.emit("quota-snapshots-updated", ());
+                            });
                         }
                     }
                     break;
@@ -479,6 +519,7 @@ pub(crate) fn restart_session_watcher_internal(
             bridge_providers,
             Arc::clone(&watcher_state.last_provider_refresh),
             Arc::clone(&watcher_state.last_bridge_records),
+            Arc::clone(&watcher_state.last_quota_refresh_trigger),
         )?;
         let mut provider_bridge = watcher_state
             .provider_bridge

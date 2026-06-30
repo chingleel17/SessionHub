@@ -22,6 +22,7 @@ import type {
   ProjectSubTabState,
   ProviderIntegrationStatus,
   ProviderQuota,
+  QuotaSnapshot,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
@@ -371,6 +372,12 @@ function App() {
     queryFn: () => invoke<ProviderQuota[]>("get_provider_quota"),
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
+  });
+
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["quota_snapshots"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
   });
 
   const activePlanSession = useMemo(
@@ -1069,6 +1076,11 @@ function App() {
         }
       });
 
+      const unlistenQuotaSnapshots = await listen("quota-snapshots-updated", () => {
+        if (!mounted) return;
+        void queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
+      });
+
       return () => {
         unlistenCopilot();
         unlistenOpencode();
@@ -1080,6 +1092,7 @@ function App() {
         unlistenClaudeActivityHint();
         unlistenPlan();
         unlistenProjectFiles();
+        unlistenQuotaSnapshots();
       };
     };
 
@@ -1675,6 +1688,12 @@ function App() {
     providerIntegrationMutation.mutate({ provider, action });
   };
 
+  const handleRefreshQuota = useCallback((provider?: string) => {
+    void invoke<QuotaSnapshot[]>("refresh_quota", { provider: provider ?? null })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] }))
+      .catch(() => null);
+  }, [queryClient]);
+
   const handleOpenProviderPath = async (integration: ProviderIntegrationStatus) => {
     const targetPath = resolveProviderTargetPath(integration);
     if (!targetPath) {
@@ -1834,6 +1853,9 @@ function App() {
               analyticsCollapsed={settingsForm.analyticsPanelCollapsed ?? false}
               onAnalyticsRetry={() => void fetchDashboardAnalytics()}
               onAnalyticsToggleCollapsed={() => void handleToggleAnalyticsPanel()}
+              quotaSnapshots={quotaSnapshotQuery.data ?? []}
+              enableQuotaMonitoring={settingsForm.enableQuotaMonitoring ?? true}
+              onRefreshQuota={handleRefreshQuota}
             />
           ) : null}
 
@@ -1852,6 +1874,8 @@ function App() {
               pendingProviderAction={pendingProviderAction}
               onOpenEventMonitor={() => setShowEventMonitor(true)}
               jqAvailable={jqAvailableQuery.data ?? null}
+              quotaSnapshots={quotaSnapshotQuery.data ?? []}
+              onRefreshQuota={handleRefreshQuota}
             />
           ) : null}
 
@@ -1920,6 +1944,7 @@ function App() {
             doneSessions={doneSessions}
             isLoadingSessions={sessionsQuery.isLoading}
             providerQuotas={providerQuotaQuery.data ?? []}
+            quotaSnapshots={quotaSnapshotQuery.data ?? []}
           />
         ) : null}
       </section>

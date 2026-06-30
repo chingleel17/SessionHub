@@ -55,6 +55,8 @@ export type AppSettings = {
     claudeQuotaResetDay?: number;
     claudeMonthlyLimitTokens?: number | null;
     claudeMonthlyLimitUsd?: number | null;
+    enableQuotaMonitoring?: boolean;
+    quotaRefreshInterval?: 5 | 15 | 30 | 60;
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";
@@ -284,6 +286,41 @@ export type ProviderQuota = {
     monthlyLimitUsd: number | null;
     resetDay: number;
     nextResetDate: string;
+};
+
+// ── Provider Quota Snapshot 相關型別 ──────────────────────────────────────────
+
+export type QuotaWindow = {
+    windowKey: string;
+    label: string;
+    utilization: number;
+    resetsAt?: string | null;
+};
+
+export type LocalTokenUsage = {
+    inputTokens: number;
+    outputTokens: number;
+    periodLabel: string;
+};
+
+export type ExtraCredits = {
+    isEnabled: boolean;
+    monthlyLimit?: number | null;
+    usedCredits: number;
+    utilization?: number | null;
+};
+
+export type QuotaSnapshot = {
+    provider: string;
+    /** "ok" | "error" | "unsupported" | "no_auth" */
+    status: "ok" | "error" | "unsupported" | "no_auth";
+    /** "remote_api" | "local_scan" */
+    source: "remote_api" | "local_scan";
+    fetchedAt: string;
+    errorMessage?: string | null;
+    windows?: QuotaWindow[] | null;
+    localTokens?: LocalTokenUsage | null;
+    extraCredits?: ExtraCredits | null;
 };
 
 export type ClaudeUsageBlock = {

@@ -1,5 +1,5 @@
 import { useI18n } from "../i18n/I18nProvider";
-import type { BridgeEventLogEntry, ProviderQuota } from "../types";
+import type { BridgeEventLogEntry, ProviderQuota, QuotaSnapshot } from "../types";
 
 type Props = {
   lastBridgeEvent: { entry: BridgeEventLogEntry; receivedAt: Date } | null;
@@ -10,6 +10,7 @@ type Props = {
   doneSessions: number;
   isLoadingSessions: boolean;
   providerQuotas?: ProviderQuota[];
+  quotaSnapshots?: QuotaSnapshot[];
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -82,6 +83,51 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
   );
 }
 
+function formatResetDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const MM = String(d.getMonth() + 1).padStart(2, "0");
+    const DD = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${MM}/${DD} ${hh}:${mm}`;
+  } catch {
+    return iso;
+  }
+}
+
+function QuotaSnapshotChip({ snap }: { snap: QuotaSnapshot }) {
+  const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
+  const topWindow = snap.windows?.[0];
+  const pct = topWindow ? Math.round(topWindow.utilization * 100) : null;
+  const tooltip = [
+    `${snap.provider} · ${snap.source}`,
+    topWindow ? `${topWindow.label}: ${pct}%` : null,
+    topWindow?.resetsAt ? `Resets: ${formatResetDateTime(topWindow.resetsAt)}` : null,
+  ].filter(Boolean).join("\n");
+
+  return (
+    <span
+      className="global-status-bar-quota-chip global-status-bar-quota-chip--snapshot"
+      title={tooltip}
+    >
+      <span className="global-status-bar-quota-abbr">{abbr}</span>
+      {pct !== null ? (
+        <>
+          <span className="global-status-bar-quota-bar">
+            <span
+              className="global-status-bar-quota-fill"
+              style={{ width: `${Math.min(pct, 100)}%` }}
+            />
+          </span>
+          <span className="global-status-bar-quota-cost">{pct}%</span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
 export function StatusBar({
   lastBridgeEvent,
   onOpenEventMonitor,
@@ -91,6 +137,7 @@ export function StatusBar({
   doneSessions,
   isLoadingSessions,
   providerQuotas = [],
+  quotaSnapshots = [],
 }: Props) {
   const { t } = useI18n();
   const dash = isLoadingSessions ? "-" : undefined;
@@ -156,12 +203,23 @@ export function StatusBar({
         </span>
       </div>
 
-      {/* Right: provider quota */}
+      {/* Right: provider quota (local aggregates) */}
       {activeQuotas.length > 0 && (
         <div className="global-status-bar-quota">
           {activeQuotas.map((q) => (
             <QuotaChip key={q.provider} quota={q} noLimitLabel={t("quota.noLimit")} />
           ))}
+        </div>
+      )}
+
+      {/* Right: remote quota snapshots (utilization bars from API) */}
+      {quotaSnapshots.filter((s) => s.status === "ok" && s.source === "remote_api").length > 0 && (
+        <div className="global-status-bar-quota global-status-bar-quota--snapshots">
+          {quotaSnapshots
+            .filter((s) => s.status === "ok" && s.source === "remote_api")
+            .map((s) => (
+              <QuotaSnapshotChip key={s.provider} snap={s} />
+            ))}
         </div>
       )}
     </div>

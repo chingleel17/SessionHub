@@ -4,6 +4,7 @@ mod db;
 mod openspec_scan;
 mod platform;
 mod provider;
+mod quota;
 mod sessions;
 mod settings;
 mod sisyphus;
@@ -11,7 +12,7 @@ mod stats;
 mod types;
 mod watcher;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub(crate) use commands::*;
 pub(crate) use db::*;
@@ -25,6 +26,7 @@ pub fn run() {
         .manage(WatcherState::default())
         .manage(std::sync::Arc::new(ScanCache::default()))
         .manage(DbState::new().expect("failed to init metadata db"))
+        .manage(QuotaCache::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -46,6 +48,82 @@ pub fn run() {
                 Some(&settings.claude_root),
                 &settings.enabled_providers,
             )?;
+
+            // Quota monitoring startup: load from DB then do background refresh
+            if settings.enable_quota_monitoring {
+                let db_state = app.state::<DbState>();
+                let quota_cache = app.state::<QuotaCache>();
+                {
+                    let conn = db_state.conn.lock().unwrap_or_else(|p| p.into_inner());
+                    let _ = quota::cache::load_cache_from_db(&conn, &quota_cache);
+                }
+
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // Small delay to let the app fully start before first refresh
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    let db_state = app_handle.state::<DbState>();
+                    let quota_cache = app_handle.state::<QuotaCache>();
+                    let settings = load_settings_internal().unwrap_or_else(|_| {
+                        AppSettings {
+                            enable_quota_monitoring: false,
+                            quota_refresh_interval: 30,
+                            copilot_root: String::new(),
+                            opencode_root: String::new(),
+                            codex_root: String::new(),
+                            claude_root: String::new(),
+                            hook_scripts_path: String::new(),
+                            claude_quota_reset_day: 1,
+                            minimize_to_tray: false,
+                            terminal_path: None,
+                            external_editor_path: None,
+                            show_archived: false,
+                            pinned_projects: Vec::new(),
+                            enabled_providers: Vec::new(),
+                            provider_integrations: Vec::new(),
+                            default_launcher: None,
+                            enable_intervention_notification: false,
+                            enable_session_end_notification: false,
+                            show_status_bar: true,
+                            analytics_refresh_interval: 30,
+                            analytics_panel_collapsed: false,
+                        }
+                    });
+                    if settings.enable_quota_monitoring {
+                        commands::quota::refresh_quota_internal(&db_state, &quota_cache, &settings, None);
+                        let _ = app_handle.emit("quota-snapshots-updated", ());
+                    }
+                });
+            }
+
+            // Background quota polling thread
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mut last_refresh = std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(3600))
+                        .unwrap_or(std::time::Instant::now());
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        let settings = match load_settings_internal() {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        if !settings.enable_quota_monitoring {
+                            continue;
+                        }
+                        let interval_secs = settings.quota_refresh_interval as u64 * 60;
+                        if last_refresh.elapsed().as_secs() < interval_secs {
+                            continue;
+                        }
+                        last_refresh = std::time::Instant::now();
+                        let db_state = app_handle.state::<DbState>();
+                        let quota_cache = app_handle.state::<QuotaCache>();
+                        commands::quota::refresh_quota_internal(&db_state, &quota_cache, &settings, None);
+                        let _ = app_handle.emit("quota-snapshots-updated", ());
+                    }
+                });
+            }
 
             // Build system tray icon with menu
             let tray_icon =
@@ -159,7 +237,9 @@ pub fn run() {
             get_provider_quota,
             set_provider_quota_settings,
             get_claude_usage_blocks,
-            refresh_claude_quota
+            refresh_claude_quota,
+            get_quota_snapshots,
+            refresh_quota
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

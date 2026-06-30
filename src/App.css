@@ -4859,3 +4859,283 @@ textarea {
   background: rgba(227, 179, 65, 0.2);
   color: #e3b341;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   QuotaOverview component — costats-inspired design
+   Used in DashboardView and (future) TrayQuotaPanel
+   ═══════════════════════════════════════════════════════════ */
+
+.qo-root {
+  display: flex;
+  flex-direction: column;
+  background: var(--quota-panel-bg);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+/* ── tabs ── */
+.qo-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--quota-divider);
+  padding: 0 4px;
+  gap: 2px;
+}
+
+.qo-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px 10px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 0;
+  min-height: unset;
+  width: auto;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.qo-tab:hover {
+  background: var(--quota-tab-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.qo-tab--active {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  background: var(--quota-tab-active-bg);
+}
+
+.qo-tab--active.qo-tab--claude  { border-bottom-color: var(--quota-accent-claude);  color: var(--quota-accent-claude); }
+.qo-tab--active.qo-tab--copilot { border-bottom-color: var(--quota-accent-copilot); color: var(--quota-accent-copilot); }
+.qo-tab--active.qo-tab--opencode{ border-bottom-color: var(--quota-accent-opencode);color: var(--quota-accent-opencode); }
+.qo-tab--active.qo-tab--codex   { border-bottom-color: var(--quota-accent-codex);   color: var(--quota-accent-codex); }
+
+.qo-tab-icon { font-size: 16px; line-height: 1; }
+.qo-tab-label { font-size: 13px; }
+.qo-tab-pct {
+  font-size: 11px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── panel ── */
+.qo-panel {
+  padding: 20px 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.qo-panel-header {
+  margin-bottom: 16px;
+}
+
+.qo-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.qo-panel-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--quota-pct-text);
+}
+
+.qo-source-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.02em;
+}
+
+.qo-source-badge--remote_api {
+  background: var(--quota-source-api-bg);
+  color: var(--quota-source-api-text);
+}
+
+.qo-source-badge--local_scan {
+  background: var(--quota-source-local-bg);
+  color: var(--quota-source-local-text);
+}
+
+.qo-panel-sub {
+  font-size: 12px;
+  color: var(--quota-reset-text);
+}
+
+.qo-divider {
+  height: 1px;
+  background: var(--quota-divider);
+  margin: 0 0 18px;
+}
+
+/* ── windows ── */
+.qo-windows {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.qo-window {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qo-window-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--quota-pct-text);
+}
+
+.qo-bar-track {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--quota-bar-track);
+  overflow: hidden;
+}
+
+.qo-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.5s ease;
+}
+
+.qo-window-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.qo-pct {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--quota-pct-text);
+}
+
+.qo-reset {
+  font-size: 12px;
+  color: var(--quota-reset-text);
+}
+
+.qo-reset-datetime {
+  font-size: 11px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── local usage ── */
+.qo-local {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--quota-divider);
+}
+
+.qo-local-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.qo-local-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--quota-pct-text);
+}
+
+.qo-local-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--quota-accent-opencode);
+}
+
+.qo-local-period {
+  font-size: 11px;
+  color: var(--quota-reset-text);
+}
+
+/* ── extra credits ── */
+.qo-extra {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--quota-divider);
+}
+
+.qo-extra-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.qo-extra-label {
+  font-size: 13px;
+  color: var(--quota-reset-text);
+}
+
+.qo-extra-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--quota-bar-warning);
+}
+
+/* ── hints ── */
+.qo-hint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--quota-hint-muted);
+}
+
+.qo-hint--error {
+  color: var(--quota-bar-danger);
+}
+
+/* ── footer ── */
+.qo-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 20px 14px;
+  border-top: 1px solid var(--quota-divider);
+}
+
+.qo-refresh-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--quota-divider);
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--color-text-secondary);
+  min-height: unset;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.qo-refresh-btn:hover {
+  background: var(--quota-tab-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* ── window bar colour overrides per window key ── */
+.qo-window[data-key="five_hour"] .qo-bar-fill,
+.qo-window[data-key="five_hour_sonnet"] .qo-bar-fill {
+  background: var(--quota-bar-5h) !important;
+}
+.qo-window[data-key="seven_day"] .qo-bar-fill,
+.qo-window[data-key="seven_day_sonnet"] .qo-bar-fill,
+.qo-window[data-key="seven_day_opus"] .qo-bar-fill {
+  background: var(--quota-bar-7d) !important;
+}

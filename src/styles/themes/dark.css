@@ -217,3 +217,27 @@
   color: #a78bfa;
   border-color: #4c1d95;
 }
+
+[data-theme="dark"] {
+  --quota-bar-track: #2a3347;
+  --quota-bar-ok: #f59e0b;
+  --quota-bar-warning: #f97316;
+  --quota-bar-danger: #ef4444;
+  --quota-tab-active-bg: #1e2a40;
+  --quota-tab-hover-bg: rgba(255,255,255,0.05);
+  --quota-panel-bg: #1a2236;
+  --quota-divider: #2a3550;
+  --quota-hint-muted: #5a7090;
+  --quota-source-api-bg: #1a2744;
+  --quota-source-api-text: #6ea0ff;
+  --quota-source-local-bg: #0f2a1a;
+  --quota-source-local-text: #4ade80;
+  --quota-reset-text: #7a8ea8;
+  --quota-pct-text: #e2e8f4;
+  --quota-accent-claude: #fb923c;
+  --quota-accent-copilot: #60a5fa;
+  --quota-accent-opencode: #34d399;
+  --quota-accent-codex: #a78bfa;
+  --quota-bar-5h: #f59e0b;
+  --quota-bar-7d: #8b5cf6;
+}

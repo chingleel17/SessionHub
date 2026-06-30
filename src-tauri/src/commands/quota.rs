@@ -1,10 +1,14 @@
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::db::{
     billing_period_for, get_provider_quota_from_db, get_provider_quota_settings_from_db,
     next_reset_date_for, set_provider_quota_settings_in_db, upsert_provider_quota,
 };
-use crate::settings::resolve_claude_root;
+use crate::quota::cache::{
+    read_snapshots_from_cache, remove_provider_from_cache_and_db, write_snapshot_to_cache_and_db,
+};
+use crate::quota::QuotaManager;
+use crate::settings::{load_settings_internal, resolve_claude_root};
 use crate::stats::{build_claude_usage_blocks, compute_claude_stats, is_claude_session_file};
 use crate::types::*;
 use crate::DbState;
@@ -112,6 +116,86 @@ pub fn get_claude_usage_blocks(
         return Err(format!("not a valid Claude session file: {session_dir}"));
     }
     build_claude_usage_blocks(&path)
+}
+
+#[tauri::command]
+pub fn get_quota_snapshots(
+    quota_cache: State<'_, QuotaCache>,
+) -> Result<Vec<QuotaSnapshot>, String> {
+    read_snapshots_from_cache(&quota_cache)
+}
+
+#[tauri::command]
+pub fn refresh_quota(
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    quota_cache: State<'_, QuotaCache>,
+    provider: Option<String>,
+) -> Result<Vec<QuotaSnapshot>, String> {
+    let settings = load_settings_internal().map_err(|e| format!("failed to load settings: {e}"))?;
+
+    if !settings.enable_quota_monitoring {
+        return read_snapshots_from_cache(&quota_cache);
+    }
+
+    let conn = db_state
+        .conn
+        .lock()
+        .map_err(|_| "failed to lock db".to_string())?;
+
+    let manager = QuotaManager::new();
+    let snapshots = match provider.as_deref() {
+        Some(key) => manager
+            .refresh_one(key, &settings)
+            .map(|s| vec![s])
+            .unwrap_or_default(),
+        None => manager.refresh_all(&settings),
+    };
+
+    // Remove snapshots for providers that are no longer enabled
+    if provider.is_none() {
+        let cached = read_snapshots_from_cache(&quota_cache)?;
+        for snap in &cached {
+            if !settings.enabled_providers.contains(&snap.provider) {
+                let _ = remove_provider_from_cache_and_db(&conn, &quota_cache, &snap.provider);
+            }
+        }
+    }
+
+    for snapshot in &snapshots {
+        let _ = write_snapshot_to_cache_and_db(&conn, &quota_cache, snapshot);
+    }
+
+    let _ = app.emit("quota-snapshots-updated", ());
+
+    read_snapshots_from_cache(&quota_cache)
+}
+
+pub(crate) fn refresh_quota_internal(
+    db_state: &DbState,
+    quota_cache: &QuotaCache,
+    settings: &AppSettings,
+    provider: Option<&str>,
+) -> Vec<QuotaSnapshot> {
+    let conn = match db_state.conn.lock() {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let manager = QuotaManager::new();
+    let snapshots = match provider {
+        Some(key) => manager
+            .refresh_one(key, settings)
+            .map(|s| vec![s])
+            .unwrap_or_default(),
+        None => manager.refresh_all(settings),
+    };
+
+    for snapshot in &snapshots {
+        let _ = write_snapshot_to_cache_and_db(&conn, quota_cache, snapshot);
+    }
+
+    snapshots
 }
 
 #[tauri::command]

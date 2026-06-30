@@ -63,6 +63,8 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         show_status_bar: true,
         analytics_refresh_interval: 30,
         analytics_panel_collapsed: false,
+        enable_quota_monitoring: true,
+        quota_refresh_interval: 30,
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

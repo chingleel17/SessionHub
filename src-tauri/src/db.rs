@@ -204,10 +204,74 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("failed to initialize provider_quota_settings table: {error}"))?;
 
+    // quota_snapshots: 從訂閱服務查回的剩餘額度快照
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS quota_snapshots (
+                provider TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize quota_snapshots table: {error}"))?;
+
     if let Err(error) = migrate_legacy_session_cache(connection) {
         eprintln!("Warning: failed to migrate legacy session cache: {error}");
     }
 
+    Ok(())
+}
+
+pub(crate) fn load_quota_snapshots_from_db(
+    connection: &Connection,
+) -> Result<Vec<crate::types::QuotaSnapshot>, String> {
+    let mut statement = connection
+        .prepare("SELECT snapshot_json FROM quota_snapshots")
+        .map_err(|e| format!("failed to prepare quota_snapshots query: {e}"))?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("failed to query quota_snapshots: {e}"))?;
+
+    let mut snapshots = Vec::new();
+    for row_result in rows {
+        let json = row_result.map_err(|e| format!("failed to read quota_snapshots row: {e}"))?;
+        if let Ok(snapshot) = serde_json::from_str::<crate::types::QuotaSnapshot>(&json) {
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
+}
+
+pub(crate) fn save_quota_snapshot_to_db(
+    connection: &Connection,
+    snapshot: &crate::types::QuotaSnapshot,
+) -> Result<(), String> {
+    let json = serde_json::to_string(snapshot)
+        .map_err(|e| format!("failed to serialize quota snapshot: {e}"))?;
+    connection
+        .execute(
+            "INSERT INTO quota_snapshots (provider, snapshot_json, fetched_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(provider) DO UPDATE SET snapshot_json = excluded.snapshot_json, fetched_at = excluded.fetched_at",
+            params![snapshot.provider, json, snapshot.fetched_at],
+        )
+        .map_err(|e| format!("failed to save quota snapshot: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn delete_quota_snapshots_for_provider(
+    connection: &Connection,
+    provider: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM quota_snapshots WHERE provider = ?1",
+            params![provider],
+        )
+        .map_err(|e| format!("failed to delete quota snapshot: {e}"))?;
     Ok(())
 }
 

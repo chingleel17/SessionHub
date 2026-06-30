@@ -220,6 +220,8 @@ impl AppSettings {
             show_status_bar: true,
             analytics_refresh_interval: 30,
             analytics_panel_collapsed: false,
+            enable_quota_monitoring: true,
+            quota_refresh_interval: 30,
         })
     }
 }
