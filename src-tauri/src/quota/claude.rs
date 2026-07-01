@@ -36,6 +36,27 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
     }
 }
 
+fn rate_limit_message(resp: &ureq::Response) -> String {
+    match resp.header("Retry-After").and_then(|v| v.parse::<u64>().ok()) {
+        Some(secs) => format!("Anthropic usage API 請求過於頻繁，請於 {secs} 秒後再試"),
+        None => "Anthropic usage API 請求過於頻繁，請稍後再試".to_string(),
+    }
+}
+
+/// 429 限流時使用的特殊狀態，呼叫端應保留快取中的舊 snapshot 不覆蓋
+fn rate_limited_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
+    QuotaSnapshot {
+        provider: CLAUDE_PROVIDER.to_string(),
+        status: "rate_limited".to_string(),
+        source: "remote_api".to_string(),
+        fetched_at: current_timestamp(),
+        error_message: Some(error_message.into()),
+        windows: None,
+        local_tokens: None,
+        extra_credits: None,
+    }
+}
+
 /// Claude Code OAuth client ID (public PKCE client, same as Claude Code CLI)
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
@@ -239,6 +260,9 @@ impl QuotaAdapter for ClaudeAdapter {
                             Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
                                 return no_auth_snapshot("Token 刷新後仍被拒絕，請重新登入 Claude Code");
                             }
+                            Err(ureq::Error::Status(429, resp)) => {
+                                return rate_limited_snapshot(rate_limit_message(&resp));
+                            }
                             Err(e) => return error_snapshot(format!("usage API 錯誤: {e}")),
                         },
                         Err(e) => return no_auth_snapshot(format!("Token 刷新失敗: {e}")),
@@ -246,6 +270,9 @@ impl QuotaAdapter for ClaudeAdapter {
                 } else {
                     return no_auth_snapshot("Claude OAuth token 被拒絕，請重新登入 Claude Code (claude /login)");
                 }
+            }
+            Err(ureq::Error::Status(429, resp)) => {
+                return rate_limited_snapshot(rate_limit_message(&resp));
             }
             Err(e) => {
                 return error_snapshot(format!("Anthropic usage API 呼叫失敗: {e}"));
@@ -338,7 +365,7 @@ mod tests {
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
             enable_quota_monitoring: true,
-            quota_refresh_interval: 30,
+            quota_enabled_providers: crate::types::default_enabled_providers_all(),
         };
 
         let adapter = ClaudeAdapter;

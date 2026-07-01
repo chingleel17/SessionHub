@@ -32,7 +32,7 @@ impl QuotaManager {
             .iter()
             .filter(|a| {
                 settings
-                    .enabled_providers
+                    .quota_enabled_providers
                     .contains(&a.provider_key().to_string())
             })
             .map(|a| a.fetch_snapshot(settings))
@@ -49,7 +49,7 @@ impl QuotaManager {
             .find(|a| {
                 a.provider_key() == provider_key
                     && settings
-                        .enabled_providers
+                        .quota_enabled_providers
                         .contains(&a.provider_key().to_string())
             })
             .map(|a| a.fetch_snapshot(settings))

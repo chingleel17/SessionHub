@@ -67,6 +67,15 @@ pub(crate) fn default_enabled_providers() -> Vec<String> {
     ]
 }
 
+pub(crate) fn default_enabled_providers_all() -> Vec<String> {
+    vec![
+        CLAUDE_PROVIDER.to_string(),
+        COPILOT_PROVIDER.to_string(),
+        OPENCODE_PROVIDER.to_string(),
+        CODEX_PROVIDER.to_string(),
+    ]
+}
+
 pub(crate) fn default_claude_quota_reset_day() -> u8 {
     1
 }
@@ -180,8 +189,8 @@ pub(crate) struct AppSettings {
     pub(crate) minimize_to_tray: bool,
     #[serde(default = "default_true")]
     pub(crate) enable_quota_monitoring: bool,
-    #[serde(default = "default_quota_refresh_interval")]
-    pub(crate) quota_refresh_interval: u32,
+    #[serde(default = "default_enabled_providers_all")]
+    pub(crate) quota_enabled_providers: Vec<String>,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;
@@ -204,9 +213,6 @@ pub(crate) fn default_analytics_refresh_interval() -> u32 {
     30
 }
 
-pub(crate) fn default_quota_refresh_interval() -> u32 {
-    30
-}
 
 // ── Quota Snapshot 相關型別 ──────────────────────────────────────────────────
 

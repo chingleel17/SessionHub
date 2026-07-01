@@ -56,7 +56,7 @@ export type AppSettings = {
     claudeMonthlyLimitTokens?: number | null;
     claudeMonthlyLimitUsd?: number | null;
     enableQuotaMonitoring?: boolean;
-    quotaRefreshInterval?: 5 | 15 | 30 | 60;
+    quotaEnabledProviders?: string[];
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";
@@ -312,8 +312,8 @@ export type ExtraCredits = {
 
 export type QuotaSnapshot = {
     provider: string;
-    /** "ok" | "error" | "unsupported" | "no_auth" */
-    status: "ok" | "error" | "unsupported" | "no_auth";
+    /** "ok" | "error" | "unsupported" | "no_auth" | "rate_limited" */
+    status: "ok" | "error" | "unsupported" | "no_auth" | "rate_limited";
     /** "remote_api" | "local_scan" */
     source: "remote_api" | "local_scan";
     fetchedAt: string;

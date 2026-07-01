@@ -67,7 +67,6 @@ pub fn run() {
                     let settings = load_settings_internal().unwrap_or_else(|_| {
                         AppSettings {
                             enable_quota_monitoring: false,
-                            quota_refresh_interval: 30,
                             copilot_root: String::new(),
                             opencode_root: String::new(),
                             codex_root: String::new(),
@@ -87,6 +86,7 @@ pub fn run() {
                             show_status_bar: true,
                             analytics_refresh_interval: 30,
                             analytics_panel_collapsed: false,
+                            quota_enabled_providers: Vec::new(),
                         }
                     });
                     if settings.enable_quota_monitoring {
@@ -112,8 +112,9 @@ pub fn run() {
                         if !settings.enable_quota_monitoring {
                             continue;
                         }
-                        let interval_secs = settings.quota_refresh_interval as u64 * 60;
-                        if last_refresh.elapsed().as_secs() < interval_secs {
+                        // 固定每 30 分鐘刷新一次，避免與 Claude Code CLI 等工具同時打 API 撞到 429 限流
+                        const QUOTA_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
+                        if last_refresh.elapsed().as_secs() < QUOTA_REFRESH_INTERVAL_SECS {
                             continue;
                         }
                         last_refresh = std::time::Instant::now();

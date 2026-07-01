@@ -10,6 +10,7 @@ import type {
   ToolAvailability,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
+import { getProviderLabel } from "../utils/providerLabel";
 import {
   ArchiveIcon,
   CopyIcon,
@@ -59,21 +60,6 @@ type Props = {
 
 function getSessionTitle(session: SessionInfo) {
   return session.summary?.trim() || session.id;
-}
-
-function getProviderLabel(provider: string): string {
-  switch (provider) {
-    case "copilot":
-      return "Copilot";
-    case "opencode":
-      return "OpenCode";
-    case "codex":
-      return "Codex";
-    case "claude":
-      return "Claude Code";
-    default:
-      return provider;
-  }
 }
 
 function supportsSessionCommandCopy(provider: string): boolean {

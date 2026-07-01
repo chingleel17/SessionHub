@@ -64,6 +64,18 @@ fn spawn_gh(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Copilot quota_snapshots 物件內單一額度區塊的解析結果
+struct CopilotQuota {
+    remaining_percent: f64,
+    unlimited: bool,
+}
+
+fn parse_copilot_quota(obj: &serde_json::Value) -> Option<CopilotQuota> {
+    let unlimited = obj.get("unlimited").and_then(|v| v.as_bool()).unwrap_or(false);
+    let remaining_percent = obj.get("percent_remaining").and_then(|v| v.as_f64())?;
+    Some(CopilotQuota { remaining_percent, unlimited })
+}
+
 impl QuotaAdapter for CopilotAdapter {
     fn provider_key(&self) -> &str {
         COPILOT_PROVIDER
@@ -76,27 +88,22 @@ impl QuotaAdapter for CopilotAdapter {
             Err(e) => return no_auth_snapshot(format!("需要安裝並登入 gh CLI: {e}")),
         };
 
-        let username_json = match spawn_gh(&["api", "user", "--jq", ".login"]) {
-            Ok(u) if !u.is_empty() => u,
-            Ok(_) => return error_snapshot("failed to get GitHub username from gh api user"),
-            Err(e) => return error_snapshot(format!("failed to get GitHub user: {e}")),
-        };
-
-        let username = username_json.trim_matches('"');
-
-        let url = format!(
-            "https://api.github.com/users/{username}/settings/billing/ai_credit/usage"
-        );
-
-        let response = match ureq::get(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("Accept", "application/vnd.github+json")
-            .set("X-GitHub-Api-Version", "2022-11-28")
+        // 參考 costats 的做法：打 Copilot 內部 usage API，直接用 gh CLI 換來的一般
+        // OAuth token 嘗試（不要求使用者額外取得 Copilot 專用 token）
+        let response = match ureq::get("https://api.github.com/copilot_internal/user")
+            .set("Authorization", &format!("token {token}"))
+            .set("Accept", "application/json")
+            .set("User-Agent", "GitHubCopilotChat/0.26.7")
+            .set("Editor-Version", "vscode/1.96.2")
+            .set("Editor-Plugin-Version", "copilot-chat/0.26.7")
+            .set("X-GitHub-Api-Version", "2025-04-01")
             .call()
         {
             Ok(r) => r,
             Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-                return no_auth_snapshot("GitHub token invalid or insufficient scope");
+                return no_auth_snapshot(
+                    "GitHub token 無 Copilot 存取權限，請確認帳號已啟用 GitHub Copilot",
+                );
             }
             Err(ureq::Error::Status(404, _)) => {
                 return QuotaSnapshot {
@@ -104,50 +111,80 @@ impl QuotaAdapter for CopilotAdapter {
                     status: "unsupported".to_string(),
                     source: "remote_api".to_string(),
                     fetched_at: current_timestamp(),
-                    error_message: Some("Copilot AI credit billing API not available for this account".to_string()),
+                    error_message: Some(
+                        "此帳號無法使用 Copilot usage API（可能非 Copilot 訂閱帳號）".to_string(),
+                    ),
                     windows: None,
                     local_tokens: None,
                     extra_credits: None,
                 };
             }
             Err(e) => {
-                return error_snapshot(format!("failed to call GitHub billing API: {e}"));
+                return error_snapshot(format!("Copilot usage API 呼叫失敗: {e}"));
             }
         };
 
         let body: serde_json::Value = match response.into_json() {
             Ok(v) => v,
-            Err(e) => return error_snapshot(format!("failed to parse GitHub API response: {e}")),
+            Err(e) => return error_snapshot(format!("failed to parse Copilot API response: {e}")),
         };
 
-        // Parse AI credit usage
-        // GitHub API response fields may vary; try common field names
-        let included = body.get("included_dollars")
-            .or_else(|| body.get("total_included"))
-            .and_then(|v| v.as_f64());
-        let used = body.get("total_dollars_used")
-            .or_else(|| body.get("total_used"))
-            .and_then(|v| v.as_f64());
-        let reset_date = body.get("reset_date")
-            .or_else(|| body.get("next_billing_date"))
+        let quota_reset_at = body
+            .get("quota_reset_date_utc")
+            .or_else(|| body.get("quota_reset_date"))
             .and_then(|v| v.as_str())
             .map(str::to_string);
 
-        let window = match (included, used) {
-            (Some(inc), Some(u)) if inc > 0.0 => Some(QuotaWindow {
-                window_key: "ai_credits".to_string(),
-                label: "AI Credits".to_string(),
-                utilization: (u / inc * 100.0).min(100.0),
-                resets_at: reset_date,
-            }),
-            (Some(inc), Some(u)) => Some(QuotaWindow {
-                window_key: "ai_credits".to_string(),
-                label: "AI Credits".to_string(),
-                utilization: if u == 0.0 { 0.0 } else { 100.0 },
-                resets_at: reset_date,
-            }),
-            _ => None,
+        let snapshots = body.get("quota_snapshots");
+
+        // Pro/Business: premium_interactions 為主要額度，chat 為次要
+        // Free plan: chat 為主要額度，completions 為次要
+        let premium = snapshots.and_then(|s| s.get("premium_interactions")).and_then(parse_copilot_quota);
+        let chat = snapshots.and_then(|s| s.get("chat")).and_then(parse_copilot_quota);
+        let completions = snapshots.and_then(|s| s.get("completions")).and_then(parse_copilot_quota);
+
+        // Pro/Business 帳號：premium 為主要額度、chat 為次要
+        // Free 帳號（無 premium）：chat 為主要額度、completions 為次要
+        let (primary, primary_label, secondary, secondary_label) = match premium {
+            Some(q) if !q.unlimited => (Some(q), "Premium", chat.filter(|q| !q.unlimited), "Chat"),
+            _ => (
+                chat.filter(|q| !q.unlimited),
+                "Chat",
+                completions.filter(|q| !q.unlimited),
+                "Completions",
+            ),
         };
+
+        let mut windows = Vec::new();
+        if let Some(q) = primary {
+            windows.push(QuotaWindow {
+                window_key: "primary".to_string(),
+                label: primary_label.to_string(),
+                utilization: ((100.0 - q.remaining_percent) / 100.0).clamp(0.0, 1.0),
+                resets_at: quota_reset_at.clone(),
+            });
+        }
+        if let Some(q) = secondary {
+            windows.push(QuotaWindow {
+                window_key: "secondary".to_string(),
+                label: secondary_label.to_string(),
+                utilization: ((100.0 - q.remaining_percent) / 100.0).clamp(0.0, 1.0),
+                resets_at: quota_reset_at.clone(),
+            });
+        }
+
+        if windows.is_empty() {
+            return QuotaSnapshot {
+                provider: COPILOT_PROVIDER.to_string(),
+                status: "unsupported".to_string(),
+                source: "remote_api".to_string(),
+                fetched_at: current_timestamp(),
+                error_message: Some("Copilot 回應中沒有可用的額度資料（可能為無限方案）".to_string()),
+                windows: None,
+                local_tokens: None,
+                extra_credits: None,
+            };
+        }
 
         QuotaSnapshot {
             provider: COPILOT_PROVIDER.to_string(),
@@ -155,7 +192,7 @@ impl QuotaAdapter for CopilotAdapter {
             source: "remote_api".to_string(),
             fetched_at: current_timestamp(),
             error_message: None,
-            windows: window.map(|w| vec![w]),
+            windows: Some(windows),
             local_tokens: None,
             extra_credits: None,
         }
@@ -190,7 +227,7 @@ mod tests {
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
             enable_quota_monitoring: true,
-            quota_refresh_interval: 30,
+            quota_enabled_providers: crate::types::default_enabled_providers_all(),
         };
 
         let adapter = CopilotAdapter;

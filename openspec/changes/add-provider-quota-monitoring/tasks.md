@@ -67,7 +67,7 @@
   - `CopilotAdapter::fetch_snapshot()` 在 gh CLI 不存在時回傳 `status: "no_auth"`
   - quota snapshot 快取：寫入後可從記憶體讀回；SQLite save → reload 後資料一致
   - `QuotaManager` 只對 enabledProviders 中的 provider 呼叫 adapter
-- [ ] 5.2 手動驗證前端流程：
+- [x] 5.2 手動驗證前端流程：
   - 開啟設定頁，確認 quota monitoring toggle 與 refresh interval 下拉存在且可儲存
   - 開啟 Dashboard，確認 quota overview 區塊出現並顯示至少一個 provider 的資料（或正確的 no_auth / error 狀態）
   - 點擊手動刷新，確認 `fetched_at` 更新

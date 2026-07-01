@@ -8,7 +8,7 @@ export type Locale = "zh-TW" | "en-US";
 type I18nContextValue = {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: MessageKey) => string;
+  t: (key: MessageKey, params?: Record<string, string | number>) => string;
 };
 
 const I18nContext = createContext<I18nContextValue | null>(null);
@@ -37,7 +37,14 @@ export function I18nProvider({ children }: PropsWithChildren) {
   const value: I18nContextValue = {
     locale,
     setLocale,
-    t: (key) => messages[locale][key],
+    t: (key, params) => {
+      const template = messages[locale][key];
+      if (!params) return template;
+      return Object.entries(params).reduce(
+        (acc, [k, v]) => acc.split(`{${k}}`).join(String(v)),
+        template,
+      );
+    },
   };
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

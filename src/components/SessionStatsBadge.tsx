@@ -50,7 +50,7 @@ export function SessionStatsBadge({
   onOpenTodos,
 }: Props) {
   const { t } = useI18n();
-  const hasStats = Boolean(stats && (stats.outputTokens > 0 || stats.interactionCount > 0 || stats.durationMinutes > 0));
+  const hasStats = Boolean(stats && (stats.outputTokens > 0 || stats.inputTokens > 0 || stats.interactionCount > 0 || stats.durationMinutes > 0));
 
   const todoCounts = todos.reduce<Record<string, number>>((acc, todo) => {
     const key = todo.status?.trim() || "pending";
@@ -87,7 +87,7 @@ export function SessionStatsBadge({
       {hasStats && stats ? (
         <>
           <span className="stats-badge">{formatCompactNumber(stats.interactionCount)} {t("stats.turns")}</span>
-          <span className="stats-badge">{formatCompactNumber(stats.outputTokens)} {t("stats.tokens")}</span>
+          <span className="stats-badge">{formatCompactNumber(stats.outputTokens + stats.inputTokens)} {t("stats.tokens")}</span>
           <span className="stats-badge">{formatDuration(stats.durationMinutes)}</span>
           {stats.isLive ? <span className="stats-badge stats-badge-live"><span className="stats-badge-live-dot" />LIVE</span> : null}
         </>

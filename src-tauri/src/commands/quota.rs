@@ -152,23 +152,39 @@ pub fn refresh_quota(
         None => manager.refresh_all(&settings),
     };
 
-    // Remove snapshots for providers that are no longer enabled
+    // Remove snapshots for providers that are no longer enabled for quota monitoring
     if provider.is_none() {
         let cached = read_snapshots_from_cache(&quota_cache)?;
         for snap in &cached {
-            if !settings.enabled_providers.contains(&snap.provider) {
+            if !settings.quota_enabled_providers.contains(&snap.provider) {
                 let _ = remove_provider_from_cache_and_db(&conn, &quota_cache, &snap.provider);
             }
         }
     }
 
     for snapshot in &snapshots {
+        // 429 限流時保留快取中的舊 snapshot，不用這次的暫時性錯誤覆蓋畫面
+        if snapshot.status == "rate_limited" {
+            continue;
+        }
         let _ = write_snapshot_to_cache_and_db(&conn, &quota_cache, snapshot);
     }
 
     let _ = app.emit("quota-snapshots-updated", ());
 
-    read_snapshots_from_cache(&quota_cache)
+    // 回傳值以快取為底，但疊加本次遇到的 rate_limited 狀態，讓前端能提示使用者
+    let mut result = read_snapshots_from_cache(&quota_cache)?;
+    for snapshot in &snapshots {
+        if snapshot.status == "rate_limited" {
+            if let Some(existing) = result.iter_mut().find(|s| s.provider == snapshot.provider) {
+                existing.status = "rate_limited".to_string();
+                existing.error_message = snapshot.error_message.clone();
+            } else {
+                result.push(snapshot.clone());
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub(crate) fn refresh_quota_internal(
@@ -192,6 +208,9 @@ pub(crate) fn refresh_quota_internal(
     };
 
     for snapshot in &snapshots {
+        if snapshot.status == "rate_limited" {
+            continue;
+        }
         let _ = write_snapshot_to_cache_and_db(&conn, quota_cache, snapshot);
     }
 

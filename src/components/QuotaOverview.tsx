@@ -1,30 +1,41 @@
 import { useState } from "react";
+import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../locales/zh-TW";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function formatResetCountdown(resetsAt: string | null | undefined): string {
+function formatResetCountdown(
+  resetsAt: string | null | undefined,
+  dayUnit: string,
+  hourUnit: string,
+  minuteUnit: string,
+  resetDoneLabel: string,
+): string {
   if (!resetsAt) return "";
   const diffMs = new Date(resetsAt).getTime() - Date.now();
-  if (diffMs <= 0) return "已重置";
+  if (diffMs <= 0) return resetDoneLabel;
   const totalMins = Math.floor(diffMs / 60000);
   const days = Math.floor(totalMins / 1440);
   const hours = Math.floor((totalMins % 1440) / 60);
   const mins = totalMins % 60;
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+  if (days > 0) return `${days}${dayUnit}${hours}${hourUnit}`;
+  if (hours > 0) return `${hours}${hourUnit}${mins}${minuteUnit}`;
+  return `${mins}${minuteUnit}`;
 }
 
-function formatResetDateTime(resetsAt: string | null | undefined): string {
+function formatResetDateTime(resetsAt: string | null | undefined, amLabel: string, pmLabel: string): string {
   if (!resetsAt) return "";
   try {
     const d = new Date(resetsAt);
     const MM = String(d.getMonth() + 1).padStart(2, "0");
     const DD = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
+    const rawHours = d.getHours();
+    const period = rawHours < 12 ? amLabel : pmLabel;
+    const hours12 = rawHours % 12 === 0 ? 12 : rawHours % 12;
+    const hh = String(hours12).padStart(2, "0");
     const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${MM}/${DD} ${hh}:${mm}`;
+    return `${MM}/${DD} ${period}${hh}:${mm}`;
   } catch {
     return "";
   }
@@ -54,15 +65,17 @@ function barColor(pct: number): string {
   return "var(--quota-bar-ok)";
 }
 
-// window key → display label
-function windowLabel(key: string): string {
-  const map: Record<string, string> = {
-    five_hour: "Session",
-    seven_day: "Weekly",
-    seven_day_sonnet: "Weekly · Sonnet",
-    seven_day_opus: "Weekly · Opus",
+// window key → i18n key（統一以時間週期呈現，不分 provider）
+function windowLabelKey(key: string): MessageKey {
+  const map: Record<string, MessageKey> = {
+    five_hour: "quota.window.fiveHour",
+    primary: "quota.window.fiveHour",
+    seven_day: "quota.window.sevenDay",
+    secondary: "quota.window.sevenDay",
+    seven_day_sonnet: "quota.window.sevenDaySonnet",
+    seven_day_opus: "quota.window.sevenDayOpus",
   };
-  return map[key] ?? key;
+  return map[key] ?? "quota.window.fiveHour";
 }
 
 // provider display name
@@ -89,18 +102,25 @@ function UtilisationBar({ pct }: { pct: number }) {
 }
 
 function WindowRow({ w }: { w: QuotaWindow }) {
+  const { t } = useI18n();
   const pct = w.utilization;
-  const countdown = formatResetCountdown(w.resetsAt);
-  const datetime = formatResetDateTime(w.resetsAt);
+  const countdown = formatResetCountdown(
+    w.resetsAt,
+    t("quota.unit.day"),
+    t("quota.unit.hour"),
+    t("quota.unit.minute"),
+    t("quota.resetDone"),
+  );
+  const datetime = formatResetDateTime(w.resetsAt, t("quota.period.am"), t("quota.period.pm"));
   return (
     <div className="qo-window" data-key={w.windowKey}>
-      <div className="qo-window-label">{windowLabel(w.windowKey)}</div>
+      <div className="qo-window-label">{t(windowLabelKey(w.windowKey))}</div>
       <UtilisationBar pct={pct} />
       <div className="qo-window-meta">
-        <span className="qo-pct">{Math.round(pct * 100)}% used</span>
+        <span className="qo-pct">{t("quota.usedPct", { pct: Math.round(pct * 100) })}</span>
         {countdown ? (
           <span className="qo-reset" title={datetime || undefined}>
-            Resets in {countdown}
+            {t("quota.resetsIn", { countdown })}
             {datetime ? <span className="qo-reset-datetime"> · {datetime}</span> : null}
           </span>
         ) : null}
@@ -110,6 +130,7 @@ function WindowRow({ w }: { w: QuotaWindow }) {
 }
 
 function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
+  const { t } = useI18n();
   const isOk = snap.status === "ok";
   const windows = snap.windows ?? [];
 
@@ -120,11 +141,11 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
         <div className="qo-panel-title-row">
           <span className="qo-panel-name">{PROVIDER_LABELS[snap.provider] ?? snap.provider}</span>
           <span className={`qo-source-badge qo-source-badge--${snap.source}`}>
-            {snap.source === "remote_api" ? "API" : "本地估算"}
+            {t(snap.source === "remote_api" ? "quota.monitoring.source.remote_api" : "quota.monitoring.source.local_scan")}
           </span>
         </div>
         <div className="qo-panel-sub">
-          {snap.fetchedAt ? `Updated ${formatAge(snap.fetchedAt)}` : ""}
+          {snap.fetchedAt ? t("quota.updated", { age: formatAge(snap.fetchedAt) }) : ""}
         </div>
       </div>
 
@@ -143,7 +164,7 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
       {isOk && snap.source === "local_scan" && snap.localTokens ? (
         <div className="qo-local">
           <div className="qo-local-row">
-            <span className="qo-local-label">本月用量（估算）</span>
+            <span className="qo-local-label">{t("quota.monitoring.localUsage")}</span>
             <span className="qo-local-value">
               {formatTokens(snap.localTokens.inputTokens + snap.localTokens.outputTokens)} tok
             </span>
@@ -156,7 +177,7 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
       {isOk && snap.extraCredits?.isEnabled ? (
         <div className="qo-extra">
           <div className="qo-extra-row">
-            <span className="qo-extra-label">超額用量</span>
+            <span className="qo-extra-label">{t("quota.extraUsage")}</span>
             <span className="qo-extra-value">
               ${snap.extraCredits.usedCredits.toFixed(2)}
               {snap.extraCredits.monthlyLimit
@@ -169,10 +190,10 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
 
       {/* error / auth states */}
       {snap.status === "no_auth" ? (
-        <p className="qo-hint">請登入 {PROVIDER_LABELS[snap.provider] ?? snap.provider}</p>
+        <p className="qo-hint">{t("quota.pleaseLogin", { provider: PROVIDER_LABELS[snap.provider] ?? snap.provider })}</p>
       ) : null}
       {snap.status === "unsupported" ? (
-        <p className="qo-hint qo-hint--muted">不支援 quota 查詢</p>
+        <p className="qo-hint qo-hint--muted">{t("quota.unsupportedHint")}</p>
       ) : null}
       {snap.status === "error" && snap.errorMessage ? (
         <p className="qo-hint qo-hint--error" title={snap.errorMessage}>
@@ -194,6 +215,7 @@ interface Props {
 const STORAGE_KEY = "quota-overview-active-provider";
 
 export function QuotaOverview({ snapshots, onRefresh, onRefreshProvider }: Props) {
+  const { t } = useI18n();
   const visible = snapshots.filter(
     (s) => s.status !== "unsupported" || s.source !== "remote_api"
   );
@@ -255,7 +277,7 @@ export function QuotaOverview({ snapshots, onRefresh, onRefreshProvider }: Props
             onRefreshProvider?.(active.provider);
             onRefresh?.();
           }}
-          title="重新整理此 provider"
+          title={t("quota.refreshProvider")}
         >
           ↻
         </button>

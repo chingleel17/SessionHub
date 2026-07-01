@@ -3,7 +3,6 @@ import type {
   AppSettings,
   ProviderIntegrationState,
   ProviderIntegrationStatus,
-  QuotaSnapshot,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 
@@ -23,7 +22,6 @@ type Props = {
   pendingProviderAction: string | null;
   onOpenEventMonitor: () => void;
   jqAvailable?: boolean | null;
-  quotaSnapshots?: QuotaSnapshot[];
   onRefreshQuota?: (provider?: string) => void;
 };
 
@@ -133,7 +131,6 @@ export function SettingsView({
   pendingProviderAction,
   onOpenEventMonitor,
   jqAvailable,
-  quotaSnapshots = [],
   onRefreshQuota,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
@@ -577,57 +574,6 @@ export function SettingsView({
                     </div>
                   ) : null}
 
-                  {(settingsForm.enableQuotaMonitoring ?? true) ? (() => {
-                    const snap = quotaSnapshots.find((s) => s.provider === integration.provider);
-                    if (!snap) return null;
-                    return (
-                      <div className="provider-quota-inline">
-                        <div className="provider-quota-inline-header">
-                          <span className={`quota-status-chip quota-status--${snap.status}`}>
-                            quota: {t(`quota.monitoring.status.${snap.status}` as Parameters<typeof t>[0])}
-                          </span>
-                          <span className="quota-source-badge">
-                            {t(`quota.monitoring.source.${snap.source}` as Parameters<typeof t>[0])}
-                            {snap.source === "local_scan" && snap.provider === "opencode"
-                              ? "（各 AI 供應商合計）"
-                              : null}
-                          </span>
-                          {snap.fetchedAt ? (
-                            <span className="quota-fetched-at">
-                              {formatDateTime(snap.fetchedAt, locale)}
-                            </span>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="ghost-button ghost-button--sm"
-                            onClick={() => onRefreshQuota?.(integration.provider)}
-                          >
-                            {t("quota.monitoring.manualRefresh")}
-                          </button>
-                        </div>
-                        {snap.status === "ok" && snap.windows && snap.windows.length > 0 ? (
-                          <div className="provider-quota-windows">
-                            {snap.windows.map((w) => (
-                              <span key={w.windowKey} className="provider-quota-window-chip">
-                                {w.label}: {Math.round(w.utilization * 100)}%
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                        {snap.status === "ok" && snap.source === "local_scan" && snap.localTokens ? (
-                          <span className="provider-quota-local">
-                            {((snap.localTokens.inputTokens + snap.localTokens.outputTokens) / 1000).toFixed(0)}k tok ·{" "}
-                            {snap.localTokens.periodLabel}
-                          </span>
-                        ) : null}
-                        {snap.errorMessage ? (
-                          <p className="provider-quota-error" title={snap.errorMessage}>
-                            {snap.errorMessage}
-                          </p>
-                        ) : null}
-                      </div>
-                    );
-                  })() : null}
                 </article>
               );
             })}
@@ -663,25 +609,29 @@ export function SettingsView({
 
             {(settingsForm.enableQuotaMonitoring ?? true) ? (
               <div className="settings-field">
-                <label htmlFor="quota-refresh-interval-select">
-                  {t("quota.monitoring.refreshInterval")}
-                </label>
-                <select
-                  id="quota-refresh-interval-select"
-                  className="settings-select"
-                  value={settingsForm.quotaRefreshInterval ?? 30}
-                  onChange={(event) =>
-                    onFormChange({
-                      ...settingsForm,
-                      quotaRefreshInterval: Number(event.currentTarget.value) as 5 | 15 | 30 | 60,
-                    })
-                  }
-                >
-                  <option value="5">5 {t("quota.monitoring.refreshIntervalUnit")}</option>
-                  <option value="15">15 {t("quota.monitoring.refreshIntervalUnit")}</option>
-                  <option value="30">30 {t("quota.monitoring.refreshIntervalUnit")}</option>
-                  <option value="60">60 {t("quota.monitoring.refreshIntervalUnit")}</option>
-                </select>
+                <label>{t("quota.monitoring.perProvider")}</label>
+                <div className="quota-provider-toggle-list">
+                  {(["claude", "copilot", "codex", "opencode"] as const).map((provider) => {
+                    const enabledProviders =
+                      settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"];
+                    const checked = enabledProviders.includes(provider);
+                    return (
+                      <label key={provider} className="checkbox-group checkbox-group--inline">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const next = event.currentTarget.checked
+                              ? [...enabledProviders, provider]
+                              : enabledProviders.filter((p) => p !== provider);
+                            onFormChange({ ...settingsForm, quotaEnabledProviders: next });
+                          }}
+                        />
+                        <span>{providerLabels[provider]}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
           </div>

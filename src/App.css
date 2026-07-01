@@ -967,6 +967,17 @@ textarea {
   margin-top: 2px;
 }
 
+.quota-provider-toggle-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-top: 6px;
+}
+
+.checkbox-group--inline {
+  min-width: 120px;
+}
+
 .checkbox-group-path {
   flex: 1;
   min-width: 0;
@@ -2336,11 +2347,21 @@ textarea {
 }
 
 /* Filter bar inside ProjectView */
+.filter-bar-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
 .filter-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .filter-bar-actions {
@@ -2348,6 +2369,21 @@ textarea {
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.filter-toggle-btn--active {
+  border-color: var(--color-action-primary-subtle-border);
+  color: var(--color-action-primary);
+}
+
+.filter-toggle-chevron {
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+
+.filter-toggle-chevron--open {
+  transform: rotate(180deg);
 }
 
 .hidden-count-hint {
@@ -4810,18 +4846,26 @@ textarea {
 
 .global-status-bar-quota-bar {
   display: inline-block;
-  width: 36px;
-  height: 4px;
+  width: 48px;
+  height: 5px;
   background: var(--color-border);
-  border-radius: 2px;
+  border-radius: 3px;
   overflow: hidden;
   vertical-align: middle;
 }
 
 .global-status-bar-quota-fill {
+  display: block;
   height: 100%;
+  min-width: 2px;
   background: var(--color-green, #3fb950);
   transition: width 0.3s ease;
+}
+
+.global-status-bar-quota--snapshots {
+  padding-left: 8px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border-color);
 }
 
 .global-status-bar-count {

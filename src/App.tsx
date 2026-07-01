@@ -1690,7 +1690,13 @@ function App() {
 
   const handleRefreshQuota = useCallback((provider?: string) => {
     void invoke<QuotaSnapshot[]>("refresh_quota", { provider: provider ?? null })
-      .then(() => queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] }))
+      .then((snapshots) => {
+        const rateLimited = snapshots.find((s) => s.status === "rate_limited");
+        if (rateLimited) {
+          showToast(rateLimited.errorMessage ?? t("quota.rateLimited"));
+        }
+        return queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
+      })
       .catch(() => null);
   }, [queryClient]);
 
@@ -1874,7 +1880,6 @@ function App() {
               pendingProviderAction={pendingProviderAction}
               onOpenEventMonitor={() => setShowEventMonitor(true)}
               jqAvailable={jqAvailableQuery.data ?? null}
-              quotaSnapshots={quotaSnapshotQuery.data ?? []}
               onRefreshQuota={handleRefreshQuota}
             />
           ) : null}

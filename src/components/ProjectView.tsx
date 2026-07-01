@@ -22,6 +22,9 @@ import { PlansSpecsView } from "./PlansSpecsView";
 import { ProjectStatsBanner } from "./ProjectStatsBanner";
 import { SessionCard } from "./SessionCard";
 import { SessionTodosTab } from "./SessionTodosTab";
+import { getProviderLabel } from "../utils/providerLabel";
+
+const FILTER_EXPANDED_STORAGE_KEY = "sessionFilterExpanded";
 
 type SessionUpdatedRange = "all" | "week" | "month";
 
@@ -215,6 +218,17 @@ export function ProjectView({
   const [selectedUpdatedRange, setSelectedUpdatedRange] = useState<SessionUpdatedRange>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [openLauncherSessionId, setOpenLauncherSessionId] = useState<string | null>(null);
+  const [isFilterExpanded, setIsFilterExpanded] = useState(() => {
+    return window.localStorage.getItem(FILTER_EXPANDED_STORAGE_KEY) === "true";
+  });
+
+  const handleToggleFilterExpanded = useCallback(() => {
+    setIsFilterExpanded((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(FILTER_EXPANDED_STORAGE_KEY, String(next));
+      return next;
+    });
+  }, []);
 
   const handleToggleLauncher = useCallback((sessionId: string) => {
     setOpenLauncherSessionId((prev) => prev === sessionId ? null : sessionId);
@@ -399,76 +413,16 @@ export function ProjectView({
           {activeSubTab === "sessions" ? (
             <div className="sticky-filter-header">
               <section className="toolbar-card">
-                <ProjectStatsBanner
-                  sessions={filteredSessions}
-                  sessionStats={sessionStats}
-                  sessionStatsLoading={sessionStatsLoading}
-                />
-
-                <div className="filter-bar">
-                  <label className="field-group compact-field" style={{ flex: 2, minWidth: "160px" }}>
-                    <span>{t("session.search")}</span>
-                    <input
-                      value={searchTerm}
-                      onChange={(event) => setSearchTerm(event.currentTarget.value)}
-                      placeholder={t("session.searchPlaceholder")}
-                    />
-                  </label>
-
-                  <label className="field-group compact-field">
-                    <span>{t("session.sort")}</span>
-                    <select
-                      value={sortKey}
-                      onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
-                    >
-                      <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
-                      <option value="createdAt">{t("session.sortCreatedAt")}</option>
-                      <option value="summaryCount">{t("session.sortSummaryCount")}</option>
-                      <option value="summary">{t("session.sortSummary")}</option>
-                    </select>
-                  </label>
-
-                  <label className="field-group compact-field">
-                    <span>{t("session.filter.updatedRange")}</span>
-                    <select
-                      value={selectedUpdatedRange}
-                      onChange={(event) => setSelectedUpdatedRange(event.currentTarget.value as SessionUpdatedRange)}
-                    >
-                      <option value="all">{t("session.filter.updatedRange.all")}</option>
-                      <option value="week">{t("session.filter.updatedRange.week")}</option>
-                      <option value="month">{t("session.filter.updatedRange.month")}</option>
-                    </select>
-                  </label>
-
-                  <label className="checkbox-group compact-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={showArchived}
-                      onChange={(event) => onToggleArchived(event.currentTarget.checked)}
-                    />
-                    <span>{t("project.showArchivedToggle")}</span>
-                  </label>
-
-                  <label className="checkbox-group compact-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={hideEmptySessions}
-                      onChange={(event) => onHideEmptySessionsChange(event.currentTarget.checked)}
-                    />
-                    <span>
-                      {t("session.filter.hideEmpty")}
-                      {hideEmptySessions && hiddenCount > 0 ? (
-                        <span className="hidden-count-hint">
-                          {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
-                        </span>
-                      ) : null}
-                    </span>
-                  </label>
+                <div className="filter-bar-summary">
+                  <ProjectStatsBanner
+                    sessions={filteredSessions}
+                    sessionStats={sessionStats}
+                    sessionStatsLoading={sessionStatsLoading}
+                  />
 
                   <div className="filter-bar-actions">
                     {availableProviders.length > 1 ? (
                       <>
-                        <span className="session-meta-label">{t("session.providerFilter")}</span>
                         {availableProviders.map((provider) => {
                           const isActive = selectedProviders.length === 0 || selectedProviders.includes(provider);
                           return (
@@ -490,13 +444,7 @@ export function ProjectView({
                                 })
                               }
                             >
-                              {provider === "copilot"
-                                ? "Copilot"
-                                : provider === "opencode"
-                                  ? "OpenCode"
-                                  : provider === "codex"
-                                    ? "Codex"
-                                    : provider}
+                              {getProviderLabel(provider)}
                             </button>
                           );
                         })}
@@ -523,8 +471,78 @@ export function ProjectView({
                     >
                       <DeleteIcon size={16} />
                     </button>
+
+                    <button
+                      type="button"
+                      className={`icon-button filter-toggle-btn ${isFilterExpanded ? "filter-toggle-btn--active" : ""}`}
+                      title={t("session.filter.toggle")}
+                      aria-label={t("session.filter.toggle")}
+                      aria-expanded={isFilterExpanded}
+                      onClick={handleToggleFilterExpanded}
+                    >
+                      <span className={`filter-toggle-chevron ${isFilterExpanded ? "filter-toggle-chevron--open" : ""}`}>▾</span>
+                    </button>
                   </div>
                 </div>
+
+                {isFilterExpanded ? (
+                  <div className="filter-bar">
+                    <label className="field-group compact-field" style={{ flex: 2, minWidth: "160px" }}>
+                      <span>{t("session.search")}</span>
+                      <input
+                        value={searchTerm}
+                        onChange={(event) => setSearchTerm(event.currentTarget.value)}
+                        placeholder={t("session.searchPlaceholder")}
+                      />
+                    </label>
+
+                    <label className="field-group compact-field">
+                      <span>{t("session.sort")}</span>
+                      <select
+                        value={sortKey}
+                        onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
+                      >
+                        <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
+                        <option value="createdAt">{t("session.sortCreatedAt")}</option>
+                        <option value="summaryCount">{t("session.sortSummaryCount")}</option>
+                        <option value="summary">{t("session.sortSummary")}</option>
+                      </select>
+                    </label>
+
+                    <label className="field-group compact-field">
+                      <span>{t("session.filter.updatedRange")}</span>
+                      <select
+                        value={selectedUpdatedRange}
+                        onChange={(event) => setSelectedUpdatedRange(event.currentTarget.value as SessionUpdatedRange)}
+                      >
+                        <option value="all">{t("session.filter.updatedRange.all")}</option>
+                        <option value="week">{t("session.filter.updatedRange.week")}</option>
+                        <option value="month">{t("session.filter.updatedRange.month")}</option>
+                      </select>
+                    </label>
+
+                    <button
+                      type="button"
+                      className={`tag-filter-chip ${showArchived ? "active" : ""}`}
+                      onClick={() => onToggleArchived(!showArchived)}
+                    >
+                      {t("project.showArchivedToggle")}
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`tag-filter-chip ${hideEmptySessions ? "active" : ""}`}
+                      onClick={() => onHideEmptySessionsChange(!hideEmptySessions)}
+                    >
+                      {t("session.filter.hideEmpty")}
+                      {hideEmptySessions && hiddenCount > 0 ? (
+                        <span className="hidden-count-hint">
+                          {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                ) : null}
               </section>
 
               {availableTags.length > 0 ? (

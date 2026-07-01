@@ -25,8 +25,23 @@ const PROVIDER_ABBR: Record<string, string> = {
   claude: "CC",
   copilot: "GH",
   opencode: "OC",
-  codex: "DX",
+  codex: "CX",
 };
+
+// provider 品牌代表色（用於縮寫文字上色，不使用商標圖形）
+const PROVIDER_COLOR: Record<string, string> = {
+  claude: "#D97757",
+  copilot: "#57ab5a",
+  opencode: "#8957e5",
+  codex: "#10a37f",
+};
+
+// utilisation 0-100 → bar colour token（與 QuotaOverview 的 barColor 門檻/色票一致）
+function quotaBarColor(pct: number): string {
+  if (pct >= 90) return "var(--quota-bar-danger)";
+  if (pct >= 70) return "var(--quota-bar-warning)";
+  return "var(--quota-bar-ok)";
+}
 
 function truncateCwd(cwd: string, maxLen = 40): string {
   if (cwd.length <= maxLen) return cwd;
@@ -60,12 +75,16 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
     .filter(Boolean)
     .join("\n");
 
+  const limitPct = hasLimit ? Math.min(100, (totalTokens / quota.monthlyLimitTokens!) * 100) : 0;
+
   return (
     <span
       className="global-status-bar-quota-chip"
       title={tooltipLines}
     >
-      <span className="global-status-bar-quota-abbr">{abbr}</span>
+      <span className="global-status-bar-quota-abbr" style={{ color: PROVIDER_COLOR[quota.provider] }}>
+        {abbr}
+      </span>
       {hasCost && (
         <span className="global-status-bar-quota-cost">${quota.costUsd.toFixed(2)}</span>
       )}
@@ -74,7 +93,8 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
           <span
             className="global-status-bar-quota-fill"
             style={{
-              width: `${Math.min(100, (totalTokens / quota.monthlyLimitTokens!) * 100).toFixed(1)}%`,
+              width: `${limitPct.toFixed(1)}%`,
+              background: quotaBarColor(limitPct),
             }}
           />
         </span>
@@ -83,28 +103,35 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
   );
 }
 
-function formatResetDateTime(iso: string | null | undefined): string {
+function formatResetDateTime(iso: string | null | undefined, amLabel: string, pmLabel: string): string {
   if (!iso) return "";
   try {
     const d = new Date(iso);
     const MM = String(d.getMonth() + 1).padStart(2, "0");
     const DD = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
+    const rawHours = d.getHours();
+    const period = rawHours < 12 ? amLabel : pmLabel;
+    const hours12 = rawHours % 12 === 0 ? 12 : rawHours % 12;
+    const hh = String(hours12).padStart(2, "0");
     const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${MM}/${DD} ${hh}:${mm}`;
+    return `${MM}/${DD} ${period}${hh}:${mm}`;
   } catch {
     return iso;
   }
 }
 
-function QuotaSnapshotChip({ snap }: { snap: QuotaSnapshot }) {
+function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel }: { snap: QuotaSnapshot; amLabel: string; pmLabel: string; resetsLabel: string }) {
   const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
-  const topWindow = snap.windows?.[0];
+  const windows = snap.windows ?? [];
+  const topWindow = windows[0];
   const pct = topWindow ? Math.round(topWindow.utilization * 100) : null;
   const tooltip = [
     `${snap.provider} · ${snap.source}`,
-    topWindow ? `${topWindow.label}: ${pct}%` : null,
-    topWindow?.resetsAt ? `Resets: ${formatResetDateTime(topWindow.resetsAt)}` : null,
+    ...windows.map((w) => {
+      const wPct = Math.round(w.utilization * 100);
+      const reset = w.resetsAt ? ` · ${resetsLabel}: ${formatResetDateTime(w.resetsAt, amLabel, pmLabel)}` : "";
+      return `${w.label}: ${wPct}%${reset}`;
+    }),
   ].filter(Boolean).join("\n");
 
   return (
@@ -112,13 +139,15 @@ function QuotaSnapshotChip({ snap }: { snap: QuotaSnapshot }) {
       className="global-status-bar-quota-chip global-status-bar-quota-chip--snapshot"
       title={tooltip}
     >
-      <span className="global-status-bar-quota-abbr">{abbr}</span>
+      <span className="global-status-bar-quota-abbr" style={{ color: PROVIDER_COLOR[snap.provider] }}>
+        {abbr}
+      </span>
       {pct !== null ? (
         <>
           <span className="global-status-bar-quota-bar">
             <span
               className="global-status-bar-quota-fill"
-              style={{ width: `${Math.min(pct, 100)}%` }}
+              style={{ width: `${Math.min(pct, 100)}%`, background: quotaBarColor(pct) }}
             />
           </span>
           <span className="global-status-bar-quota-cost">{pct}%</span>
@@ -218,7 +247,13 @@ export function StatusBar({
           {quotaSnapshots
             .filter((s) => s.status === "ok" && s.source === "remote_api")
             .map((s) => (
-              <QuotaSnapshotChip key={s.provider} snap={s} />
+              <QuotaSnapshotChip
+                key={s.provider}
+                snap={s}
+                amLabel={t("quota.period.am")}
+                pmLabel={t("quota.period.pm")}
+                resetsLabel={t("quota.resetsLabel")}
+              />
             ))}
         </div>
       )}
