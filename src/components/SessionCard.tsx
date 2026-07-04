@@ -40,6 +40,7 @@ type Props = {
   onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
+  onEditTag: (session: SessionInfo, tag: string, tagIndex: number) => void;
   onOpenPlan: (session: SessionInfo) => void;
   onOpenTodos: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
@@ -72,6 +73,7 @@ export function SessionCard({
   onCopyCommand,
   onEditNotes,
   onEditTags,
+  onEditTag,
   onOpenPlan,
   onOpenTodos,
   onArchive,
@@ -157,10 +159,17 @@ export function SessionCard({
           {activityStatusCls && activityLabel ? (
             <span className={activityStatusCls}>{activityLabel}</span>
           ) : null}
-          {session.tags.map((tag) => (
-            <span key={tag} className="session-chip tag-chip">
+          {session.tags.map((tag, tagIndex) => (
+            <button
+              key={`${session.id}:${tag}:${tagIndex}`}
+              type="button"
+              className="session-chip session-chip-button tag-chip tag-chip-button"
+              onClick={() => onEditTag(session, tag, tagIndex)}
+              title={t("session.actions.editTags")}
+              aria-label={`${t("session.actions.editTags")}: #${tag}`}
+            >
               #{tag}
-            </span>
+            </button>
           ))}
         </div>
       </div>
@@ -185,9 +194,15 @@ export function SessionCard({
       </div>
 
       {session.notes ? (
-        <p className="session-notes">
+        <button
+          type="button"
+          className="session-notes session-notes-button"
+          onClick={() => onEditNotes(session)}
+          title={t("session.actions.editNotes")}
+          aria-label={t("session.actions.editNotes")}
+        >
           <strong>{t("session.notes")}</strong> {session.notes}
-        </p>
+        </button>
       ) : null}
 
       <div className="session-actions">

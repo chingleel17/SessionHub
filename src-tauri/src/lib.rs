@@ -1592,6 +1592,14 @@ mod tests {
             openspec_dir
                 .join("changes")
                 .join("feature-b")
+                .join(".openspec.yaml"),
+            "created: 2026-07-02\n",
+        )
+        .expect("write change yaml");
+        fs::write(
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
                 .join("proposal.md"),
             "# Proposal",
         )
@@ -1637,6 +1645,7 @@ mod tests {
         assert!(data.active_changes[0].has_proposal);
         assert!(!data.active_changes[0].has_design);
         assert!(data.active_changes[0].has_tasks);
+        assert_eq!(data.active_changes[0].created_at.as_deref(), Some("2026-07-02"));
         assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.done), Some(0));
         assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.total), Some(1));
         assert_eq!(data.active_changes[0].specs_count, 1);
@@ -1680,6 +1689,23 @@ mod tests {
                 .to_string_lossy()
                 .to_string()
         );
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
+    fn scan_openspec_falls_back_to_filesystem_created_time_when_yaml_missing() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-project-fallback-created-at");
+        let change_dir = project_dir.join("openspec").join("changes").join("feature-fallback");
+
+        fs::create_dir_all(&change_dir).expect("create change dir");
+
+        let data = scan_openspec_internal(&project_dir);
+
+        assert_eq!(data.active_changes.len(), 1);
+        assert_eq!(data.active_changes[0].name, "feature-fallback");
+        assert!(data.active_changes[0].created_at.is_some());
 
         fs::remove_dir_all(&project_dir).expect("cleanup project dir");
     }

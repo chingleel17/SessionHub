@@ -65,11 +65,16 @@ function sortChanges(changes: OpenSpecChange[], field: SortField, dir: SortDir):
         : -1;
       cmp = aVal - bVal;
     } else {
-      // createdAt: null 維持相對原序
-      if (!a.createdAt && !b.createdAt) return 0;
-      if (!a.createdAt) return 1;
-      if (!b.createdAt) return -1;
-      cmp = a.createdAt.localeCompare(b.createdAt);
+      const aTime = a.createdAt ? Date.parse(a.createdAt) : Number.NaN;
+      const bTime = b.createdAt ? Date.parse(b.createdAt) : Number.NaN;
+      const hasATime = !Number.isNaN(aTime);
+      const hasBTime = !Number.isNaN(bTime);
+
+      // 沒有有效時間時維持相對原序，避免排序結果跳動。
+      if (!hasATime && !hasBTime) return 0;
+      if (!hasATime) return 1;
+      if (!hasBTime) return -1;
+      cmp = aTime - bTime;
     }
     return dir === "asc" ? cmp : -cmp;
   });

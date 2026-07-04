@@ -104,6 +104,20 @@ function readSessionTodos(sessionDir: string): Promise<SessionTodo[]> {
   return invoke<SessionTodo[]>("read_session_todos", { sessionDir });
 }
 
+function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const tag of tags) {
+    const trimmed = tag.trim();
+    if (!trimmed) continue;
+    const dedupeKey = trimmed.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
 function triggerStatsBackfill(rootDir: string | null | undefined): Promise<number> {
   return invoke<number>("trigger_stats_backfill", { rootDir: rootDir ?? null });
 }
@@ -1647,6 +1661,7 @@ function App() {
 
   const handleEditNotes = (session: SessionInfo) => {
     setEditDialog({
+      key: `notes:${session.id}:${session.updatedAt ?? ""}`,
       title: t("session.actions.editNotes"),
       message: t("session.prompt.notes"),
       actionLabel: t("session.actions.editNotes"),
@@ -1663,13 +1678,46 @@ function App() {
 
   const handleEditTags = (session: SessionInfo) => {
     setEditDialog({
+      key: `tags:${session.id}:${session.updatedAt ?? ""}`,
       title: t("session.actions.editTags"),
       message: t("session.prompt.tags"),
       actionLabel: t("session.actions.editTags"),
       initialValue: session.tags.join(", "),
       onConfirm: (nextValue) => {
-        const tags = nextValue.split(",").map((v) => v.trim()).filter(Boolean);
+        const tags = normalizeTags(nextValue.split(","));
         saveMetaMutation.mutate({ sessionId: session.id, notes: session.notes ?? null, tags });
+      },
+    });
+  };
+
+  const handleEditSingleTag = (session: SessionInfo, tag: string, tagIndex: number) => {
+    setEditDialog({
+      key: `tag:${session.id}:${tagIndex}:${tag}:${session.updatedAt ?? ""}`,
+      title: t("session.actions.editTags"),
+      message: t("session.prompt.singleTag"),
+      actionLabel: t("session.actions.editTags"),
+      secondaryActionLabel: t("session.actions.deleteTag"),
+      secondaryActionTone: "danger",
+      initialValue: tag,
+      onConfirm: (nextValue) => {
+        const normalized = nextValue.trim();
+        const nextTags = session.tags.flatMap((currentTag, currentIndex) => {
+          if (currentIndex !== tagIndex) return [currentTag];
+          return normalized ? [normalized] : [];
+        });
+        saveMetaMutation.mutate({
+          sessionId: session.id,
+          notes: session.notes ?? null,
+          tags: normalizeTags(nextTags),
+        });
+      },
+      onSecondaryAction: () => {
+        const nextTags = session.tags.filter((_, currentIndex) => currentIndex !== tagIndex);
+        saveMetaMutation.mutate({
+          sessionId: session.id,
+          notes: session.notes ?? null,
+          tags: normalizeTags(nextTags),
+        });
       },
     });
   };
@@ -1896,6 +1944,7 @@ function App() {
               onCopyCommand={(s) => void handleCopyCommand(s)}
               onEditNotes={handleEditNotes}
               onEditTags={handleEditTags}
+              onEditTag={handleEditSingleTag}
               onOpenPlan={handleOpenPlan}
               onArchive={handleArchiveSession}
               onUnarchive={handleUnarchiveSession}
@@ -1960,6 +2009,7 @@ function App() {
 
       {editDialog ? (
         <EditDialog
+          key={editDialog.key ?? editDialog.title}
           dialog={editDialog}
           onCancel={() => setEditDialog(null)}
           onConfirm={(value) => {

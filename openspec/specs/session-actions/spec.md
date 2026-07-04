@@ -33,3 +33,22 @@ Session 卡片 SHALL 使用 SVG icon 按鈕取代文字按鈕，並搭配 toolti
 - **WHEN** 使用者 hover session 卡片
 - **THEN** 顯示操作 icon 按鈕（封存、開啟終端、複製指令、編輯備註等）
 - **AND** 每個按鈕 hover 時顯示 tooltip 文字
+
+### Requirement: Session 卡片快速編輯入口
+
+Session 卡片 SHALL 提供直接從內容區快速進入編輯的入口，避免只能透過操作列 icon。
+
+#### Scenario: 點擊標籤 chip 快速編輯
+
+- **WHEN** 使用者點擊 session 卡片右側任一標籤 chip
+- **THEN** 系統開啟單一標籤編輯對話框
+
+#### Scenario: 快速編輯目標必須與點擊項目一致
+
+- **WHEN** 使用者在排序、分頁或篩選後點擊任一標籤或備註進行編輯
+- **THEN** 系統 SHALL 始終編輯被點擊的 session 與被點擊的標籤項目，不得因清單索引變動而錯位
+
+#### Scenario: 點擊備註文字快速編輯
+
+- **WHEN** 使用者點擊 session 卡片中的備註文字區
+- **THEN** 系統開啟編輯備註對話框

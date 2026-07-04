@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use crate::types::*;
 
 fn parse_task_progress(tasks_path: &Path) -> Option<OpenSpecTaskProgress> {
@@ -116,6 +118,17 @@ fn parse_openspec_yaml_created(change_dir: &Path) -> Option<String> {
     None
 }
 
+fn resolve_change_created_at(change_dir: &Path) -> Option<String> {
+    if let Some(created_at) = parse_openspec_yaml_created(change_dir) {
+        return Some(created_at);
+    }
+
+    let metadata = fs::metadata(change_dir).ok()?;
+    let timestamp = metadata.created().ok().or_else(|| metadata.modified().ok())?;
+    let datetime: DateTime<Utc> = timestamp.into();
+    Some(datetime.to_rfc3339())
+}
+
 pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let name = change_dir
         .file_name()
@@ -136,7 +149,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let specs_dir = change_dir.join("specs");
     let specs = scan_openspec_specs(&specs_dir);
     let specs_count = specs.len();
-    let created_at = parse_openspec_yaml_created(change_dir);
+    let created_at = resolve_change_created_at(change_dir);
 
     OpenSpecChange {
         name,

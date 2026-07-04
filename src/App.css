@@ -35,6 +35,10 @@ select {
   color: var(--color-text-primary);
 }
 
+select {
+  padding-right: 40px;
+}
+
 textarea {
   width: 100%;
   min-height: 280px;
@@ -1395,6 +1399,15 @@ textarea {
   color: var(--color-text-secondary);
 }
 
+.tag-chip-button {
+  cursor: pointer;
+}
+
+.tag-chip-button:hover {
+  border-color: var(--color-action-primary-subtle-border);
+  color: var(--color-text-primary);
+}
+
 .tag-filter-chip {
   display: inline-flex;
   align-items: center;
@@ -1489,6 +1502,18 @@ textarea {
   margin: 0;
   color: var(--color-text-secondary);
   line-height: 1.6;
+}
+
+.session-notes-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-notes-button:hover {
+  color: var(--color-text-primary);
 }
 
 .stats-badge-row {
@@ -1880,6 +1905,15 @@ textarea {
   background: var(--color-action-primary);
   color: var(--color-action-primary-text);
   cursor: pointer;
+}
+
+.ghost-button--danger {
+  border-color: var(--color-error-border);
+  color: var(--color-error-text);
+}
+
+.ghost-button--danger:hover {
+  background: var(--color-error-chip-bg);
 }
 
 .project-item {
@@ -2356,12 +2390,29 @@ textarea {
 
 .filter-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--color-border-subtle);
+}
+
+.filter-bar-toggle-group {
+  display: flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-select {
+  min-width: 128px;
+}
+
+.filter-chip-button {
+  min-height: 42px;
+  padding: 0 16px;
 }
 
 .filter-bar-actions {

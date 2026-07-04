@@ -65,6 +65,7 @@ type Props = {
   onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
+  onEditTag: (session: SessionInfo, tag: string, tagIndex: number) => void;
   onOpenPlan: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
   onUnarchive: (session: SessionInfo) => void;
@@ -172,6 +173,7 @@ export function ProjectView({
   onCopyCommand,
   onEditNotes,
   onEditTags,
+  onEditTag,
   onOpenPlan,
   onArchive,
   onUnarchive,
@@ -499,6 +501,7 @@ export function ProjectView({
                     <label className="field-group compact-field">
                       <span>{t("session.sort")}</span>
                       <select
+                        className="filter-select"
                         value={sortKey}
                         onChange={(event) => setSortKey(event.currentTarget.value as SortKey)}
                       >
@@ -512,6 +515,7 @@ export function ProjectView({
                     <label className="field-group compact-field">
                       <span>{t("session.filter.updatedRange")}</span>
                       <select
+                        className="filter-select"
                         value={selectedUpdatedRange}
                         onChange={(event) => setSelectedUpdatedRange(event.currentTarget.value as SessionUpdatedRange)}
                       >
@@ -521,26 +525,28 @@ export function ProjectView({
                       </select>
                     </label>
 
-                    <button
-                      type="button"
-                      className={`tag-filter-chip ${showArchived ? "active" : ""}`}
-                      onClick={() => onToggleArchived(!showArchived)}
-                    >
-                      {t("project.showArchivedToggle")}
-                    </button>
+                    <div className="filter-bar-toggle-group">
+                      <button
+                        type="button"
+                        className={`tag-filter-chip filter-chip-button ${showArchived ? "active" : ""}`}
+                        onClick={() => onToggleArchived(!showArchived)}
+                      >
+                        {t("project.showArchivedToggle")}
+                      </button>
 
-                    <button
-                      type="button"
-                      className={`tag-filter-chip ${hideEmptySessions ? "active" : ""}`}
-                      onClick={() => onHideEmptySessionsChange(!hideEmptySessions)}
-                    >
-                      {t("session.filter.hideEmpty")}
-                      {hideEmptySessions && hiddenCount > 0 ? (
-                        <span className="hidden-count-hint">
-                          {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
-                        </span>
-                      ) : null}
-                    </button>
+                      <button
+                        type="button"
+                        className={`tag-filter-chip filter-chip-button ${hideEmptySessions ? "active" : ""}`}
+                        onClick={() => onHideEmptySessionsChange(!hideEmptySessions)}
+                      >
+                        {t("session.filter.hideEmpty")}
+                        {hideEmptySessions && hiddenCount > 0 ? (
+                          <span className="hidden-count-hint">
+                            {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
+                          </span>
+                        ) : null}
+                      </button>
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -634,6 +640,7 @@ export function ProjectView({
                 onCopyCommand={onCopyCommand}
                 onEditNotes={onEditNotes}
                 onEditTags={onEditTags}
+                onEditTag={onEditTag}
                 onOpenPlan={handleOpenPlanSubTab}
                 onOpenTodos={handleOpenTodosSubTab}
                 onArchive={onArchive}

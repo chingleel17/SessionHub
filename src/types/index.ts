@@ -157,12 +157,16 @@ export type ConfirmDialogState = {
 };
 
 export type EditDialogState = {
+    key?: string;
     title: string;
     message: string;
     actionLabel: string;
+    secondaryActionLabel?: string;
+    secondaryActionTone?: "danger" | "neutral";
     initialValue: string;
     multiline?: boolean;
     onConfirm: (value: string) => void;
+    onSecondaryAction?: (value: string) => void;
 };
 
 // Sisyphus (.sisyphus) 相關型別

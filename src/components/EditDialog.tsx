@@ -12,6 +12,11 @@ export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
   const { t } = useI18n();
   const [value, setValue] = useState(dialog.initialValue);
 
+  const handleSecondaryAction = () => {
+    dialog.onSecondaryAction?.(value);
+    onCancel();
+  };
+
   useEffect(() => {
     setValue(dialog.initialValue);
   }, [dialog.initialValue]);
@@ -37,6 +42,15 @@ export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
           )}
         </div>
         <div className="dialog-actions">
+          {dialog.secondaryActionLabel ? (
+            <button
+              type="button"
+              className={`ghost-button${dialog.secondaryActionTone === "danger" ? " ghost-button--danger" : ""}`}
+              onClick={handleSecondaryAction}
+            >
+              {dialog.secondaryActionLabel}
+            </button>
+          ) : null}
           <button type="button" className="ghost-button" onClick={onCancel}>
             {t("dialog.cancel")}
           </button>
