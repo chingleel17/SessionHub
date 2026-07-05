@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type {
-  IdeLauncherType,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SessionTodo,
-  ToolAvailability,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import { getProviderLabel } from "../utils/providerLabel";
@@ -25,18 +22,8 @@ import {
 import { SessionStatsBadge } from "./SessionStatsBadge";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 
-const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
-  { type: "terminal", label: "Terminal", icon: ">_" },
-  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
-  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
-  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
-  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
-  { type: "explorer", label: "Explorer", icon: "📁" },
-];
-
 type Props = {
   session: SessionInfo;
-  onOpenTerminal: (session: SessionInfo) => void;
   onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
@@ -50,12 +37,8 @@ type Props = {
   todos: SessionTodo[];
   todosLoading: boolean;
   activityStatus?: SessionActivityStatus;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
-  defaultLauncher: string | null;
-  toolAvailability: ToolAvailability | null;
-  isLauncherOpen: boolean;
-  onToggleLauncher: () => void;
 };
 
 function getSessionTitle(session: SessionInfo) {
@@ -68,7 +51,6 @@ function supportsSessionCommandCopy(provider: string): boolean {
 
 export function SessionCard({
   session,
-  onOpenTerminal,
   onCopyCommand,
   onEditNotes,
   onEditTags,
@@ -82,39 +64,11 @@ export function SessionCard({
   todos,
   todosLoading,
   activityStatus,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
-  defaultLauncher,
-  toolAvailability,
-  isLauncherOpen,
-  onToggleLauncher,
 }: Props) {
   const { t, locale } = useI18n();
   const [showStats, setShowStats] = useState(false);
-  const menuBtnRef = useRef<HTMLButtonElement>(null);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-
-  // 選單開啟時計算位置；關閉時清除
-  useEffect(() => {
-    if (isLauncherOpen && menuBtnRef.current) {
-      const rect = menuBtnRef.current.getBoundingClientRect();
-      setMenuPos({ top: rect.bottom + 2, left: rect.left });
-    } else {
-      setMenuPos(null);
-    }
-  }, [isLauncherOpen]);
-
-  // click-outside 自動關閉
-  useEffect(() => {
-    if (!isLauncherOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as Element).closest("[data-launcher-menu]")) {
-        onToggleLauncher();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [isLauncherOpen, onToggleLauncher]);
 
   const activityStatusCls = activityStatus
     ? `activity-badge activity-badge--${activityStatus.status}`
@@ -194,54 +148,12 @@ export function SessionCard({
         <button
           type="button"
           className="icon-button"
-          title={t("session.actions.openTerminal")}
-          aria-label={t("session.actions.openTerminal")}
-          onClick={() => onOpenTerminal(session)}
+          title={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+          aria-label={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+          onClick={() => onResumeSession(session)}
         >
           <TerminalIcon size={16} />
         </button>
-        <div className="launcher-dropdown">
-          <button
-            ref={menuBtnRef}
-            type="button"
-            className="icon-button"
-            title={t("session.actions.chooseTool")}
-            aria-label={t("session.actions.chooseTool")}
-            onClick={() => onToggleLauncher()}
-          >
-            ⋯
-          </button>
-          {isLauncherOpen && menuPos ? createPortal(
-            <div
-              data-launcher-menu="true"
-              className="launcher-menu"
-              style={{
-                position: "fixed",
-                top: menuPos.top,
-                left: menuPos.left,
-                zIndex: 9999,
-              }}
-            >
-              {LAUNCHER_OPTIONS.map((opt) => {
-                const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
-                return (
-                  <button
-                    key={opt.type}
-                    type="button"
-                    className={`launcher-menu-item${defaultLauncher === opt.type ? " launcher-menu-item--default" : ""}${!available ? " launcher-menu-item--disabled" : ""}`}
-                    disabled={!available}
-                    onClick={() => { onOpenInTool(session, opt.type); onToggleLauncher(); }}
-                  >
-                    <span className="launcher-option-icon">{opt.icon}</span>
-                    {opt.label}
-                    {!available ? <span className="launcher-option-unavail"> (未安裝)</span> : null}
-                  </button>
-                );
-              })}
-            </div>,
-            document.body
-          ) : null}
-        </div>
         <button
           type="button"
           className="icon-button"

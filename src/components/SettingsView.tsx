@@ -324,7 +324,10 @@ export function SettingsView({
           </label>
 
           <div className="settings-field">
-            <label htmlFor="default-launcher-select">{t("settings.fields.defaultLauncher")}</label>
+            <label htmlFor="default-launcher-select">
+              {t("settings.fields.defaultLauncher")}
+              <small className="settings-field-desc">{t("settings.fields.defaultLauncherDesc")}</small>
+            </label>
             <select
               id="default-launcher-select"
               className="settings-select"
@@ -518,7 +521,11 @@ export function SettingsView({
                     {(
                       [
                         {
-                          label: t("settings.integrations.fields.configPath"),
+                          label: t(
+                            integration.provider === "claude"
+                              ? "settings.integrations.fields.hookPath"
+                              : "settings.integrations.fields.configPath",
+                          ),
                           value: integration.configPath?.trim() || null,
                         },
                         {

@@ -55,7 +55,11 @@ pub fn run() {
                 let quota_cache = app.state::<QuotaCache>();
                 {
                     let conn = db_state.conn.lock().unwrap_or_else(|p| p.into_inner());
-                    let _ = quota::cache::load_cache_from_db(&conn, &quota_cache);
+                    let _ = quota::cache::load_cache_from_db(
+                        &conn,
+                        &quota_cache,
+                        &settings.quota_enabled_providers,
+                    );
                 }
 
                 let app_handle = app.handle().clone();
@@ -227,6 +231,7 @@ pub fn run() {
             read_plan_content,
             get_session_activity_statuses,
             open_in_tool,
+            resume_session_in_terminal,
             focus_terminal_window,
             read_openspec_file,
             write_openspec_file,

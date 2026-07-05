@@ -154,6 +154,55 @@ pub fn open_in_tool(
     )
 }
 
+/// Provider → resume 指令對照。與前端 `src/App.tsx` 的 `getSessionOpenCommand`（複製指令功能）保持同步。
+pub(crate) fn resume_session_command(provider: &str, session_id: &str) -> Result<String, String> {
+    match provider {
+        "claude" => Ok(format!("claude --resume={session_id}")),
+        "codex" => Ok(format!("codex resume {session_id}")),
+        "copilot" => Ok(format!("copilot --resume={session_id}")),
+        "opencode" => Ok(format!("opencode --session {session_id}")),
+        unknown => Err(format!("unsupported provider: {unknown}")),
+    }
+}
+
+pub(crate) fn resume_session_in_terminal_internal(
+    provider: &str,
+    session_id: &str,
+    cwd: &str,
+    terminal_path: Option<&str>,
+) -> Result<(), String> {
+    let resume_cmd = resume_session_command(provider, session_id)?;
+    let term = terminal_path.unwrap_or("pwsh");
+    let term_stem = PathBuf::from(term)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    let mut cmd = Command::new(term);
+    cmd.current_dir(cwd);
+    if term_stem == "cmd" {
+        cmd.args(["/K", &format!("cd /d \"{}\" && {}", cwd, resume_cmd)]);
+    } else {
+        cmd.args(["-NoExit", "-Command", &format!("cd '{}'; {}", cwd, resume_cmd)]);
+    }
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
+    cmd.spawn()
+        .map_err(|e| format!("failed to resume session: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resume_session_in_terminal(
+    provider: String,
+    session_id: String,
+    cwd: String,
+    terminal_path: Option<String>,
+) -> Result<(), String> {
+    resume_session_in_terminal_internal(&provider, &session_id, &cwd, terminal_path.as_deref())
+}
+
 #[tauri::command]
 pub async fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
     // 在後台執行掃描，避免阻塞 UI 執行緒

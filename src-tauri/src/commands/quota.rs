@@ -5,7 +5,7 @@ use crate::db::{
     next_reset_date_for, set_provider_quota_settings_in_db, upsert_provider_quota,
 };
 use crate::quota::cache::{
-    read_snapshots_from_cache, remove_provider_from_cache_and_db, write_snapshot_to_cache_and_db,
+    prune_disabled_provider_quota, read_snapshots_from_cache, write_snapshot_to_cache_and_db,
 };
 use crate::quota::QuotaManager;
 use crate::settings::{load_settings_internal, resolve_claude_root};
@@ -154,12 +154,7 @@ pub fn refresh_quota(
 
     // Remove snapshots for providers that are no longer enabled for quota monitoring
     if provider.is_none() {
-        let cached = read_snapshots_from_cache(&quota_cache)?;
-        for snap in &cached {
-            if !settings.quota_enabled_providers.contains(&snap.provider) {
-                let _ = remove_provider_from_cache_and_db(&conn, &quota_cache, &snap.provider);
-            }
-        }
+        let _ = prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
     }
 
     for snapshot in &snapshots {
