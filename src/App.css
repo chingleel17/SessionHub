@@ -2498,13 +2498,28 @@ textarea {
 
 .sub-tab-bar {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 4px;
   border-radius: 14px;
   background: var(--color-surface-input);
   border: 1px solid var(--color-border-subtle);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  width: fit-content;
+  width: 100%;
+}
+
+.project-launcher-spacer {
+  flex: 1;
+}
+
+.project-launcher {
+  align-items: center;
+  gap: 2px;
+  padding-right: 2px;
+}
+
+.project-launcher-main-btn {
+  white-space: nowrap;
 }
 
 .sub-tab-item {
@@ -3101,24 +3116,22 @@ textarea {
   border-color: #a5b4fc;
 }
 
-/* ── Launcher dropdown (SessionCard) ──────────── */
+/* ── Shared DropdownMenu component ──────────── */
 .launcher-dropdown {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
-.launcher-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 50;
+.dropdown-menu {
   background: var(--color-surface, #fff);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   min-width: 150px;
+  max-width: min(280px, calc(100vw - 16px));
   overflow: hidden;
 }
-.launcher-menu-item {
+.dropdown-menu-item {
   display: block;
   width: 100%;
   text-align: left;
@@ -3129,10 +3142,14 @@ textarea {
   cursor: pointer;
   color: var(--color-text-primary);
 }
-.launcher-menu-item:hover {
+.dropdown-menu-item:hover {
   background: var(--color-surface-secondary, #f5f5f5);
 }
-.launcher-menu-item--default {
+.dropdown-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.dropdown-menu-item--default {
   font-weight: 600;
 }
 

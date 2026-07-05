@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/I18nProvider";
 import type {
   AnalyticsDataPoint,
-  IdeLauncherType,
   ProjectGroup,
   QuotaSnapshot,
   SessionActivityStatus,
   SessionInfo,
-  ToolAvailability,
 } from "../types";
 import { DashboardAnalyticsPanel } from "./DashboardAnalyticsPanel";
 import { QuotaOverview } from "./QuotaOverview";
@@ -28,10 +25,8 @@ type Props = {
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
   activityStatusMap: Map<string, SessionActivityStatus>;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
-  defaultLauncher: string | null;
-  toolAvailability: ToolAvailability | null;
   viewMode: "list" | "kanban";
   onViewModeChange: (mode: "list" | "kanban") => void;
   analyticsData: AnalyticsDataPoint[];
@@ -44,6 +39,7 @@ type Props = {
   onAnalyticsToggleCollapsed: () => void;
   quotaSnapshots?: QuotaSnapshot[];
   enableQuotaMonitoring?: boolean;
+  quotaEnabledProviders?: string[];
   onRefreshQuota?: (provider?: string) => void;
 };
 
@@ -75,40 +71,6 @@ function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return String(value);
-}
-
-const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
-  { type: "terminal", label: "Terminal", icon: ">_" },
-  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
-  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
-  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
-  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
-  { type: "explorer", label: "Explorer", icon: "📁" },
-];
-
-function getDefaultLauncher(
-  session: SessionInfo,
-  toolAvailability: ToolAvailability | null,
-  globalDefault: string | null,
-): IdeLauncherType {
-  if (globalDefault) {
-    const ga = globalDefault as IdeLauncherType;
-    const opt = LAUNCHER_OPTIONS.find((o) => o.type === ga);
-    if (opt?.availKey && toolAvailability && !toolAvailability[opt.availKey]) return "terminal";
-    return ga;
-  }
-  if (session.provider === "copilot") {
-    if (!toolAvailability || toolAvailability.copilot) return "copilot";
-    return "terminal";
-  }
-  if (session.provider === "opencode") {
-    if (!toolAvailability || toolAvailability.opencode) return "opencode";
-    return "terminal";
-  }
-  if (session.provider === "codex") {
-    return "terminal";
-  }
-  return "terminal";
 }
 
 function getActivityStatusLabel(t: (k: string) => string, status?: SessionActivityStatus): { label: string; cls: string } {
@@ -148,26 +110,18 @@ function KanbanProjectCard({
   branchLabel,
   sessions,
   activityStatusMap,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
   onOpenProject,
-  defaultLauncher,
-  toolAvailability,
-  openMenu,
-  onToggleMenu,
 }: {
   projectName: string;
   projectKey: string;
   branchLabel: string | null;
   sessions: SessionInfo[];
   activityStatusMap: Map<string, SessionActivityStatus>;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
   onOpenProject: (key: string) => void;
-  defaultLauncher: string | null;
-  toolAvailability: ToolAvailability | null;
-  openMenu: { sessionId: string; rect: DOMRect } | null;
-  onToggleMenu: (sessionId: string, rect: DOMRect) => void;
 }) {
   const { t } = useI18n();
 
@@ -180,11 +134,6 @@ function KanbanProjectCard({
 
   const visibleSessions = sessions.slice(0, SESSIONS_PER_PROJECT_CARD);
   const hiddenCount = sessions.length - visibleSessions.length;
-
-  const isToolAvailable = (opt: typeof LAUNCHER_OPTIONS[number]) => {
-    if (!opt.availKey || !toolAvailability) return true;
-    return toolAvailability[opt.availKey];
-  };
 
   return (
     <div className="kanban-project-card">
@@ -215,7 +164,6 @@ function KanbanProjectCard({
           const activityStatus = activityStatusMap.get(session.id);
           const { label, cls } = getActivityStatusLabel(t as (k: string) => string, activityStatus);
           const sessionTitle = session.summary?.trim() || session.id;
-          const launcher = getDefaultLauncher(session, toolAvailability, defaultLauncher);
 
           return (
             <div key={session.id} className="kanban-session-row">
@@ -227,57 +175,11 @@ function KanbanProjectCard({
                 <button
                   type="button"
                   className="kanban-action-btn"
-                  onClick={(e) => { e.stopPropagation(); onOpenInTool(session, launcher); }}
+                  onClick={(e) => { e.stopPropagation(); onResumeSession(session); }}
                   title={t("session.actions.openTool")}
                 >
                   ▶
                 </button>
-                <button
-                  type="button"
-                  className="kanban-action-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleMenu(session.id, e.currentTarget.getBoundingClientRect());
-                  }}
-                  title={t("session.actions.chooseTool")}
-                >
-                  ⋯
-                </button>
-                {openMenu?.sessionId === session.id ? createPortal(
-                  <div
-                    data-launcher-menu="true"
-                    className="kanban-launcher-menu"
-                    style={{
-                      position: "fixed",
-                      top: openMenu.rect.bottom + 2,
-                      left: openMenu.rect.left,
-                      zIndex: 9999,
-                    }}
-                  >
-                    {LAUNCHER_OPTIONS.map((opt) => {
-                      const available = isToolAvailable(opt);
-                      return (
-                        <button
-                          key={opt.type}
-                          type="button"
-                          className={`kanban-launcher-option${!available ? " kanban-launcher-option--disabled" : ""}${opt.type === launcher ? " kanban-launcher-option--default" : ""}`}
-                          disabled={!available}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onOpenInTool(session, opt.type);
-                            onToggleMenu(session.id, e.currentTarget.getBoundingClientRect());
-                          }}
-                        >
-                          <span className="launcher-option-icon">{opt.icon}</span>
-                          {opt.label}
-                          {opt.type === launcher ? <span className="launcher-default-tag"> ★</span> : null}
-                          {!available ? <span className="launcher-option-unavail"> —</span> : null}
-                        </button>
-                      );
-                    })}
-                  </div>,
-                  document.body
-                ) : null}
                 <button
                   type="button"
                   className="kanban-action-btn"
@@ -311,24 +213,19 @@ type ProjectBucket = { projectName: string; projectKey: string; branchLabel: str
 function KanbanBoard({
   groupedProjects,
   activityStatusMap,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
   onOpenProject,
-  defaultLauncher,
-  toolAvailability,
 }: {
   groupedProjects: ProjectGroup[];
   activityStatusMap: Map<string, SessionActivityStatus>;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
   onOpenProject: (key: string) => void;
-  defaultLauncher: string | null;
-  toolAvailability: ToolAvailability | null;
 }) {
   const { t } = useI18n();
   const [columnWidths, setColumnWidths] = useState<number[]>(loadColumnWidths);
   const [doneLimit, setDoneLimit] = useState(DONE_INITIAL_LIMIT);
-  const [openMenu, setOpenMenu] = useState<{ sessionId: string; rect: DOMRect } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const widthsRef = useRef(columnWidths);
   const dragRef = useRef<{ colIndex: number; startX: number; startWidths: number[] } | null>(null);
@@ -336,31 +233,6 @@ function KanbanBoard({
   useEffect(() => { widthsRef.current = columnWidths; }, [columnWidths]);
   useEffect(() => { saveColumnWidths(columnWidths); }, [columnWidths]);
   useEffect(() => { setDoneLimit(DONE_INITIAL_LIMIT); }, [groupedProjects]);
-
-  const handleToggleMenu = useCallback((sessionId: string, rect: DOMRect) => {
-    setOpenMenu((prev) => prev?.sessionId === sessionId ? null : { sessionId, rect });
-  }, []);
-
-  const handleCloseMenu = useCallback(() => setOpenMenu(null), []);
-
-  // 點擊選單外部關閉
-  useEffect(() => {
-    if (!openMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as Element).closest("[data-launcher-menu]")) {
-        handleCloseMenu();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [openMenu, handleCloseMenu]);
-
-  // 捲動時關閉，避免選單位置偏移（用 capture 捕捉各欄內部的 overflow-y: auto 捲動）
-  useEffect(() => {
-    if (!openMenu) return;
-    document.addEventListener("scroll", handleCloseMenu, true);
-    return () => document.removeEventListener("scroll", handleCloseMenu, true);
-  }, [openMenu, handleCloseMenu]);
 
   const columns: { key: string; label: string; buckets: ProjectBucket[] }[] = [
     { key: "active", label: t("dashboard.kanban.column.active"), buckets: [] },
@@ -455,13 +327,9 @@ function KanbanBoard({
                   branchLabel={bucket.branchLabel}
                   sessions={bucket.sessions}
                   activityStatusMap={activityStatusMap}
-                  onOpenInTool={onOpenInTool}
+                  onResumeSession={onResumeSession}
                   onFocusTerminal={onFocusTerminal}
                   onOpenProject={onOpenProject}
-                  defaultLauncher={defaultLauncher}
-                  toolAvailability={toolAvailability}
-                  openMenu={openMenu}
-                  onToggleMenu={handleToggleMenu}
                 />
               ))}
               {visibleBuckets.length === 0 ? (
@@ -511,10 +379,8 @@ export function DashboardView({
   onOpenProject,
   onOpenRecentSession,
   activityStatusMap,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
-  defaultLauncher,
-  toolAvailability,
   viewMode,
   onViewModeChange,
   analyticsData,
@@ -526,12 +392,18 @@ export function DashboardView({
   onAnalyticsRetry,
   onAnalyticsToggleCollapsed,
   quotaSnapshots = [],
+  quotaEnabledProviders = [],
   enableQuotaMonitoring = true,
   onRefreshQuota,
 }: Props) {
   const { t } = useI18n();
 
   const totalSessionCount = groupedProjects.reduce((sum, p) => sum + p.sessions.length, 0);
+
+  // Filter quota snapshots by enabled providers
+  const filteredQuotaSnapshots = quotaSnapshots.filter((snap) =>
+    quotaEnabledProviders.includes(snap.provider),
+  );
   const activeProjectCount = groupedProjects.length;
   const allSessions = groupedProjects.flatMap((p) => p.sessions);
   const archivedCount = allSessions.filter((s) => s.isArchived).length;
@@ -634,11 +506,9 @@ export function DashboardView({
         <KanbanBoard
           groupedProjects={groupedProjects}
           activityStatusMap={activityStatusMap}
-          onOpenInTool={onOpenInTool}
+          onResumeSession={onResumeSession}
           onFocusTerminal={onFocusTerminal}
           onOpenProject={onOpenProject}
-          defaultLauncher={defaultLauncher}
-          toolAvailability={toolAvailability}
         />
       ) : (
         <section className="content-grid">
@@ -732,10 +602,10 @@ export function DashboardView({
         </section>
       )}
 
-      {enableQuotaMonitoring && quotaSnapshots.length > 0 ? (
+      {enableQuotaMonitoring && filteredQuotaSnapshots.length > 0 ? (
         <article className="info-card" style={{ padding: 0, overflow: "hidden" }}>
           <QuotaOverview
-            snapshots={quotaSnapshots}
+            snapshots={filteredQuotaSnapshots}
             onRefresh={onRefreshQuota}
             onRefreshProvider={(provider) => onRefreshQuota?.(provider)}
           />

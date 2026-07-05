@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
+import { DropdownMenu } from "./DropdownMenu";
 import type {
   AnalyticsDataPoint,
   AnalyticsGroupBy,
@@ -25,6 +26,15 @@ import { SessionTodosTab } from "./SessionTodosTab";
 import { getProviderLabel } from "../utils/providerLabel";
 
 const FILTER_EXPANDED_STORAGE_KEY = "sessionFilterExpanded";
+
+const PROJECT_LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
+  { type: "terminal", label: "Terminal", icon: ">_" },
+  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
+  { type: "explorer", label: "Explorer", icon: "📁" },
+  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
+  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
+  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
+];
 
 type SessionUpdatedRange = "all" | "week" | "month";
 
@@ -61,7 +71,6 @@ type Props = {
   onHideEmptySessionsChange: (value: boolean) => void;
   totalEmptySessions: number;
   onToggleArchived: (value: boolean) => void;
-  onOpenTerminal: (session: SessionInfo) => void;
   onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
@@ -88,8 +97,9 @@ type Props = {
   onRefreshPlansSpecs: () => Promise<void>;
   plansSpecsRefreshToken: string;
   activityStatusMap: Map<string, SessionActivityStatus>;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
+  onOpenProjectInTool: (project: ProjectGroup, tool: IdeLauncherType) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
   // Plan sub-tab props (IPC handled by App.tsx, state flows through here)
@@ -169,7 +179,6 @@ export function ProjectView({
   onHideEmptySessionsChange,
   totalEmptySessions,
   onToggleArchived,
-  onOpenTerminal,
   onCopyCommand,
   onEditNotes,
   onEditTags,
@@ -207,8 +216,9 @@ export function ProjectView({
   onSubTabStateChange,
   onFetchAnalytics,
   activityStatusMap,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
+  onOpenProjectInTool,
   defaultLauncher,
   toolAvailability,
 }: Props) {
@@ -219,7 +229,6 @@ export function ProjectView({
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [selectedUpdatedRange, setSelectedUpdatedRange] = useState<SessionUpdatedRange>("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const [openLauncherSessionId, setOpenLauncherSessionId] = useState<string | null>(null);
   const [isFilterExpanded, setIsFilterExpanded] = useState(() => {
     return window.localStorage.getItem(FILTER_EXPANDED_STORAGE_KEY) === "true";
   });
@@ -231,22 +240,6 @@ export function ProjectView({
       return next;
     });
   }, []);
-
-  const handleToggleLauncher = useCallback((sessionId: string) => {
-    setOpenLauncherSessionId((prev) => prev === sessionId ? null : sessionId);
-  }, []);
-
-  // 點擊選單外部關閉
-  useEffect(() => {
-    if (!openLauncherSessionId) return;
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as Element).closest("[data-launcher-menu]")) {
-        setOpenLauncherSessionId(null);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [openLauncherSessionId]);
 
   const buildDetailTabKey = (kind: "plan" | "todos", sessionId: string) => `${kind}:${sessionId}`;
   const parseDetailTabKey = (value: string): { kind: "plan" | "todos"; sessionId: string } | null => {
@@ -410,6 +403,50 @@ export function ProjectView({
                 </div>
               );
             })}
+
+            <div className="project-launcher-spacer" />
+
+            <div className="launcher-dropdown project-launcher">
+              <button
+                type="button"
+                className="ghost-button project-launcher-main-btn"
+                onClick={() => onOpenProjectInTool(project, (defaultLauncher as IdeLauncherType) || "terminal")}
+              >
+                {t("project.actions.openProject")}
+              </button>
+              <DropdownMenu
+                trigger={({ ref, onClick }) => (
+                  <button
+                    ref={ref}
+                    type="button"
+                    className="icon-button"
+                    title={t("session.actions.chooseTool")}
+                    aria-label={t("session.actions.chooseTool")}
+                    onClick={onClick}
+                  >
+                    ⋯
+                  </button>
+                )}
+              >
+                {({ close }: { close: () => void }) => PROJECT_LAUNCHER_OPTIONS.map((opt) => {
+                  const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
+                  return (
+                    <button
+                      key={opt.type}
+                      type="button"
+                      className={`dropdown-menu-item${defaultLauncher === opt.type ? " dropdown-menu-item--default" : ""}`}
+                      disabled={!available}
+                      onClick={() => { onOpenProjectInTool(project, opt.type); close(); }}
+                    >
+                      <span className="launcher-option-icon">{opt.icon}</span>
+                      {opt.label}
+                      {defaultLauncher === opt.type ? <span className="launcher-default-tag"> ★</span> : null}
+                      {!available ? <span className="launcher-option-unavail"> (未安裝)</span> : null}
+                    </button>
+                  );
+                })}
+              </DropdownMenu>
+            </div>
           </div>
 
           {activeSubTab === "sessions" ? (
@@ -636,7 +673,6 @@ export function ProjectView({
               <SessionCard
                 key={session.id}
                 session={session}
-                onOpenTerminal={onOpenTerminal}
                 onCopyCommand={onCopyCommand}
                 onEditNotes={onEditNotes}
                 onEditTags={onEditTags}
@@ -651,12 +687,8 @@ export function ProjectView({
                 todos={sessionTodos[session.id] ?? []}
                 todosLoading={Boolean(sessionTodosLoading[session.id])}
                 activityStatus={activityStatusMap.get(session.id)}
-                onOpenInTool={onOpenInTool}
+                onResumeSession={onResumeSession}
                 onFocusTerminal={onFocusTerminal}
-                defaultLauncher={defaultLauncher}
-                toolAvailability={toolAvailability}
-                isLauncherOpen={openLauncherSessionId === session.id}
-                onToggleLauncher={() => handleToggleLauncher(session.id)}
               />
             ))
           )}

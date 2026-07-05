@@ -11,6 +11,7 @@ type Props = {
   isLoadingSessions: boolean;
   providerQuotas?: ProviderQuota[];
   quotaSnapshots?: QuotaSnapshot[];
+  quotaEnabledProviders?: string[];
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -167,11 +168,14 @@ export function StatusBar({
   isLoadingSessions,
   providerQuotas = [],
   quotaSnapshots = [],
+  quotaEnabledProviders = [],
 }: Props) {
   const { t } = useI18n();
   const dash = isLoadingSessions ? "-" : undefined;
   const activeQuotas = providerQuotas.filter(
-    (q) => q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0,
+    (q) =>
+      quotaEnabledProviders.includes(q.provider) &&
+      (q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0),
   );
 
   return (
@@ -242,10 +246,12 @@ export function StatusBar({
       )}
 
       {/* Right: remote quota snapshots (utilization bars from API) */}
-      {quotaSnapshots.filter((s) => s.status === "ok" && s.source === "remote_api").length > 0 && (
+      {quotaSnapshots
+        .filter((s) => s.status === "ok" && s.source === "remote_api" && quotaEnabledProviders.includes(s.provider))
+        .length > 0 && (
         <div className="global-status-bar-quota global-status-bar-quota--snapshots">
           {quotaSnapshots
-            .filter((s) => s.status === "ok" && s.source === "remote_api")
+            .filter((s) => s.status === "ok" && s.source === "remote_api" && quotaEnabledProviders.includes(s.provider))
             .map((s) => (
               <QuotaSnapshotChip
                 key={s.provider}

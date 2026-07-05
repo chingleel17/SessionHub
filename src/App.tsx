@@ -192,12 +192,13 @@ function resolveProviderTargetPath(integration: ProviderIntegrationStatus): stri
   return bridgePath || null;
 }
 
+// Provider → resume 指令對照。與後端 `src-tauri/src/commands/tools.rs` 的 `resume_session_command` 保持同步。
 function getSessionOpenCommand(provider: string, sessionId: string): string {
   switch (provider) {
     case "copilot":
       return `copilot --resume=${sessionId}`;
     case "opencode":
-      return `opencode session ${sessionId}`;
+      return `opencode --session ${sessionId}`;
     case "codex":
       return `codex resume ${sessionId}`;
     case "claude":
@@ -1349,16 +1350,33 @@ function App() {
     setLastRealtimeSyncAt(getRealtimeSyncLabel());
   };
 
-  const handleOpenInTool = async (session: SessionInfo, toolType: IdeLauncherType) => {
+  const handleResumeSession = async (session: SessionInfo) => {
     if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
     const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
     if (!exists) { showToast(t("toast.cwdMissing")); return; }
     try {
-      await invoke("open_in_tool", {
-        toolType,
+      await invoke("resume_session_in_terminal", {
+        provider: session.provider,
+        sessionId: session.id,
         cwd: session.cwd,
         terminalPath: settingsQuery.data?.terminalPath || null,
-        sessionId: session.id,
+      });
+      showToast(t("toast.toolOpened"));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    }
+  };
+
+  const handleOpenProjectInTool = async (project: ProjectGroup, toolType: IdeLauncherType) => {
+    if (!project.pathLabel) { showToast(t("toast.cwdMissing")); return; }
+    const exists = await invoke<boolean>("check_directory_exists", { path: project.pathLabel });
+    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    try {
+      await invoke("open_in_tool", {
+        toolType,
+        cwd: project.pathLabel,
+        terminalPath: settingsQuery.data?.terminalPath || null,
+        sessionId: null,
       });
       showToast(t("toast.toolOpened"));
     } catch (error) {
@@ -1588,23 +1606,6 @@ function App() {
     const refreshIntervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
     if (!nextCollapsed && (!dashboardAnalyticsFetchedAt || Date.now() - dashboardAnalyticsFetchedAt >= refreshIntervalMs)) {
       await fetchDashboardAnalytics();
-    }
-  };
-
-  const handleOpenTerminal = async (session: SessionInfo) => {
-    if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
-    const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
-    if (!exists) { showToast(t("toast.cwdMissing")); return; }
-    if (!settingsQuery.data?.terminalPath) { showToast(t("toast.terminalInvalid")); return; }
-    try {
-      await invoke("open_terminal", {
-        terminalPath: settingsQuery.data.terminalPath,
-        cwd: session.cwd,
-        sessionId: session.id,
-      });
-      showToast(t("toast.terminalOpened"));
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t("toast.terminalOpenFailed"));
     }
   };
 
@@ -1893,10 +1894,8 @@ function App() {
                 openProjectTab(getProjectKey(session, uncategorizedLabel))
               }
               activityStatusMap={activityStatusMap}
-              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onResumeSession={(session) => void handleResumeSession(session)}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
-              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
-              toolAvailability={toolAvailabilityQuery.data ?? null}
               viewMode={dashboardViewMode}
               onViewModeChange={setDashboardViewMode}
               analyticsData={dashboardAnalyticsData}
@@ -1909,6 +1908,7 @@ function App() {
               onAnalyticsToggleCollapsed={() => void handleToggleAnalyticsPanel()}
               quotaSnapshots={quotaSnapshotQuery.data ?? []}
               enableQuotaMonitoring={settingsForm.enableQuotaMonitoring ?? true}
+              quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
               onRefreshQuota={handleRefreshQuota}
             />
           ) : null}
@@ -1940,7 +1940,6 @@ function App() {
               onHideEmptySessionsChange={setHideEmptySessions}
               totalEmptySessions={deletableEmptySessionCount}
               onToggleArchived={(v) => void handleToggleArchived(v)}
-              onOpenTerminal={(s) => void handleOpenTerminal(s)}
               onCopyCommand={(s) => void handleCopyCommand(s)}
               onEditNotes={handleEditNotes}
               onEditTags={handleEditTags}
@@ -1980,8 +1979,9 @@ function App() {
                 fetchAnalyticsData(cwd, startDate, endDate, groupBy)
               }
               activityStatusMap={activityStatusMap}
-              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onResumeSession={(session) => void handleResumeSession(session)}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              onOpenProjectInTool={(project, tool) => void handleOpenProjectInTool(project, tool)}
               defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
               toolAvailability={toolAvailabilityQuery.data ?? null}
             />
@@ -1999,6 +1999,7 @@ function App() {
             isLoadingSessions={sessionsQuery.isLoading}
             providerQuotas={providerQuotaQuery.data ?? []}
             quotaSnapshots={quotaSnapshotQuery.data ?? []}
+            quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
           />
         ) : null}
       </section>

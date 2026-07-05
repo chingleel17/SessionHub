@@ -1,12 +1,16 @@
 use tauri::State;
 
+use crate::quota::cache::prune_disabled_provider_quota;
 use crate::settings::{
     collect_provider_integration_statuses, default_codex_root, default_hook_scripts_root,
     default_opencode_root, detect_terminal_path, detect_vscode_path, load_settings_internal,
     resolve_copilot_root, save_settings_internal, validate_terminal_path_internal,
 };
-use crate::types::{default_enabled_providers, AppSettings, WatcherState};
+use crate::types::{
+    default_enabled_providers, AppSettings, QuotaCache, WatcherState,
+};
 use crate::watcher::restart_session_watcher_internal;
+use crate::DbState;
 
 pub(crate) fn get_settings_internal() -> Result<AppSettings, String> {
     let mut settings = load_settings_internal()?;
@@ -39,8 +43,20 @@ pub fn get_settings() -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-pub fn save_settings(settings: AppSettings) -> Result<(), String> {
-    save_settings_internal(&settings)
+pub fn save_settings(
+    db_state: State<'_, DbState>,
+    quota_cache: State<'_, QuotaCache>,
+    settings: AppSettings,
+) -> Result<(), String> {
+    save_settings_internal(&settings)?;
+
+    // Prune quota cache & DB for providers the user just disabled
+    let conn = db_state
+        .conn
+        .lock()
+        .map_err(|_| "failed to lock db".to_string())?;
+    let _ = prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
+    Ok(())
 }
 
 #[tauri::command]
