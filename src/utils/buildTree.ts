@@ -1,4 +1,4 @@
-import type { OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
+import type { AgentsMdScanResult, OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
 import type { MessageKey } from "../locales/zh-TW";
 
 type TranslateFn = (key: MessageKey) => string;
@@ -193,4 +193,87 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
   }
 
   return sections;
+}
+
+function agentsStatusTone(status: string): TreeNode["tone"] {
+  switch (status) {
+    case "in-sync":
+    case "linked":
+      return "done";
+    case "target-missing":
+    case "source-missing":
+      return "not_started";
+    case "differs":
+    case "link-broken":
+      return "in_progress";
+    default:
+      return "neutral";
+  }
+}
+
+function getAgentsEntryLabel(entry: AgentsMdScanResult["entries"][number], root: string, t: TranslateFn): string {
+  const normalized = entry.relDir.replace(/\\/g, "/").replace(/^\.?\/?/, "");
+  if (!normalized) {
+    return root.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? t("agents.tree.root");
+  }
+
+  const segments = normalized.split("/").filter(Boolean);
+  return segments[segments.length - 1] ?? normalized;
+}
+
+export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): TreeNode[] {
+  const groups = new Map<string, TreeNode>();
+  const roots: TreeNode[] = [];
+
+  const ensureGroup = (parentKey: string | null, segment: string, fullKey: string): TreeNode => {
+    const existing = groups.get(fullKey);
+    if (existing) return existing;
+
+    const next: TreeNode = {
+      id: `agents-md-group:${fullKey}`,
+      label: segment,
+      icon: "folder",
+      defaultOpen: true,
+      children: [],
+    };
+
+    groups.set(fullKey, next);
+    if (parentKey) {
+      groups.get(parentKey)?.children?.push(next);
+    } else {
+      roots.push(next);
+    }
+    return next;
+  };
+
+  for (const entry of result.entries) {
+    const normalized = entry.relDir.replace(/\\/g, "/").replace(/^\.?\/?/, "");
+    const segments = normalized ? normalized.split("/").filter(Boolean) : [];
+    let parentKey: string | null = null;
+    let currentKey = "";
+
+    for (const segment of segments.slice(0, -1)) {
+      currentKey = currentKey ? `${currentKey}/${segment}` : segment;
+      ensureGroup(parentKey, segment, currentKey);
+      parentKey = currentKey;
+    }
+
+    const leaf: TreeNode = {
+      id: `agents-md:${entry.dir}`,
+      label: getAgentsEntryLabel(entry, result.root, t),
+      badge: t(`agents.status.${entry.status}` as MessageKey),
+      icon: "agents",
+      tone: agentsStatusTone(entry.status),
+      filePath: entry.source.exists ? entry.source.path : entry.target.path,
+      filePathType: "absolute",
+    };
+
+    if (parentKey) {
+      groups.get(parentKey)?.children?.push(leaf);
+    } else {
+      roots.push(leaf);
+    }
+  }
+
+  return roots;
 }

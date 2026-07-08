@@ -6,9 +6,7 @@ use crate::settings::{
     default_opencode_root, detect_terminal_path, detect_vscode_path, load_settings_internal,
     resolve_copilot_root, save_settings_internal, validate_terminal_path_internal,
 };
-use crate::types::{
-    default_enabled_providers, AppSettings, QuotaCache, WatcherState,
-};
+use crate::types::{default_enabled_providers, AppSettings, QuotaCache, WatcherState};
 use crate::watcher::restart_session_watcher_internal;
 use crate::DbState;
 

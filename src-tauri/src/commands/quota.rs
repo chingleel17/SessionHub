@@ -154,7 +154,8 @@ pub fn refresh_quota(
 
     // Remove snapshots for providers that are no longer enabled for quota monitoring
     if provider.is_none() {
-        let _ = prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
+        let _ =
+            prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
     }
 
     for snapshot in &snapshots {

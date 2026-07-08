@@ -2,23 +2,32 @@
 
 ### Requirement: Commands 來源掃描與 per-agent 目錄對映
 
-系統 SHALL 以 `.agents/skills/command/**/*.md`（專案範圍）或 `~/.agents/skills/command/**/*.md`（全域範圍）為 commands 來源，對每個 agent 的 command 目錄計算同步狀態並以矩陣呈現。各 agent 的目標目錄對映 SHALL 為：claude → `.claude/commands/`（保留來源子路徑，如 `opsx/apply.md`）、codex → `.codex/prompts/`、opencode → `.opencode/command/`、copilot → `.copilot/prompts/`；全域範圍以各 agent 全域根目錄為基準（opencode 為 `~/.config/opencode/command`）。
+系統 SHALL 以 `.agents/skills/command/**/*.md`（專案範圍）或 `~/.agents/skills/command/**/*.md`（全域範圍）為 commands 來源，對每個 agent 的 command 目錄計算同步狀態並以矩陣呈現。各 agent 的目標目錄對映 SHALL 為：claude → `.claude/commands/`（保留來源子路徑，如 `opsx/apply.md`）、codex → `.codex/prompts/`、opencode → `.opencode/command/`、copilot → 專案範圍優先 `.github/prompts/`，舊慣例 `.copilot/prompts/` 亦須相容；全域範圍以各 agent 全域根目錄為基準（opencode 為 `~/.config/opencode/command`）。
 
 #### Scenario: 顯示 commands 狀態矩陣
 
 - **WHEN** 使用者開啟 Agents 分頁的 Commands 子分頁
-- **THEN** 系統列出來源目錄下的所有 command md 檔（名稱含子路徑，如 `opsx/apply`），每欄一個目標 agent
-- **AND** 每格顯示一致 / 缺少 / 內容不同 / 目標較新狀態
+- **THEN** 系統列出來源目錄與各 target 目錄的 command 聯集（名稱含子路徑，如 `opsx/apply`），每欄一個目標 agent
+- **AND** 每格顯示一致（in-sync）/ 缺少目標（target-missing）/ 內容不同（differs）/ 僅有目標（source-missing）/ 目標較新（target-newer）狀態
 
 #### Scenario: 檢視 command 內容
 
 - **WHEN** 使用者點擊矩陣中的 command 名稱
 - **THEN** 右側面板以 markdown 渲染該 command 檔內容（含 frontmatter）
 
-#### Scenario: 只列出來源存在的 command
+#### Scenario: target 端既有 command 仍應顯示於矩陣
 
-- **WHEN** 某 target 目錄下存在一個來源已不存在的同名 command
-- **THEN** 系統不為其產生矩陣列，該 command 不參與同步（與 agents-skills-sync 相同限制）
+- **WHEN** `.agents/skills/command/` 尚未建立或缺少某 command，但某 target 端（如 `.claude/commands/`、`.opencode/command/` 或 `.github/prompts/`）已存在同名 command
+- **THEN** 系統仍 SHALL 在矩陣中顯示該 command 列，讓使用者可檢視現況並透過衝突流程決定是否回補來源
+- **AND** 該 target 欄狀態標示為「僅有目標」（source-missing）
+- **AND** 實際同步時仍以預期來源路徑 `.agents/skills/command/...` 作為 canonical source path
+
+#### Scenario: 因其他 target 反查而產生的列，本 target 亦缺少該 command
+
+- **WHEN** 某 command 列是因「另一個 target 端存在同名檔案」而被反查列出（來源尚未建立），而**目前這一欄**的 target 也不存在該檔案
+- **THEN** 系統 SHALL 將該欄狀態標示為「缺少目標」（target-missing），與一般「來源存在但此 target 尚未同步」的情況一致對待
+- **AND** 系統 SHALL NOT 將此情況標示為「錯誤」（error）狀態——error 狀態僅保留給檔案讀寫/連結解析等真正的例外錯誤，不可用於「來源與目標單純皆不存在」的正常情境
+- **AND** 此為 2026-07 實地驗證發現的既有缺陷修正：修正前 `classify_file_status` 對「來源與目標皆不存在」回傳 `SyncStatus::Error`，導致 UI 顯示中性的「錯誤」標籤，使用者誤以為該 command 未被正確識別，實際上只是尚未同步到該 target
 
 ### Requirement: Commands 同步與格式轉換擴充點
 

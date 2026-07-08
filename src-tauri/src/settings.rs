@@ -222,6 +222,7 @@ impl AppSettings {
             analytics_panel_collapsed: false,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            allow_create_project_config_dir: false,
         })
     }
 }

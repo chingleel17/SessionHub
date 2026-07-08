@@ -37,7 +37,10 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
 }
 
 fn rate_limit_message(resp: &ureq::Response) -> String {
-    match resp.header("Retry-After").and_then(|v| v.parse::<u64>().ok()) {
+    match resp
+        .header("Retry-After")
+        .and_then(|v| v.parse::<u64>().ok())
+    {
         Some(secs) => format!("Anthropic usage API 請求過於頻繁，請於 {secs} 秒後再試"),
         None => "Anthropic usage API 請求過於頻繁，請稍後再試".to_string(),
     }
@@ -70,24 +73,28 @@ struct ClaudeCredentials {
 
 fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, String> {
     let root = if claude_root.trim().is_empty() {
-        let user_profile = env::var("USERPROFILE")
-            .map_err(|_| "USERPROFILE not set".to_string())?;
+        let user_profile =
+            env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())?;
         std::path::PathBuf::from(user_profile).join(".claude")
     } else {
         std::path::PathBuf::from(claude_root)
     };
 
     // Try both .credentials.json and credentials.json
-    let candidate_paths = [root.join(".credentials.json"), root.join("credentials.json")];
-    let creds_path = candidate_paths
-        .iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| {
-            format!(
-                "credentials file not found — checked: {}",
-                candidate_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
-            )
-        })?;
+    let candidate_paths = [
+        root.join(".credentials.json"),
+        root.join("credentials.json"),
+    ];
+    let creds_path = candidate_paths.iter().find(|p| p.exists()).ok_or_else(|| {
+        format!(
+            "credentials file not found — checked: {}",
+            candidate_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
 
     let content = std::fs::read_to_string(creds_path)
         .map_err(|e| format!("failed to read {}: {e}", creds_path.display()))?;
@@ -96,7 +103,8 @@ fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, Strin
 
     // costats / Claude Code use "claudeAiOauth" as the top-level key
     // fallback to older naming conventions just in case
-    let oauth = json.get("claudeAiOauth")
+    let oauth = json
+        .get("claudeAiOauth")
         .or_else(|| json.get("oauth"))
         .or_else(|| json.get("claudeAiOauthGitHubIntegration"));
 
@@ -116,20 +124,28 @@ fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, Strin
         .and_then(|v| v.as_i64());
 
     if access_token.is_none() && refresh_token.is_none() {
-        let keys: Vec<String> = json.as_object()
+        let keys: Vec<String> = json
+            .as_object()
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
         return Err(format!(
             "No OAuth token found in {} (top-level keys: {})",
-            creds_path.display(), keys.join(", ")
+            creds_path.display(),
+            keys.join(", ")
         ));
     }
 
-    Ok(ClaudeCredentials { access_token, refresh_token, expires_at_ms })
+    Ok(ClaudeCredentials {
+        access_token,
+        refresh_token,
+        expires_at_ms,
+    })
 }
 
 fn is_token_expired(expires_at_ms: Option<i64>) -> bool {
-    let Some(exp_ms) = expires_at_ms else { return false };
+    let Some(exp_ms) = expires_at_ms else {
+        return false;
+    };
     let now_ms = chrono::Utc::now().timestamp_millis();
     // Consider expired if within 5 minutes of expiry
     now_ms >= exp_ms - 5 * 60 * 1000
@@ -149,7 +165,8 @@ fn refresh_oauth_token(refresh_token: &str) -> Result<String, String> {
         .send_string(&body)
         .map_err(|e| format!("OAuth token refresh request failed: {e}"))?;
 
-    let json: serde_json::Value = response.into_json()
+    let json: serde_json::Value = response
+        .into_json()
         .map_err(|e| format!("failed to parse token refresh response: {e}"))?;
 
     json.get("access_token")
@@ -170,13 +187,13 @@ fn get_valid_access_token(claude_root: &str) -> Result<String, String> {
 
     // Try to refresh using refresh_token
     if let Some(ref rt) = creds.refresh_token {
-        return refresh_oauth_token(rt).map_err(|e| {
-            format!("access token expired and refresh failed: {e}")
-        });
+        return refresh_oauth_token(rt)
+            .map_err(|e| format!("access token expired and refresh failed: {e}"));
     }
 
     // Fall back to access_token even if possibly expired
-    creds.access_token
+    creds
+        .access_token
         .ok_or_else(|| "no valid OAuth token found".to_string())
 }
 
@@ -189,12 +206,20 @@ fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<Quota
         .and_then(|v| v.as_f64())
         .map(|pct| {
             // Normalise 0–100 → 0.0–1.0
-            if pct > 1.0 { pct / 100.0 } else { pct }
+            if pct > 1.0 {
+                pct / 100.0
+            } else {
+                pct
+            }
         })
         .or_else(|| {
             let used = obj.get("tokens")?.as_f64()?;
             let max = obj.get("max_tokens")?.as_f64()?;
-            if max > 0.0 { Some(used / max) } else { None }
+            if max > 0.0 {
+                Some(used / max)
+            } else {
+                None
+            }
         })?;
 
     let resets_at = obj
@@ -258,7 +283,9 @@ impl QuotaAdapter for ClaudeAdapter {
                         Ok(new_at) => match call_usage_api(&new_at) {
                             Ok(r) => r,
                             Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-                                return no_auth_snapshot("Token 刷新後仍被拒絕，請重新登入 Claude Code");
+                                return no_auth_snapshot(
+                                    "Token 刷新後仍被拒絕，請重新登入 Claude Code",
+                                );
                             }
                             Err(ureq::Error::Status(429, resp)) => {
                                 return rate_limited_snapshot(rate_limit_message(&resp));
@@ -268,7 +295,9 @@ impl QuotaAdapter for ClaudeAdapter {
                         Err(e) => return no_auth_snapshot(format!("Token 刷新失敗: {e}")),
                     }
                 } else {
-                    return no_auth_snapshot("Claude OAuth token 被拒絕，請重新登入 Claude Code (claude /login)");
+                    return no_auth_snapshot(
+                        "Claude OAuth token 被拒絕，請重新登入 Claude Code (claude /login)",
+                    );
                 }
             }
             Err(ureq::Error::Status(429, resp)) => {
@@ -281,7 +310,9 @@ impl QuotaAdapter for ClaudeAdapter {
 
         let body: serde_json::Value = match response.into_json() {
             Ok(v) => v,
-            Err(e) => return error_snapshot(format!("failed to parse Anthropic API response: {e}")),
+            Err(e) => {
+                return error_snapshot(format!("failed to parse Anthropic API response: {e}"))
+            }
         };
 
         // Anthropic OAuth usage API: windows are at the TOP LEVEL of the response
@@ -315,7 +346,11 @@ impl QuotaAdapter for ClaudeAdapter {
             let monthly_limit_cents = eu.get("monthly_limit").and_then(|v| v.as_u64());
             let monthly_limit = monthly_limit_cents.map(|c| c); // store as cents for now
             let utilization = monthly_limit_cents.map(|limit| {
-                if limit > 0 { used_cents / limit as f64 } else { 0.0 }
+                if limit > 0 {
+                    used_cents / limit as f64
+                } else {
+                    0.0
+                }
             });
             Some(ExtraCredits {
                 is_enabled,
@@ -331,7 +366,11 @@ impl QuotaAdapter for ClaudeAdapter {
             source: "remote_api".to_string(),
             fetched_at: current_timestamp(),
             error_message: None,
-            windows: if windows.is_empty() { None } else { Some(windows) },
+            windows: if windows.is_empty() {
+                None
+            } else {
+                Some(windows)
+            },
             local_tokens: None,
             extra_credits,
         }
@@ -366,6 +405,7 @@ mod tests {
             minimize_to_tray: false,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            allow_create_project_config_dir: false,
         };
 
         let adapter = ClaudeAdapter;

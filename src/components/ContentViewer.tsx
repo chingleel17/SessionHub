@@ -3,6 +3,7 @@ import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { TreeNode } from "../types";
+import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
 
 type Props = {
   content: string | null;
@@ -66,7 +67,7 @@ function renderMarkdownHtml(content: string, interactiveTasks: boolean): string 
   }
 
   return DOMPurify.sanitize(
-    marked.parse(content, { async: false, gfm: true, renderer }),
+    marked.parse(prepareMarkdownForPreview(content), { async: false, gfm: true, renderer }),
     {
       ADD_TAGS: ["button", "span"],
       ADD_ATTR: ["class", "data-task-index", "type", "role", "aria-checked", "aria-hidden", "aria-label"],

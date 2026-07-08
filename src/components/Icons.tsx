@@ -131,3 +131,50 @@ export const StatsIcon = icon(
     <polyline points="21 12 21 7 16 7" />
   </>,
 );
+
+export const AgentsIcon = icon(
+  <>
+    <path d="M12 3l7 4v5c0 4.4-2.98 8.46-7 9-4.02-.54-7-4.6-7-9V7l7-4z" />
+    <path d="M9 12h6" />
+    <path d="M12 9v6" />
+  </>,
+);
+
+export const RefreshIcon = icon(
+  <>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <polyline points="21 3 21 9 15 9" />
+  </>,
+);
+
+export const ChevronLeftIcon = icon(<polyline points="15 18 9 12 15 6" />);
+
+export const ExternalLinkIcon = icon(
+  <>
+    <path d="M14 3h7v7" />
+    <path d="M10 14 21 3" />
+    <path d="M21 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+  </>,
+);
+
+export const FolderIcon = icon(
+  <>
+    <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </>,
+);
+
+export const SyncIcon = icon(
+  <>
+    <polyline points="17 1 21 5 17 9" />
+    <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+    <polyline points="7 23 3 19 7 15" />
+    <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+  </>,
+);
+
+export const EyeIcon = icon(
+  <>
+    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </>,
+);

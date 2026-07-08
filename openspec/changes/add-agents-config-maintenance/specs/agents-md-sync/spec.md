@@ -112,3 +112,9 @@
 - **WHEN** 使用者開啟全域 Agents 頁面的 AGENTS.md 分頁
 - **THEN** 系統僅檢查固定已知的 agent 根目錄位置（依設定頁的根目錄覆蓋值解析）並列出存在的指示檔
 - **AND** 不存在的位置標示為未建立
+
+#### Scenario: 掃描 ~/.agents/instructions
+
+- **WHEN** 使用者另外維護 `~/.agents/instructions/AGENTS.md`
+- **THEN** 全域 AGENTS 掃描 SHALL 納入 `~/.agents/instructions/` 作為固定已知位置之一
+- **AND** 若同目錄存在 `CLAUDE.md`，其狀態判定與一般 AGENTS/CLAUDE 對位一致

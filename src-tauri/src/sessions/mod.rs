@@ -330,7 +330,13 @@ pub(crate) fn get_sessions_internal(
     let needs_git: Vec<usize> = all_sessions
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.repo_root.is_none() && s.cwd.as_deref().map(|c| !c.trim().is_empty()).unwrap_or(false))
+        .filter(|(_, s)| {
+            s.repo_root.is_none()
+                && s.cwd
+                    .as_deref()
+                    .map(|c| !c.trim().is_empty())
+                    .unwrap_or(false)
+        })
         .map(|(i, _)| i)
         .collect();
 

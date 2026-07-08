@@ -1,4 +1,5 @@
 mod activity;
+mod agents_config;
 mod commands;
 mod db;
 mod openspec_scan;
@@ -68,33 +69,37 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     let db_state = app_handle.state::<DbState>();
                     let quota_cache = app_handle.state::<QuotaCache>();
-                    let settings = load_settings_internal().unwrap_or_else(|_| {
-                        AppSettings {
-                            enable_quota_monitoring: false,
-                            copilot_root: String::new(),
-                            opencode_root: String::new(),
-                            codex_root: String::new(),
-                            claude_root: String::new(),
-                            hook_scripts_path: String::new(),
-                            claude_quota_reset_day: 1,
-                            minimize_to_tray: false,
-                            terminal_path: None,
-                            external_editor_path: None,
-                            show_archived: false,
-                            pinned_projects: Vec::new(),
-                            enabled_providers: Vec::new(),
-                            provider_integrations: Vec::new(),
-                            default_launcher: None,
-                            enable_intervention_notification: false,
-                            enable_session_end_notification: false,
-                            show_status_bar: true,
-                            analytics_refresh_interval: 30,
-                            analytics_panel_collapsed: false,
-                            quota_enabled_providers: Vec::new(),
-                        }
+                    let settings = load_settings_internal().unwrap_or_else(|_| AppSettings {
+                        enable_quota_monitoring: false,
+                        copilot_root: String::new(),
+                        opencode_root: String::new(),
+                        codex_root: String::new(),
+                        claude_root: String::new(),
+                        hook_scripts_path: String::new(),
+                        claude_quota_reset_day: 1,
+                        minimize_to_tray: false,
+                        terminal_path: None,
+                        external_editor_path: None,
+                        show_archived: false,
+                        pinned_projects: Vec::new(),
+                        enabled_providers: Vec::new(),
+                        provider_integrations: Vec::new(),
+                        default_launcher: None,
+                        enable_intervention_notification: false,
+                        enable_session_end_notification: false,
+                        show_status_bar: true,
+                        analytics_refresh_interval: 30,
+                        analytics_panel_collapsed: false,
+                        quota_enabled_providers: Vec::new(),
+                        allow_create_project_config_dir: false,
                     });
                     if settings.enable_quota_monitoring {
-                        commands::quota::refresh_quota_internal(&db_state, &quota_cache, &settings, None);
+                        commands::quota::refresh_quota_internal(
+                            &db_state,
+                            &quota_cache,
+                            &settings,
+                            None,
+                        );
                         let _ = app_handle.emit("quota-snapshots-updated", ());
                     }
                 });
@@ -124,7 +129,12 @@ pub fn run() {
                         last_refresh = std::time::Instant::now();
                         let db_state = app_handle.state::<DbState>();
                         let quota_cache = app_handle.state::<QuotaCache>();
-                        commands::quota::refresh_quota_internal(&db_state, &quota_cache, &settings, None);
+                        commands::quota::refresh_quota_internal(
+                            &db_state,
+                            &quota_cache,
+                            &settings,
+                            None,
+                        );
                         let _ = app_handle.emit("quota-snapshots-updated", ());
                     }
                 });
@@ -245,7 +255,16 @@ pub fn run() {
             get_claude_usage_blocks,
             refresh_claude_quota,
             get_quota_snapshots,
-            refresh_quota
+            refresh_quota,
+            scan_agents_md,
+            scan_global_agents_md,
+            scan_agents_skills,
+            scan_agents_commands,
+            sync_agents_items,
+            read_agents_file,
+            write_agents_file,
+            load_project_agents_prefs,
+            save_project_agents_prefs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1650,9 +1669,24 @@ mod tests {
         assert!(data.active_changes[0].has_proposal);
         assert!(!data.active_changes[0].has_design);
         assert!(data.active_changes[0].has_tasks);
-        assert_eq!(data.active_changes[0].created_at.as_deref(), Some("2026-07-02"));
-        assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.done), Some(0));
-        assert_eq!(data.active_changes[0].task_progress.as_ref().map(|p| p.total), Some(1));
+        assert_eq!(
+            data.active_changes[0].created_at.as_deref(),
+            Some("2026-07-02")
+        );
+        assert_eq!(
+            data.active_changes[0]
+                .task_progress
+                .as_ref()
+                .map(|p| p.done),
+            Some(0)
+        );
+        assert_eq!(
+            data.active_changes[0]
+                .task_progress
+                .as_ref()
+                .map(|p| p.total),
+            Some(1)
+        );
         assert_eq!(data.active_changes[0].specs_count, 1);
         assert_eq!(data.active_changes[0].specs.len(), 1);
         assert_eq!(data.active_changes[0].specs[0].name, "auth");
@@ -1702,7 +1736,10 @@ mod tests {
     fn scan_openspec_falls_back_to_filesystem_created_time_when_yaml_missing() {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("openspec-project-fallback-created-at");
-        let change_dir = project_dir.join("openspec").join("changes").join("feature-fallback");
+        let change_dir = project_dir
+            .join("openspec")
+            .join("changes")
+            .join("feature-fallback");
 
         fs::create_dir_all(&change_dir).expect("create change dir");
 

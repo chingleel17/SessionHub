@@ -1,10 +1,12 @@
 import { useI18n } from "../i18n/I18nProvider";
+import { useTheme } from "../theme/ThemeProvider";
 import type {
   AppSettings,
   ProviderIntegrationState,
   ProviderIntegrationStatus,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
+import { MoonIcon, SunIcon } from "./Icons";
 
 type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
@@ -134,6 +136,7 @@ export function SettingsView({
   onRefreshQuota,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
+  const { theme, setTheme } = useTheme();
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
   const providerLabels = {
     copilot: t("settings.fields.providerCopilot"),
@@ -376,6 +379,48 @@ export function SettingsView({
               <option value="zh-TW">{t("sidebar.language.zhTW")}</option>
               <option value="en-US">{t("sidebar.language.enUS")}</option>
             </select>
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-field settings-field--stacked">
+            <label>{t("sidebar.iconStyle.label")}</label>
+            <p className="settings-field-desc settings-field-desc--block">{t("sidebar.iconStyle.description")}</p>
+            <div className="theme-toggle-row theme-toggle-row--settings">
+              <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}><SunIcon size={15} /></span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={theme === "dark"}
+                className={`theme-toggle-switch ${theme === "dark" ? "dark" : ""}`}
+                title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
+                onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+              >
+                <span className="theme-toggle-thumb" />
+              </button>
+              <span className={`theme-toggle-icon ${theme === "dark" ? "active" : ""}`}><MoonIcon size={15} /></span>
+              <span className="theme-toggle-label">
+                {theme === "light" ? t("sidebar.theme.light") : t("sidebar.theme.dark")}
+              </span>
+            </div>
+          </div>
+
+          <div className="settings-field settings-field--stacked">
+            <label>{t("settings.agents.title")}</label>
+            <p className="settings-field-desc settings-field-desc--block">{t("settings.agents.subtitle")}</p>
+            <label className="checkbox-group">
+              <input
+                type="checkbox"
+                checked={settingsForm.allowCreateProjectConfigDir ?? false}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, allowCreateProjectConfigDir: event.currentTarget.checked })
+                }
+              />
+              <span>
+                {t("settings.agents.allowCreateProjectConfigDir")}
+                <small className="settings-field-desc">{t("settings.agents.allowCreateProjectConfigDirDesc")}</small>
+              </span>
+            </label>
           </div>
 
           <div className="settings-actions">

@@ -88,6 +88,64 @@
   color: var(--color-action-primary-text);
 }
 
+[data-theme="dark"] .agents-config-card {
+  background:
+    radial-gradient(circle at top right, rgba(47, 109, 246, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(19, 23, 32, 0.98), rgba(15, 19, 28, 0.98));
+  border-color: rgba(120, 148, 214, 0.16);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.32);
+}
+
+[data-theme="dark"] .agents-toolbar,
+[data-theme="dark"] .agents-matrix-card,
+[data-theme="dark"] .agents-detail-view,
+[data-theme="dark"] .agents-sync-report,
+[data-theme="dark"] .sync-conflict-dialog,
+[data-theme="dark"] .sync-conflict-item,
+[data-theme="dark"] .agents-content-actions {
+  background: rgba(22, 27, 38, 0.9);
+  border-color: rgba(107, 122, 153, 0.22);
+}
+
+[data-theme="dark"] .agents-detail-header {
+  background: rgba(27, 33, 46, 0.92);
+  border-color: rgba(107, 122, 153, 0.22);
+}
+
+[data-theme="dark"] .agents-link-button {
+  background: linear-gradient(180deg, rgba(28, 34, 47, 0.98), rgba(20, 25, 37, 0.98));
+  border-color: rgba(99, 129, 201, 0.2);
+}
+
+[data-theme="dark"] .agents-link-button:hover {
+  background: linear-gradient(180deg, rgba(33, 41, 56, 0.98), rgba(24, 30, 43, 0.98));
+  border-color: rgba(112, 149, 244, 0.34);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] .agents-top-tabs .sub-tab-item--active {
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--color-action-primary);
+}
+
+[data-theme="dark"] .theme-toggle-row--settings {
+  background: rgba(22, 27, 38, 0.82);
+  border-color: rgba(107, 122, 153, 0.24);
+}
+
+[data-theme="dark"] .agents-matrix-table thead {
+  background: linear-gradient(180deg, rgba(32, 38, 52, 0.94), rgba(25, 30, 43, 0.98));
+}
+
+[data-theme="dark"] .agents-matrix-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .agents-report-row {
+  background: rgba(27, 33, 46, 0.88);
+  border-color: rgba(107, 122, 153, 0.18);
+}
+
 /* ── Sticky Project Shell（Sub-tab Bar 容器）深色模式覆寫 ── */
 [data-theme="dark"] .sticky-project-shell::before {
   border-color: var(--color-border-subtle);

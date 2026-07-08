@@ -154,7 +154,11 @@ pub fn get_session_activity_statuses(
     opencode_root: Option<String>,
     scan_cache: State<'_, Arc<ScanCache>>,
 ) -> Vec<SessionActivityStatus> {
-    get_session_activity_statuses_internal(&sessions, opencode_root.as_deref(), &scan_cache.activity)
+    get_session_activity_statuses_internal(
+        &sessions,
+        opencode_root.as_deref(),
+        &scan_cache.activity,
+    )
 }
 
 #[tauri::command]

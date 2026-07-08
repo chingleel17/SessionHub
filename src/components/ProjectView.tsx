@@ -2,20 +2,27 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import { DropdownMenu } from "./DropdownMenu";
 import type {
+  AgentsMdScanResult,
+  CommandsScanResult,
   AnalyticsDataPoint,
   AnalyticsGroupBy,
   IdeLauncherType,
   OpenSpecData,
+  ProjectAgentsPrefs,
   ProjectGroup,
   ProjectSubTabState,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SessionTodo,
+  SkillsScanResult,
+  SyncReport,
+  SyncRequest,
   SisyphusData,
   SortKey,
   ToolAvailability,
 } from "../types";
+import { AgentsConfigView } from "./AgentsConfigView";
 import { ProjectAnalyticsTab } from "./ProjectAnalyticsTab";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
@@ -89,13 +96,30 @@ type Props = {
   sessionsLoading: boolean;
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
+  agentsMdData?: AgentsMdScanResult;
+  skillsData?: SkillsScanResult;
+  commandsData?: CommandsScanResult;
+  projectAgentsPrefs: ProjectAgentsPrefs;
   plansSpecsLoading: boolean;
   plansSpecsRefreshing: boolean;
+  agentsMdLoading: boolean;
+  skillsLoading: boolean;
+  commandsLoading: boolean;
+  agentsPrefsLoading: boolean;
   onReadFileContent: (filePath: string) => Promise<string>;
   onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
   onWriteOpenspecFile: (projectCwd: string, relativePath: string, content: string) => Promise<void>;
+  onWriteAgentsFile: (filePath: string, content: string) => Promise<void>;
   onRefreshPlansSpecs: () => Promise<void>;
+  onRefreshAgentsMd: () => Promise<void>;
+  onRefreshAgentsSkills: () => Promise<void>;
+  onRefreshAgentsCommands: () => Promise<void>;
   plansSpecsRefreshToken: string;
+  onOpenAgentsExternal: (path: string) => void;
+  onRevealAgentsPath: (path: string) => void;
+  onPreviewAgentsSync: (request: SyncRequest) => Promise<SyncReport>;
+  onApplyAgentsSync: (request: SyncRequest) => Promise<SyncReport>;
+  onUpdateProjectAgentsPrefs: (prefs: ProjectAgentsPrefs) => Promise<void>;
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
@@ -197,13 +221,30 @@ export function ProjectView({
   sessionsLoading,
   sisyphusData,
   openspecData,
+  agentsMdData,
+  skillsData,
+  commandsData,
+  projectAgentsPrefs,
   plansSpecsLoading,
   plansSpecsRefreshing,
+  agentsMdLoading,
+  skillsLoading,
+  commandsLoading,
+  agentsPrefsLoading,
   onReadFileContent,
   onReadOpenspecFile,
   onWriteOpenspecFile,
+  onWriteAgentsFile,
   onRefreshPlansSpecs,
+  onRefreshAgentsMd,
+  onRefreshAgentsSkills,
+  onRefreshAgentsCommands,
   plansSpecsRefreshToken,
+  onOpenAgentsExternal,
+  onRevealAgentsPath,
+  onPreviewAgentsSync,
+  onApplyAgentsSync,
+  onUpdateProjectAgentsPrefs,
   activePlanSessionId,
   onActivePlanChange,
   planDraft,
@@ -369,6 +410,13 @@ export function ProjectView({
               onClick={() => setActiveSubTab("analytics")}
             >
               {t("project.subTab.analytics")}
+            </button>
+            <button
+              type="button"
+              className={`sub-tab-item ${activeSubTab === "agents" ? "sub-tab-item--active" : ""}`}
+              onClick={() => setActiveSubTab("agents")}
+            >
+              {t("project.subTab.agents")}
             </button>
             {openDetailKeys.map((detailKey) => {
               const detail = parseDetailTabKey(detailKey);
@@ -712,6 +760,28 @@ export function ProjectView({
           onRefresh={onRefreshPlansSpecs}
           refreshToken={plansSpecsRefreshToken}
           projectCwd={project.pathLabel}
+        />
+      ) : activeSubTab === "agents" ? (
+        <AgentsConfigView
+          scope={{ kind: "project", projectCwd: project.pathLabel }}
+          agentsMdData={agentsMdData}
+          skillsData={skillsData}
+          commandsData={commandsData}
+          prefs={projectAgentsPrefs}
+          isAgentsMdLoading={agentsMdLoading}
+          isSkillsLoading={skillsLoading}
+          isCommandsLoading={commandsLoading}
+          isPrefsLoading={agentsPrefsLoading}
+          onRefreshAgentsMd={onRefreshAgentsMd}
+          onRefreshSkills={onRefreshAgentsSkills}
+          onRefreshCommands={onRefreshAgentsCommands}
+          onReadFile={onReadFileContent}
+          onWriteFile={onWriteAgentsFile}
+          onOpenExternal={onOpenAgentsExternal}
+          onRevealPath={onRevealAgentsPath}
+          onPreviewSync={onPreviewAgentsSync}
+          onApplySync={onApplyAgentsSync}
+          onUpdatePrefs={onUpdateProjectAgentsPrefs}
         />
       ) : activeSubTab.startsWith("plan:") ? (
         (() => {

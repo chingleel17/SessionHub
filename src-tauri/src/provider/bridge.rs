@@ -297,7 +297,9 @@ fn is_activity_only_event(event_type: &str) -> bool {
 /// 依 hook eventType 計算前端需要的 (status, detail)。
 fn derive_activity_status(event_type: &str, stop_reason: Option<&str>) -> (String, Option<String>) {
     match event_type {
-        "session.started" | "prompt.submitted" => ("active".to_string(), Some("thinking".to_string())),
+        "session.started" | "prompt.submitted" => {
+            ("active".to_string(), Some("thinking".to_string()))
+        }
         "tool.pre" => ("active".to_string(), Some("tool_call".to_string())),
         "tool.post" => ("active".to_string(), Some("working".to_string())),
         "session.stop" => {
@@ -469,7 +471,10 @@ pub(crate) fn process_provider_bridge_event(
             // tool.pre / tool.post / prompt.submitted / session.started / session.stop
             // 只需更新 activity status，不觸發掃描（session.stop 與 session.started 不改 JSONL 結構）
             let is_hint = is_activity_only_event(&record.event_type)
-                || matches!(record.event_type.as_str(), "session.started" | "session.stop");
+                || matches!(
+                    record.event_type.as_str(),
+                    "session.started" | "session.stop"
+                );
             if is_hint {
                 let resolved_session_id = record
                     .session_id

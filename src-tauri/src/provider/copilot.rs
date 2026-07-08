@@ -23,25 +23,20 @@ const SCRIPT_ON_SESSION_START_JS: &str =
 const SCRIPT_ON_SESSION_END_JS: &str = include_str!("../../../hooks/copilot/on-session-end.cjs");
 const SCRIPT_ON_USER_PROMPT_SUBMITTED_JS: &str =
     include_str!("../../../hooks/copilot/on-user-prompt-submitted.cjs");
-const SCRIPT_ON_PRE_TOOL_USE_JS: &str =
-    include_str!("../../../hooks/copilot/on-pre-tool-use.cjs");
+const SCRIPT_ON_PRE_TOOL_USE_JS: &str = include_str!("../../../hooks/copilot/on-pre-tool-use.cjs");
 const SCRIPT_ON_POST_TOOL_USE_JS: &str =
     include_str!("../../../hooks/copilot/on-post-tool-use.cjs");
 const SCRIPT_ON_ERROR_OCCURRED_JS: &str =
     include_str!("../../../hooks/copilot/on-error-occurred.cjs");
 
 // sh fallback（無 node 環境時的手動退路）
-const MODULE_RECORD_EVENT_SH: &str =
-    include_str!("../../../hooks/copilot/modules/record-event.sh");
-const SCRIPT_ON_SESSION_START_SH: &str =
-    include_str!("../../../hooks/copilot/on-session-start.sh");
+const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/copilot/modules/record-event.sh");
+const SCRIPT_ON_SESSION_START_SH: &str = include_str!("../../../hooks/copilot/on-session-start.sh");
 const SCRIPT_ON_SESSION_END_SH: &str = include_str!("../../../hooks/copilot/on-session-end.sh");
 const SCRIPT_ON_USER_PROMPT_SUBMITTED_SH: &str =
     include_str!("../../../hooks/copilot/on-user-prompt-submitted.sh");
-const SCRIPT_ON_PRE_TOOL_USE_SH: &str =
-    include_str!("../../../hooks/copilot/on-pre-tool-use.sh");
-const SCRIPT_ON_POST_TOOL_USE_SH: &str =
-    include_str!("../../../hooks/copilot/on-post-tool-use.sh");
+const SCRIPT_ON_PRE_TOOL_USE_SH: &str = include_str!("../../../hooks/copilot/on-pre-tool-use.sh");
+const SCRIPT_ON_POST_TOOL_USE_SH: &str = include_str!("../../../hooks/copilot/on-post-tool-use.sh");
 const SCRIPT_ON_ERROR_OCCURRED_SH: &str =
     include_str!("../../../hooks/copilot/on-error-occurred.sh");
 
@@ -73,7 +68,12 @@ fn hook_script_entries() -> [(&'static str, &'static str); 15] {
 
 pub(crate) fn ensure_copilot_hook_scripts_installed() -> Result<PathBuf, String> {
     let root = default_copilot_hook_scripts_root()?;
-    install_hook_scripts("Copilot", &root, &hook_script_entries(), HOOK_SCRIPT_VERSION)?;
+    install_hook_scripts(
+        "Copilot",
+        &root,
+        &hook_script_entries(),
+        HOOK_SCRIPT_VERSION,
+    )?;
     super::install_notification_binary(&root)?;
     Ok(root)
 }
@@ -106,7 +106,10 @@ fn render_copilot_hook_command(script_path: &Path, bridge_path: &Path) -> String
     )
 }
 
-fn render_copilot_integration(bridge_path: &Path, hook_scripts_root: &Path) -> Result<String, String> {
+fn render_copilot_integration(
+    bridge_path: &Path,
+    hook_scripts_root: &Path,
+) -> Result<String, String> {
     let integration = serde_json::json!({
         "version": 1,
         "sessionHub": managed_provider_metadata(COPILOT_PROVIDER, bridge_path),

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
-import { useTheme } from "../theme/ThemeProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
-import { MoonIcon, PinIcon, SunIcon } from "./Icons";
+import { AgentsIcon, PinIcon } from "./Icons";
 
 type Props = {
   activeView: string;
@@ -45,7 +44,6 @@ export function Sidebar({
   onConfigurePath,
 }: Props) {
   const { t } = useI18n();
-  const { theme, setTheme } = useTheme();
 
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
@@ -297,36 +295,15 @@ export function Sidebar({
 
       <footer className="sidebar-footer">
         {isSidebarCollapsed ? (
-          <button
-            type="button"
-            className="sidebar-icon-button"
-            title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
-            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-          >
-            {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
-          </button>
-        ) : (
-          <div className="theme-toggle-row">
-            <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}>☀</span>
+          <div className="sidebar-quick-actions">
             <button
               type="button"
-              role="switch"
-              aria-checked={theme === "dark"}
-              className={`theme-toggle-switch ${theme === "dark" ? "dark" : ""}`}
-              title={theme === "light" ? t("sidebar.theme.dark") : t("sidebar.theme.light")}
-              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+              className={`sidebar-icon-button ${activeView === "agents-global" ? "active" : ""}`}
+              title={t("agents.nav")}
+              onClick={() => onNavigate("agents-global")}
             >
-              <span className="theme-toggle-thumb" />
+              <AgentsIcon size={16} />
             </button>
-            <span className={`theme-toggle-icon ${theme === "dark" ? "active" : ""}`}>☾</span>
-            <span className="theme-toggle-label">
-              {theme === "light" ? t("sidebar.theme.light") : t("sidebar.theme.dark")}
-            </span>
-          </div>
-        )}
-
-        {isSidebarCollapsed ? (
-          <div className="sidebar-quick-actions">
             <button
               type="button"
               className={`sidebar-icon-button ${activeView === "settings" ? "active" : ""}`}
@@ -347,14 +324,24 @@ export function Sidebar({
         ) : null}
 
         {!isSidebarCollapsed ? (
-          <button
-            type="button"
-            className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
-            onClick={onConfigurePath}
-          >
-            <span className="sidebar-link-icon">⚙</span>
-            <span>{t("sidebar.menu.settings")}</span>
-          </button>
+          <>
+            <button
+              type="button"
+              className={`sidebar-link ${activeView === "agents-global" ? "active" : ""}`}
+              onClick={() => onNavigate("agents-global")}
+            >
+              <span className="sidebar-link-icon"><AgentsIcon size={16} /></span>
+              <span>{t("agents.nav")}</span>
+            </button>
+            <button
+              type="button"
+              className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
+              onClick={onConfigurePath}
+            >
+              <span className="sidebar-link-icon">⚙</span>
+              <span>{t("sidebar.menu.settings")}</span>
+            </button>
+          </>
         ) : null}
 
         <div className="sidebar-version">

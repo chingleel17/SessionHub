@@ -9,6 +9,7 @@
 - **Rust 掃描慣例**：`openspec_scan.rs` / `sisyphus.rs` 為單層 `fs::read_dir` 掃描；`resolve_openspec_file_internal` 示範 canonicalize + `starts_with` 的路徑穿越防護；`get_project_specs` 示範背景執行緒非同步掃描。專案目前**沒有**遞迴 walker 與 ignore 機制。
 - **Agent 根目錄解析**：`settings.rs` 已有 `resolve_claude_root` / `resolve_codex_root` / `resolve_copilot_root` / `default_opencode_config_root`（`~/.config/opencode`）。
 - **本機慣例（已實地確認）**：專案級 `.agents/skills/<name>/SKILL.md` 為來源 → `.claude/skills`、`.codex/skills`、`.opencode/skills`、`.copilot/skills`；commands 來源為 `.agents/skills/command/*.md` → `.claude/commands/`（可含子目錄如 `opsx/apply.md`）、`.codex/prompts/`、`.opencode/command/`、`.copilot/prompts/`。全域來源為 `~/.agents/skills/`（含 `command/` 子目錄）。
+- **額外實際目錄**：使用者環境另有 `~/.agents/instructions/AGENTS.md`，需納入全域 AGENTS 掃描；部分專案或全域環境可能已存在 target 端 commands，但來源端 `.agents/skills/command/` 尚未建立，此情況在 UI 中仍需可見，避免使用者誤判為「沒有 command」。
 
 ## Goals / Non-Goals
 
@@ -87,17 +88,25 @@ Global scope 的根目錄透過既有 `settings.rs::resolve_*_root` 與 `default
 - `WalkDir::new(root).max_depth(8).follow_links(false)` + `filter_entry` 忽略：`node_modules, .git, dist, build, vendor, .next, .nuxt, target, .sessionhub` + `prefs.ignored_paths`。
 - 上限約 20,000 個目錄，超過即停止並設 `truncated: true`（UI 顯示警告）。
 - 目錄含 AGENTS.md **或** CLAUDE.md 即產生 entry：兩者 hash 相等 → `in-sync`；僅 AGENTS.md → `target-missing`；皆存在但 hash 不同 → `differs`（`target_newer` 由 mtime 判定）；僅 CLAUDE.md → `source-missing`。
-- 全域掃描**絕不**遞迴整個家目錄，僅檢查固定已知位置（各 agent root 的指示檔與 skills/command 目錄）。
+- 全域掃描**絕不**遞迴整個家目錄，僅檢查固定已知位置（各 agent root 的指示檔與 skills/command 目錄），並額外納入 `~/.agents/instructions/AGENTS.md` 與同目錄的 `CLAUDE.md` 對位。
 
 ### D5a. Skills 目錄比對範圍
 
 計算 skill 目錄的內容雜湊聚合時，比對範圍套用與 D5 相同的忽略清單（`node_modules, .git, dist, build, vendor, .next, .nuxt, target`），避免使用者慣例中偶爾混入 skill 目錄的建置產物或相依套件（如觀察到的 `.opencode/node_modules`）拖慢比對或造成假性「內容不同」。忽略清單套用於 skill 來源目錄與各 target 目錄雙側。
 
-### D5b. Skills/Commands 矩陣僅列出來源存在的項目
+### D5b. Skills 矩陣僅列出來源存在的項目
 
-矩陣的列（skill / command）完全由**來源**掃描結果決定；若某 target 目錄下存在一個來源已不存在的同名項目（例如來源被刪除但目標仍保留），系統不會為其產生獨立列，該項目對使用者不可見、也不參與同步。此為已知限制（v1 不做鏡像刪除／回收），非缺陷。
+Skills 矩陣的列完全由**來源**掃描結果決定；若某 target 目錄下存在一個來源已不存在的同名 skill（例如來源被刪除但目標仍保留），系統不會為其產生獨立列，該項目對使用者不可見、也不參與同步。此為已知限制（v1 不做鏡像刪除／回收），非缺陷。
 
-### D5c. SyncRequest 產生規則（Skills/Commands 矩陣 → 同步）
+### D5c. Commands 矩陣列來源改為來源與 target 聯集
+
+Commands 與 skills 不同，使用者常先在 `.claude/commands` 或 `.opencode/command` 維護既有命令，再逐步回補 `.agents/skills/command/`。因此 commands 矩陣的列 SHALL 由「來源目錄 + 各 target 目錄」的聯集決定：
+
+- 若來源存在，`source_path` 與同步來源皆指向來源端。
+- 若來源不存在但某 target 端存在，該列仍須顯示於矩陣，供使用者檢視現況並透過衝突流程決定是否回補來源。
+- 實際同步時仍以預期來源路徑（`.agents/skills/command/...`）作為 canonical source path；若來源缺失，沿用 `source-missing` 衝突語意。
+
+### D5d. SyncRequest 產生規則（Skills/Commands 矩陣 → 同步）
 
 前端提交同步時，`SyncRequest.items` 為「使用者勾選的列（skill/command）」×「目前啟用的 target（`prefs.enabledTargets` 交集使用者本次額外勾選）」之笛卡爾積，並排除以下情況：
 - 該 target 根目錄未偵測到（`TargetInfo.root_exists == false`）的組合會顯示於矩陣但不可勾選。
@@ -145,7 +154,9 @@ Global scope 的根目錄透過既有 `settings.rs::resolve_*_root` 與 `default
   - AGENTS.md 分頁：左 ExplorerTree（`buildAgentsMdTree`；badge=狀態、tone 對映 in-sync→done / target-missing→not_started / differs→in_progress）+ 右 ContentViewer；「編輯」切換為 PlanEditor 式編輯區；工具列含外部編輯器開啟、檔案總管顯示、同步此目錄。
   - Skills / Commands 分頁：狀態矩陣表格——每列一個 entry（勾選框 + 名稱，點名稱右側預覽 md），每個 target 一欄狀態格（✓ 一致 / – 缺少 / ≠ 差異 / 較新! / 🔗 已連結）；欄標題勾選框綁 `prefs.enabledTargets`（root_exists=false 的欄位仍顯示但格內不可勾選）；Skills 分頁另有「同步模式」切換（複製 / 連結，預設複製）；底部「預覽同步（dry-run）」→ SyncReport 逐項勾選 →「套用」。
 - `SyncConflictDialog.tsx`：逐衝突 radio（來源→目標 / 目標→來源 / 略過）+「套用到全部」+「記住此專案的選擇」；onResolve 回傳帶 direction 的 `SyncItem[]`；記住的選擇由 App.tsx 寫入 prefs。
-- App.tsx 接線：`activeView === "agents-global"` 新分支 + Sidebar 按鈕；ProjectView 新增 `"agents"` sub-tab；Query keys `["agents-md"|"agents-skills"|"agents-commands", scopeKey]` 與 `["agents-prefs", projectCwd]`，`enabled` 僅在對應分頁可見時為 true；同步 mutation 成功後 invalidate 三個掃描 query。
+- App.tsx 接線：`activeView === "agents-global"` 新分支 + Sidebar 單一 Agents 按鈕（位置固定於 Settings 上方，不因收折狀態重複渲染）；ProjectView 新增 `"agents"` sub-tab；Query keys `["agents-md"|"agents-skills"|"agents-commands", scopeKey]` 與 `["agents-prefs", projectCwd]`，以較長 `staleTime` 保留掃描結果，並搭配 component-level state 保留當前分頁/選取狀態，避免在切換其他頁面後回來時重新載入與跳回初始畫面；同步 mutation 成功後 invalidate 三個掃描 query。
+- 視覺與密度：Agents 頁 SHALL 以工具面板為取向，移除不必要的外框、優先使用 icon button、壓縮 header 與 tab 區塊高度、減少巢狀滾動容器，讓主要矩陣與內容檢視區在常見桌面視窗中盡量完整顯示。
+- 主題切換：全域主題控制 SHALL 移至 Settings，不再在 Sidebar footer 顯示獨立切換器，避免導覽與設定控制重複。
 
 ## Risks / Trade-offs
 
@@ -156,3 +167,9 @@ Global scope 的根目錄透過既有 `settings.rs::resolve_*_root` 與 `default
 - **symlink/junction**：`follow_links(false)`；skills 目錄複製沿用同一 walker，不跟隨連結。
 - **連結模式的權限脆弱性**：一般 Windows 使用者預設無 `SeCreateSymbolicLinkPrivilege`；建立失敗必須有清楚的 fallback-to-copy 路徑與提示文案，避免使用者誤以為已連結但實際上仍是各自獨立副本。
 - **連結模式的來源移動/刪除風險**：來源 skill 目錄被刪除或搬移時，指向它的 symlink 會變成失效連結；掃描時 SHALL 偵測並標示為錯誤狀態（非 in-sync），避免使用者誤判為正常。
+
+### D9. `classify_file_status` 的 error 狀態誤用修正（2026-07 實地驗證發現）
+
+實地以使用者真實全域環境驗證（`~/.claude/skills`、`~/.claude/commands` 等大量採用 symlink/junction 慣例，指向外部目錄 `D:\ching\AI tool setting\...`）時發現：Skills 矩陣的 symlink 判定（`inspect_directory_symlink`）與聯集顯示邏輯運作正確，`Linked`/`TargetMissing` 狀態皆如預期產生；但 **Commands 矩陣**因來源 `.agents/skills/command/` 尚未建立，name 由 target 端（如 codex 的 `.codex/prompts/opsx-apply.md`）反查得到後，其餘各 target（如 claude）若也缺少該檔案，`classify_file_status` 會因「來源、目標皆不存在」落入預設分支回傳 `SyncStatus::Error`。前端將 `error` 顯示為中性「錯誤」標籤（`agents.status.error` = 「錯誤」），使用者容易誤判為系統未正確識別該 command，而非「尚待同步」。
+
+修正：`classify_file_status` 的「來源、目標皆不存在」分支改回傳 `SyncStatus::TargetMissing`（而非 `Error`），語意與既有「來源存在但此 target 未同步」情況一致。`Error` 狀態保留給真正的例外（如 symlink 解析失敗、讀檔錯誤等）。已於 `src-tauri/src/agents_config.rs::classify_file_status` 完成程式修正；詳見 `agents-commands-sync` spec 新增的對應 Scenario 與 `tasks.md` 8.5。

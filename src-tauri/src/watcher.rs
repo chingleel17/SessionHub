@@ -407,7 +407,8 @@ pub(crate) fn create_provider_bridge_watcher(
                                 let now = Instant::now();
                                 let last = state.get(provider.as_str()).copied();
                                 let debounce = Duration::from_secs(30);
-                                let should = last.map_or(true, |t| now.saturating_duration_since(t) >= debounce);
+                                let should = last
+                                    .map_or(true, |t| now.saturating_duration_since(t) >= debounce);
                                 if should {
                                     state.insert(provider.clone(), now);
                                 }
@@ -459,10 +460,7 @@ pub(crate) fn create_provider_bridge_watcher(
     Ok(watcher)
 }
 
-fn is_provider_installed(
-    integrations: &[ProviderIntegrationStatus],
-    provider: &str,
-) -> bool {
+fn is_provider_installed(integrations: &[ProviderIntegrationStatus], provider: &str) -> bool {
     integrations
         .iter()
         .any(|i| i.provider == provider && matches!(i.status, ProviderIntegrationState::Installed))

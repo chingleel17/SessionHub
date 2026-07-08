@@ -1,3 +1,4 @@
+pub mod agents_config;
 pub mod analytics;
 pub mod notifications;
 pub mod plan;
@@ -7,6 +8,7 @@ pub mod sessions;
 pub mod settings;
 pub mod tools;
 
+pub(crate) use agents_config::*;
 pub(crate) use analytics::*;
 pub(crate) use notifications::*;
 pub(crate) use plan::*;
@@ -22,7 +24,9 @@ pub(crate) use quota::*;
 use crate::settings::{
     default_claude_root, default_codex_root, default_hook_scripts_root, default_opencode_root,
 };
-use crate::types::{default_enabled_providers, default_enabled_providers_all, AppSettings, WatcherState};
+use crate::types::{
+    default_enabled_providers, default_enabled_providers_all, AppSettings, WatcherState,
+};
 use crate::watcher::restart_session_watcher_internal;
 
 use self::settings::get_settings_internal;
@@ -65,6 +69,7 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         analytics_panel_collapsed: false,
         enable_quota_monitoring: true,
         quota_enabled_providers: default_enabled_providers_all(),
+        allow_create_project_config_dir: false,
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

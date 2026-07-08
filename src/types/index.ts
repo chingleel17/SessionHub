@@ -57,6 +57,137 @@ export type AppSettings = {
     claudeMonthlyLimitUsd?: number | null;
     enableQuotaMonitoring?: boolean;
     quotaEnabledProviders?: string[];
+    allowCreateProjectConfigDir?: boolean;
+};
+
+export type AgentsScope =
+    | { kind: "global" }
+    | { kind: "project"; projectCwd: string };
+
+export type SyncStatus =
+    | "in-sync"
+    | "target-missing"
+    | "differs"
+    | "source-missing"
+    | "linked"
+    | "link-broken"
+    | (string & {});
+
+export type SyncDirection = "source-to-target" | "target-to-source";
+
+export type SyncMode = "copy" | "link";
+
+export type FileFingerprint = {
+    path: string;
+    exists: boolean;
+    hash?: string | null;
+    mtimeMs?: number | null;
+    size?: number | null;
+};
+
+export type AgentsMdEntry = {
+    dir: string;
+    relDir: string;
+    source: FileFingerprint;
+    target: FileFingerprint;
+    status: SyncStatus;
+    targetNewer: boolean;
+};
+
+export type AgentsMdScanResult = {
+    root: string;
+    entries: AgentsMdEntry[];
+    truncated: boolean;
+    scannedDirs: number;
+};
+
+export type TargetInfo = {
+    targetId: string;
+    root: string;
+    rootExists: boolean;
+};
+
+export type TargetStatus = {
+    targetId: string;
+    targetRoot: string;
+    status: SyncStatus;
+    targetNewer: boolean;
+};
+
+export type SkillEntry = {
+    name: string;
+    sourceDir: string;
+    skillMdPath: string;
+    fileCount: number;
+    targets: TargetStatus[];
+};
+
+export type SkillsScanResult = {
+    sourceRoot: string;
+    skills: SkillEntry[];
+    targets: TargetInfo[];
+};
+
+export type CommandEntry = {
+    name: string;
+    sourcePath: string;
+    syncSourcePath: string;
+    targets: TargetStatus[];
+};
+
+export type CommandsScanResult = {
+    sourceRoot: string;
+    commands: CommandEntry[];
+    targets: TargetInfo[];
+};
+
+export type SyncItem = {
+    source: string;
+    target: string;
+    itemKind?: "file" | "directory";
+    direction?: SyncDirection | null;
+    targetId?: string | null;
+};
+
+export type SyncRequest = {
+    items: SyncItem[];
+    dryRun: boolean;
+    force: boolean;
+    mode: SyncMode;
+    projectCwd?: string | null;
+};
+
+export type SyncActionResult = {
+    source: string;
+    target: string;
+    action:
+        | "create"
+        | "overwrite"
+        | "skip-in-sync"
+        | "conflict"
+        | "error"
+        | "link-fallback-copy"
+        | (string & {});
+    reason?: string | null;
+    bytes?: number | null;
+};
+
+export type SyncReport = {
+    dryRun: boolean;
+    actions: SyncActionResult[];
+    conflicts: number;
+    errors: number;
+};
+
+export type ProjectAgentsPrefs = {
+    conflictChoice?: "source-wins" | "target-wins" | null;
+    ignoredPaths: string[];
+    enabledTargets: string[];
+};
+
+export type SaveProjectAgentsPrefsResult = {
+    storedPath: string;
+    createdProjectConfigDir: boolean;
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";
@@ -238,7 +369,7 @@ export type TreeNode = {
     id: string;
     label: string;
     badge?: string;
-    icon?: "proposal" | "design" | "tasks" | "spec" | "change" | "section" | "folder" | "plan" | "note" | "evidence" | "draft";
+    icon?: "proposal" | "design" | "tasks" | "spec" | "change" | "section" | "folder" | "plan" | "note" | "evidence" | "draft" | "agents";
     tone?: "neutral" | "muted" | "not_started" | "in_progress" | "done";
     progress?: OpenSpecTaskProgress | null;
     children?: TreeNode[];
@@ -338,3 +469,4 @@ export type ClaudeUsageBlock = {
     costUsd: number;
     usageLimitResetTime: string | null;
 };
+

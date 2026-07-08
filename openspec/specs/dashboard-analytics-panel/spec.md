@@ -1,8 +1,8 @@
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Dashboard Analytics Panel
 
-Dashboard SHALL 在統計卡片區塊下方顯示 Analytics Panel，以折線趨勢圖與圓餅圖呈現所有專案在當前統計週期的全域統計走勢。
+Dashboard SHALL 在統計卡片區塊下方顯示 Analytics Panel，以折線趨勢圖與圓餅圖呈現所有專案在當前統計週期的全域統計走勢，並可在同一區域顯示 provider quota overview。
 
 #### Scenario: 進入 Dashboard 自動載入圖表
 
@@ -55,3 +55,19 @@ Dashboard Analytics Panel SHALL 可以折疊 / 展開，折疊狀態持久化至
 
 - **WHEN** 使用者展開已折疊的 Analytics Panel 且距上次查詢超過重整間隔
 - **THEN** 自動觸發重新查詢
+
+### Requirement: Dashboard 顯示 provider quota overview
+
+Dashboard SHALL 顯示 provider quota overview，讓使用者在同一畫面查看主要平台的剩餘用量、資料來源與最後刷新時間。
+
+#### Scenario: 顯示 quota overview
+
+- **WHEN** Dashboard 載入且 quota monitoring 已啟用
+- **THEN** 系統顯示各 provider 的 quota summary
+- **AND** 包含至少 provider 名稱、狀態與最後刷新時間
+
+#### Scenario: 手動刷新 quota overview
+
+- **WHEN** 使用者在 Dashboard 點擊 quota refresh
+- **THEN** 系統重新查詢 provider quota snapshots
+- **AND** 用新結果更新 quota overview

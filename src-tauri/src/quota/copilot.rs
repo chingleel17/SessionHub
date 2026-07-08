@@ -71,9 +71,15 @@ struct CopilotQuota {
 }
 
 fn parse_copilot_quota(obj: &serde_json::Value) -> Option<CopilotQuota> {
-    let unlimited = obj.get("unlimited").and_then(|v| v.as_bool()).unwrap_or(false);
+    let unlimited = obj
+        .get("unlimited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let remaining_percent = obj.get("percent_remaining").and_then(|v| v.as_f64())?;
-    Some(CopilotQuota { remaining_percent, unlimited })
+    Some(CopilotQuota {
+        remaining_percent,
+        unlimited,
+    })
 }
 
 impl QuotaAdapter for CopilotAdapter {
@@ -84,7 +90,11 @@ impl QuotaAdapter for CopilotAdapter {
     fn fetch_snapshot(&self, _settings: &AppSettings) -> QuotaSnapshot {
         let token = match spawn_gh(&["auth", "token"]) {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) => return no_auth_snapshot("gh auth token returned empty — please log in with `gh auth login`"),
+            Ok(_) => {
+                return no_auth_snapshot(
+                    "gh auth token returned empty — please log in with `gh auth login`",
+                )
+            }
             Err(e) => return no_auth_snapshot(format!("需要安裝並登入 gh CLI: {e}")),
         };
 
@@ -139,9 +149,15 @@ impl QuotaAdapter for CopilotAdapter {
 
         // Pro/Business: premium_interactions 為主要額度，chat 為次要
         // Free plan: chat 為主要額度，completions 為次要
-        let premium = snapshots.and_then(|s| s.get("premium_interactions")).and_then(parse_copilot_quota);
-        let chat = snapshots.and_then(|s| s.get("chat")).and_then(parse_copilot_quota);
-        let completions = snapshots.and_then(|s| s.get("completions")).and_then(parse_copilot_quota);
+        let premium = snapshots
+            .and_then(|s| s.get("premium_interactions"))
+            .and_then(parse_copilot_quota);
+        let chat = snapshots
+            .and_then(|s| s.get("chat"))
+            .and_then(parse_copilot_quota);
+        let completions = snapshots
+            .and_then(|s| s.get("completions"))
+            .and_then(parse_copilot_quota);
 
         // Pro/Business 帳號：premium 為主要額度、chat 為次要
         // Free 帳號（無 premium）：chat 為主要額度、completions 為次要
@@ -179,7 +195,9 @@ impl QuotaAdapter for CopilotAdapter {
                 status: "unsupported".to_string(),
                 source: "remote_api".to_string(),
                 fetched_at: current_timestamp(),
-                error_message: Some("Copilot 回應中沒有可用的額度資料（可能為無限方案）".to_string()),
+                error_message: Some(
+                    "Copilot 回應中沒有可用的額度資料（可能為無限方案）".to_string(),
+                ),
                 windows: None,
                 local_tokens: None,
                 extra_credits: None,
@@ -228,13 +246,17 @@ mod tests {
             minimize_to_tray: false,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            allow_create_project_config_dir: false,
         };
 
         let adapter = CopilotAdapter;
         let snapshot = adapter.fetch_snapshot(&settings);
         // Depending on whether gh is installed, may be no_auth or error
         assert!(
-            snapshot.status == "no_auth" || snapshot.status == "error" || snapshot.status == "ok" || snapshot.status == "unsupported",
+            snapshot.status == "no_auth"
+                || snapshot.status == "error"
+                || snapshot.status == "ok"
+                || snapshot.status == "unsupported",
             "unexpected status: {}",
             snapshot.status
         );

@@ -2,30 +2,32 @@
 
 ### Requirement: Skills 來源掃描與 per-target 狀態矩陣
 
-系統 SHALL 以 `.agents/skills/`（專案範圍）或 `~/.agents/skills/`（全域範圍）為 skills 來源，列出所有 skill（含 SKILL.md 的子目錄），並對每個同步目標（claude / codex / opencode / copilot 的 skills 目錄）計算同步狀態，以矩陣呈現。
+系統 SHALL 以 `.agents/skills/`（專案範圍）或 `~/.agents/skills/`（全域範圍）為 skills 主要來源，並額外從各同步目標（claude / codex / opencode / copilot 的 skills 目錄）反向探索目標端已存在的 skill，取兩者的聯集列出所有 skill（含 SKILL.md 的子目錄），對每個目標計算同步狀態，以矩陣呈現。此聯集探索與 agents-commands-sync 的 target 端顯示行為一致，避免來源缺失時整個項目消失。
 
 #### Scenario: 顯示 skills 狀態矩陣
 
 - **WHEN** 使用者開啟 Agents 分頁的 Skills 子分頁
-- **THEN** 系統列出來源目錄下的所有 skill，每列一個 skill、每欄一個目標 agent
-- **AND** 每格顯示該 skill 於該目標的狀態：一致（✓）/ 缺少（–）/ 內容不同（≠）/ 目標較新（較新!）
+- **THEN** 系統列出來源目錄與各目標目錄的 skill 聯集，每列一個 skill、每欄一個目標 agent
+- **AND** 每格顯示該 skill 於該目標的狀態：一致（✓）/ 缺少目標（–）/ 內容不同（≠）/ 僅有目標（–）/ 目標較新（較新!）/ 已連結（🔗）/ 連結失效（⚠）
 
 #### Scenario: 目錄層級狀態判定
 
 - **WHEN** 計算某 skill 對某目標的狀態，且目標非 symlink
 - **THEN** 系統逐檔比對來源 skill 目錄與目標 skill 目錄的內容雜湊（雙側皆套用與 agents-md-sync 相同的忽略清單，排除目錄內混入的 node_modules、建置產物等雜訊）
-- **AND** 全部檔案存在且雜湊相等 → 一致；目標目錄不存在 → 缺少；任一檔案缺少或不同 → 內容不同
+- **AND** 全部檔案存在且雜湊相等 → 一致；目標目錄不存在 → 缺少目標；來源目錄不存在但目標存在 → 僅有目標（source-missing）；任一檔案缺少或不同 → 內容不同
 
-#### Scenario: 只列出來源存在的 skill
+#### Scenario: target 端既有 skill 仍應顯示於矩陣
 
-- **WHEN** 某 target 目錄下存在一個來源已不存在的同名 skill（例如來源被刪除但目標仍保留舊副本）
-- **THEN** 系統不為其產生矩陣列，該 skill 對使用者不可見且不參與同步
-- **AND** 此為已知限制：v1 不提供「反向探索目標端獨有項目」或鏡像刪除功能
+- **WHEN** `.agents/skills/` 尚未建立或缺少某 skill，但某 target 端（如 `.claude/skills/`、`.opencode/skills/` 或 `.github/skills/`）已存在同名 skill
+- **THEN** 系統 SHALL 在矩陣中顯示該 skill 列，該目標狀態標示為「僅有目標」（source-missing），讓使用者可檢視現況並透過衝突流程決定是否回補來源
+- **AND** 實際同步時仍以預期來源路徑 `.agents/skills/<name>/` 作為 canonical source path
+- **AND** 內容預覽在來源端 SKILL.md 不存在時，改以探索到的目標端 SKILL.md 為預覽來源
 
 #### Scenario: 目標根目錄解析
 
 - **WHEN** 解析各 agent 的 skills 目標目錄
-- **THEN** 專案範圍為 `<project>/.claude/skills`、`<project>/.codex/skills`、`<project>/.opencode/skills`、`<project>/.copilot/skills`
+- **THEN** 專案範圍為 `<project>/.claude/skills`、`<project>/.codex/skills`、`<project>/.opencode/skills`、`<project>/.github/skills`
+- **AND** 若專案仍使用舊慣例 `<project>/.copilot/skills`，系統 SHALL 相容讀取並優先採用實際存在者
 - **AND** 全域範圍為 `~/.claude/skills`、`~/.codex/skills`、`~/.config/opencode/skills`、`~/.copilot/skills`（依設定頁根目錄覆蓋值解析）
 - **AND** 目標根目錄不存在時於欄標題標示
 
@@ -34,6 +36,12 @@
 - **WHEN** 使用者點擊矩陣中的 skill 名稱
 - **THEN** 右側面板以 markdown 渲染該 skill 的 SKILL.md
 - **AND** 提供「在檔案總管顯示」與「以外部編輯器開啟」操作
+
+#### Scenario: 切換頁面後保留 skills 掃描結果
+
+- **WHEN** 使用者已開啟某專案的 Skills 子分頁並完成掃描，之後切換到其他頂層頁面或其他專案，再切回原分頁
+- **THEN** 系統優先重用既有快取與 UI 狀態（包含目前分頁、已選列、已展開內容）
+- **AND** 未超過 staleTime 時不應重新顯示「找不到任何來源」或重置為初始空狀態
 
 ### Requirement: Skills 同步（整目錄複製）
 

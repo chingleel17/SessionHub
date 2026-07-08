@@ -96,6 +96,10 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
+pub(crate) fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionActivityStatus {
@@ -191,6 +195,8 @@ pub(crate) struct AppSettings {
     pub(crate) enable_quota_monitoring: bool,
     #[serde(default = "default_enabled_providers_all")]
     pub(crate) quota_enabled_providers: Vec<String>,
+    #[serde(default = "default_false")]
+    pub(crate) allow_create_project_config_dir: bool,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;
@@ -212,7 +218,6 @@ pub(crate) fn default_provider_bridge_version() -> u32 {
 pub(crate) fn default_analytics_refresh_interval() -> u32 {
     30
 }
-
 
 // ── Quota Snapshot 相關型別 ──────────────────────────────────────────────────
 

@@ -104,10 +104,8 @@ fn is_sessionhub_hook_group(group: &Value) -> bool {
             .is_some_and(|s| s.contains(SESSIONHUB_HOOK_COMMAND_MARKER))
     };
     // 舊版 v4 內嵌 PowerShell group 特徵：commandWindows 含 "provider = 'codex'"
-    let is_legacy_codex_group = |v: &Value| {
-        v.as_str()
-            .is_some_and(|s| s.contains("provider = 'codex'"))
-    };
+    let is_legacy_codex_group =
+        |v: &Value| v.as_str().is_some_and(|s| s.contains("provider = 'codex'"));
     let matches_hook = |h: &Value| {
         h.get("command").is_some_and(&contains_marker)
             || h.get("commandWindows").is_some_and(&contains_marker)
@@ -282,19 +280,21 @@ pub(crate) fn install_or_update_codex_integration(
     };
 
     let existing_content = fs::read_to_string(&config_path).ok();
-    let content =
-        match render_codex_integration(&bridge_path, &hook_scripts_root, existing_content.as_deref())
-        {
-            Ok(content) => content,
-            Err(error) => {
-                return build_install_failure_status(
-                    CODEX_PROVIDER,
-                    Some(config_path),
-                    diagnostics,
-                    error,
-                );
-            }
-        };
+    let content = match render_codex_integration(
+        &bridge_path,
+        &hook_scripts_root,
+        existing_content.as_deref(),
+    ) {
+        Ok(content) => content,
+        Err(error) => {
+            return build_install_failure_status(
+                CODEX_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                error,
+            );
+        }
+    };
 
     if let Err(error) = write_provider_integration_file(&config_path, &content) {
         return build_install_failure_status(CODEX_PROVIDER, Some(config_path), diagnostics, error);

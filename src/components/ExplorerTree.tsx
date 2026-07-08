@@ -27,6 +27,8 @@ function getNodeIconLabel(icon: TreeNode["icon"]): string {
       return "EV";
     case "draft":
       return "DR";
+    case "agents":
+      return "AG";
     default:
       return "•";
   }

@@ -264,7 +264,9 @@ fn events_mtime(session_dir: &Path, provider: &str) -> i64 {
 pub(crate) fn get_session_activity_statuses_internal(
     sessions: &[serde_json::Value],
     opencode_root: Option<&str>,
-    activity_cache: &std::sync::Mutex<std::collections::HashMap<String, (i64, SessionActivityStatus)>>,
+    activity_cache: &std::sync::Mutex<
+        std::collections::HashMap<String, (i64, SessionActivityStatus)>,
+    >,
 ) -> Vec<SessionActivityStatus> {
     let oc_root = opencode_root
         .map(PathBuf::from)

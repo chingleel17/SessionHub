@@ -189,7 +189,10 @@ pub(super) fn uninstall_hook_scripts(root: &Path, entries: &[(&str, &str)]) {
         let path = root.join(relative_path);
         if path.exists() {
             if let Err(e) = fs::remove_file(&path) {
-                eprintln!("[uninstall] failed to remove hook script {}: {e}", path.display());
+                eprintln!(
+                    "[uninstall] failed to remove hook script {}: {e}",
+                    path.display()
+                );
             }
         }
         if let Some(parent) = path.parent() {

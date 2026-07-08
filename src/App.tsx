@@ -10,30 +10,39 @@ import { marked } from "marked";
 import { useI18n } from "./i18n/I18nProvider";
 import type {
   ActivityHintPayload,
+  AgentsMdScanResult,
   AnalyticsDataPoint,
   AnalyticsGroupBy,
   AppSettings,
   BridgeEventLogEntry,
+  CommandsScanResult,
   ConfirmDialogState,
   EditDialogState,
   IdeLauncherType,
   OpenSpecData,
+  ProjectAgentsPrefs,
   ProjectGroup,
   ProjectSubTabState,
   ProviderIntegrationStatus,
   ProviderQuota,
   QuotaSnapshot,
+  SaveProjectAgentsPrefsResult,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
   SessionTodo,
   SessionTargetedPayload,
+  SkillsScanResult,
   SisyphusData,
+  SyncActionResult,
+  SyncReport,
+  SyncRequest,
   ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 
+import { AgentsConfigView } from "./components/AgentsConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
@@ -41,6 +50,7 @@ import { EditDialog } from "./components/EditDialog";
 import { ProjectView } from "./components/ProjectView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
+import { SyncConflictDialog } from "./components/SyncConflictDialog";
 import { StatusBar } from "./components/StatusBar";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -98,6 +108,16 @@ function getDashboardPeriodStart(period: "week" | "month"): number {
 
 function formatDateInput(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+function getDirectoryPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) {
+    return filePath;
+  }
+  const separator = filePath.includes("\\") ? "\\" : "/";
+  return normalized.slice(0, index).replace(/\//g, separator);
 }
 
 function readSessionTodos(sessionDir: string): Promise<SessionTodo[]> {
@@ -250,6 +270,29 @@ function resolveErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const DEFAULT_PROJECT_AGENTS_PREFS: ProjectAgentsPrefs = {
+  conflictChoice: null,
+  ignoredPaths: [],
+  enabledTargets: ["claude", "codex", "opencode", "copilot"],
+};
+
+function formatAgentsReportToast(report: SyncReport, template: string): string {
+  const summary = report.actions.reduce<Record<string, number>>((acc, action) => {
+    acc[action.action] = (acc[action.action] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return template
+    .replace("{create}", String(summary.create ?? 0))
+    .replace("{overwrite}", String(summary.overwrite ?? 0))
+    .replace("{skip}", String(summary["skip-in-sync"] ?? 0))
+    .replace("{error}", String(summary.error ?? 0));
+}
+
+function formatProjectConfigCreatedToast(template: string, storedPath: string): string {
+  return template.replace("{path}", storedPath);
+}
+
 function getRealtimeSyncLabel(): string {
   return new Date().toLocaleTimeString("zh-TW", { hour12: false });
 }
@@ -287,6 +330,12 @@ function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
+  const [globalAgentsPrefs, setGlobalAgentsPrefs] = useState<ProjectAgentsPrefs>(DEFAULT_PROJECT_AGENTS_PREFS);
+  const [syncConflictDialog, setSyncConflictDialog] = useState<{
+    conflicts: SyncActionResult[];
+    canRememberChoice: boolean;
+    onResolve: (result: { items: SyncRequest["items"]; rememberChoice: boolean; rememberedChoice: "source-wins" | "target-wins" | null }) => void;
+  } | null>(null);
 
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "active" | "error">(
     "connecting",
@@ -329,10 +378,13 @@ function App() {
     minimizeToTray: false,
     claudeRoot: "",
     hookScriptsPath: "",
-    claudeQuotaResetDay: 1,
-    claudeMonthlyLimitTokens: null,
-    claudeMonthlyLimitUsd: null,
-  });
+      claudeQuotaResetDay: 1,
+      claudeMonthlyLimitTokens: null,
+      claudeMonthlyLimitUsd: null,
+      enableQuotaMonitoring: true,
+      quotaEnabledProviders: ["claude", "copilot", "opencode", "codex"],
+      allowCreateProjectConfigDir: false,
+    });
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -436,10 +488,29 @@ function App() {
         claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
         claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
         claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
+        enableQuotaMonitoring: settingsQuery.data.enableQuotaMonitoring ?? true,
+        quotaEnabledProviders:
+          settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"],
+        allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("agents-global-prefs");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as ProjectAgentsPrefs;
+      setGlobalAgentsPrefs({ ...DEFAULT_PROJECT_AGENTS_PREFS, ...parsed });
+    } catch {
+      setGlobalAgentsPrefs(DEFAULT_PROJECT_AGENTS_PREFS);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("agents-global-prefs", JSON.stringify(globalAgentsPrefs));
+  }, [globalAgentsPrefs]);
 
   useEffect(() => {
     if (!sessionsQuery.isSuccess || !settingsQuery.data?.copilotRoot) return;
@@ -768,6 +839,12 @@ function App() {
       overrides.claudeMonthlyLimitTokens ?? settingsForm.claudeMonthlyLimitTokens ?? null,
     claudeMonthlyLimitUsd:
       overrides.claudeMonthlyLimitUsd ?? settingsForm.claudeMonthlyLimitUsd ?? null,
+    enableQuotaMonitoring:
+      overrides.enableQuotaMonitoring ?? settingsForm.enableQuotaMonitoring ?? true,
+    quotaEnabledProviders:
+      overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"],
+    allowCreateProjectConfigDir:
+      overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
   });
 
   const persistSettingsSilently = async (next: AppSettings) => {
@@ -832,6 +909,7 @@ function App() {
 
     if (
       activeView !== "dashboard" &&
+      activeView !== "agents-global" &&
       activeView !== "settings" &&
       !availableProjectKeys.has(activeView)
     ) {
@@ -1193,6 +1271,69 @@ function App() {
     staleTime: 30_000,
   });
 
+  const projectAgentsPrefsQuery = useQuery({
+    queryKey: ["agents-prefs", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const projectAgentsMdQuery = useQuery({
+    queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const projectAgentsSkillsQuery = useQuery({
+    queryKey: ["agents-skills", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const projectAgentsCommandsQuery = useQuery({
+    queryKey: ["agents-commands", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const globalAgentsMdQuery = useQuery({
+    queryKey: ["agents-md", "global"],
+    enabled: activeView === "agents-global",
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsMdScanResult>("scan_global_agents_md"),
+  });
+
+  const globalAgentsSkillsQuery = useQuery({
+    queryKey: ["agents-skills", "global"],
+    enabled: activeView === "agents-global",
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" } }),
+  });
+
+  const globalAgentsCommandsQuery = useQuery({
+    queryKey: ["agents-commands", "global"],
+    enabled: activeView === "agents-global",
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" } }),
+  });
+
   const claudeHookInstalled = (settingsQuery.data?.providerIntegrations ?? [])
     .some((i) => i.provider === "claude" && i.status === "installed");
 
@@ -1294,6 +1435,10 @@ function App() {
     return invoke<string>("read_plan_content", { filePath });
   };
 
+  const handleReadAgentsFile = async (filePath: string): Promise<string> => {
+    return invoke<string>("read_agents_file", { filePath });
+  };
+
   const handleReadOpenspecFile = async (projectCwd: string, relativePath: string): Promise<string> => {
     return invoke<string>("read_openspec_file", { projectCwd, relativePath });
   };
@@ -1348,6 +1493,105 @@ function App() {
     await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
     setRealtimeStatus("active");
     setLastRealtimeSyncAt(getRealtimeSyncLabel());
+  };
+
+  const refreshAgentsQueries = async (scopeKey: string) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["agents-md", scopeKey] }),
+      queryClient.invalidateQueries({ queryKey: ["agents-skills", scopeKey] }),
+      queryClient.invalidateQueries({ queryKey: ["agents-commands", scopeKey] }),
+    ]);
+  };
+
+  const handleWriteProjectAgentsFile = async (filePath: string, content: string): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await invoke("write_agents_file", {
+      scopeRoot: activeProject.pathLabel,
+      filePath,
+      content,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["agents-md", activeProject.pathLabel] });
+  };
+
+  const handleWriteGlobalAgentsFile = async (filePath: string, content: string): Promise<void> => {
+    await invoke("write_agents_file", {
+      scopeRoot: getDirectoryPath(filePath),
+      filePath,
+      content,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["agents-md", "global"] });
+  };
+
+  const handleRefreshProjectAgents = async (): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await refreshAgentsQueries(activeProject.pathLabel);
+  };
+
+  const handleRefreshGlobalAgents = async (): Promise<void> => {
+    await refreshAgentsQueries("global");
+  };
+
+  const handlePreviewAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
+    return invoke<SyncReport>("sync_agents_items", { request });
+  };
+
+  const handleApplyAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
+    const report = await invoke<SyncReport>("sync_agents_items", { request });
+    const conflicts = report.actions.filter((action) => action.action === "conflict");
+    if (conflicts.length > 0) {
+      setSyncConflictDialog({
+        conflicts,
+        canRememberChoice: Boolean(request.projectCwd),
+        onResolve: ({ items, rememberChoice, rememberedChoice }) => {
+          setSyncConflictDialog(null);
+          void (async () => {
+            if (rememberChoice && rememberedChoice && request.projectCwd) {
+              const nextPrefs = {
+                ...(projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS),
+                conflictChoice: rememberedChoice,
+              };
+              const saveResult = await invoke<SaveProjectAgentsPrefsResult>("save_project_agents_prefs", {
+                projectCwd: request.projectCwd,
+                prefs: nextPrefs,
+              });
+              if (saveResult.createdProjectConfigDir) {
+                showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
+              }
+              await queryClient.invalidateQueries({ queryKey: ["agents-prefs", request.projectCwd] });
+            }
+
+            const nextReport = await invoke<SyncReport>("sync_agents_items", {
+              request: {
+                ...request,
+                dryRun: false,
+                items,
+              },
+            });
+            showToast(formatAgentsReportToast(nextReport, t("agents.report.toast")));
+            await refreshAgentsQueries(request.projectCwd ?? "global");
+          })().catch((error) => {
+            showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+          });
+        },
+      });
+      return report;
+    }
+
+    showToast(formatAgentsReportToast(report, t("agents.report.toast")));
+    await refreshAgentsQueries(request.projectCwd ?? "global");
+    return report;
+  };
+
+  const handleUpdateProjectAgentsPrefs = async (prefs: ProjectAgentsPrefs): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    const saveResult = await invoke<SaveProjectAgentsPrefsResult>("save_project_agents_prefs", {
+      projectCwd: activeProject.pathLabel,
+      prefs,
+    });
+    if (saveResult.createdProjectConfigDir) {
+      showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
+    }
+    await queryClient.invalidateQueries({ queryKey: ["agents-prefs", activeProject.pathLabel] });
   };
 
   const handleResumeSession = async (session: SessionInfo) => {
@@ -1856,17 +2100,21 @@ function App() {
                 <h2 className="workspace-title">
                   {activeView === "dashboard"
                     ? t("tabs.dashboard")
+                    : activeView === "agents-global"
+                      ? t("agents.nav")
                     : activeView === "settings"
                       ? t("settings.title")
                       : activeProject?.title ?? ""}
                 </h2>
-                {activeView !== "dashboard" && activeView !== "settings" && activeProject?.branchLabel ? (
+                {activeView !== "dashboard" && activeView !== "agents-global" && activeView !== "settings" && activeProject?.branchLabel ? (
                   <span className="project-branch-badge">{activeProject.branchLabel}</span>
                 ) : null}
               </div>
               <p className="workspace-subtitle">
                 {activeView === "dashboard"
                   ? t("dashboard.subtitle")
+                  : activeView === "agents-global"
+                    ? t("agents.globalSubtitle")
                   : activeView === "settings"
                     ? t("settings.subtitle")
                     : activeProject?.pathLabel ?? ""}
@@ -1932,6 +2180,40 @@ function App() {
             />
           ) : null}
 
+          {activeView === "agents-global" ? (
+            <AgentsConfigView
+              scope={{ kind: "global" }}
+              agentsMdData={globalAgentsMdQuery.data}
+              skillsData={globalAgentsSkillsQuery.data}
+              commandsData={globalAgentsCommandsQuery.data}
+              prefs={globalAgentsPrefs}
+              isAgentsMdLoading={globalAgentsMdQuery.isLoading}
+              isSkillsLoading={globalAgentsSkillsQuery.isLoading}
+              isCommandsLoading={globalAgentsCommandsQuery.isLoading}
+              isPrefsLoading={false}
+              onRefreshAgentsMd={handleRefreshGlobalAgents}
+              onRefreshSkills={handleRefreshGlobalAgents}
+              onRefreshCommands={handleRefreshGlobalAgents}
+              onReadFile={handleReadAgentsFile}
+              onWriteFile={handleWriteGlobalAgentsFile}
+              onOpenExternal={(path) => {
+                openPath(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onRevealPath={(path) => {
+                revealItemInDir(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onPreviewSync={handlePreviewAgentsSync}
+              onApplySync={handleApplyAgentsSync}
+              onUpdatePrefs={async (prefs) => {
+                setGlobalAgentsPrefs(prefs);
+              }}
+            />
+          ) : null}
+
           {activeProject ? (
             <ProjectView
               project={activeProject}
@@ -1958,13 +2240,38 @@ function App() {
               sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecQuery.data}
+              agentsMdData={projectAgentsMdQuery.data}
+              skillsData={projectAgentsSkillsQuery.data}
+              commandsData={projectAgentsCommandsQuery.data}
+              projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
+              agentsMdLoading={projectAgentsMdQuery.isLoading}
+              skillsLoading={projectAgentsSkillsQuery.isLoading}
+              commandsLoading={projectAgentsCommandsQuery.isLoading}
+              agentsPrefsLoading={projectAgentsPrefsQuery.isLoading}
               onReadFileContent={handleReadFileContent}
               onReadOpenspecFile={handleReadOpenspecFile}
               onWriteOpenspecFile={handleWriteOpenspecFile}
+              onWriteAgentsFile={handleWriteProjectAgentsFile}
               onRefreshPlansSpecs={handleRefreshPlansSpecs}
+              onRefreshAgentsMd={handleRefreshProjectAgents}
+              onRefreshAgentsSkills={handleRefreshProjectAgents}
+              onRefreshAgentsCommands={handleRefreshProjectAgents}
               plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              onOpenAgentsExternal={(path) => {
+                openPath(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onRevealAgentsPath={(path) => {
+                revealItemInDir(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onPreviewAgentsSync={handlePreviewAgentsSync}
+              onApplyAgentsSync={handleApplyAgentsSync}
+              onUpdateProjectAgentsPrefs={handleUpdateProjectAgentsPrefs}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}
@@ -2025,6 +2332,15 @@ function App() {
           events={bridgeEventLog}
           onClose={() => setShowEventMonitor(false)}
           onClear={() => setBridgeEventLog([])}
+        />
+      ) : null}
+
+      {syncConflictDialog ? (
+        <SyncConflictDialog
+          conflicts={syncConflictDialog.conflicts}
+          canRememberChoice={syncConflictDialog.canRememberChoice}
+          onResolve={syncConflictDialog.onResolve}
+          onCancel={() => setSyncConflictDialog(null)}
         />
       ) : null}
 

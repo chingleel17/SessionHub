@@ -184,7 +184,11 @@ pub(crate) fn resume_session_in_terminal_internal(
     if term_stem == "cmd" {
         cmd.args(["/K", &format!("cd /d \"{}\" && {}", cwd, resume_cmd)]);
     } else {
-        cmd.args(["-NoExit", "-Command", &format!("cd '{}'; {}", cwd, resume_cmd)]);
+        cmd.args([
+            "-NoExit",
+            "-Command",
+            &format!("cd '{}'; {}", cwd, resume_cmd),
+        ]);
     }
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);

@@ -40,14 +40,10 @@ const SCRIPT_ON_NOTIFICATION_JS: &str = include_str!("../../../.claude/hooks/on-
 // sh fallback（無 node 環境時的手動退路）
 const MODULE_DB_OPS_SH: &str = include_str!("../../../.claude/hooks/modules/db-ops.sh");
 const MODULE_TASK_QUEUE_SH: &str = include_str!("../../../.claude/hooks/modules/task-queue.sh");
-const MODULE_RECORD_EVENT_SH: &str =
-    include_str!("../../../.claude/hooks/modules/record-event.sh");
-const SCRIPT_ON_SESSION_START_SH: &str =
-    include_str!("../../../.claude/hooks/on-session-start.sh");
-const SCRIPT_ON_PRE_TOOL_USE_SH: &str =
-    include_str!("../../../.claude/hooks/on-pre-tool-use.sh");
-const SCRIPT_ON_POST_TOOL_USE_SH: &str =
-    include_str!("../../../.claude/hooks/on-post-tool-use.sh");
+const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../.claude/hooks/modules/record-event.sh");
+const SCRIPT_ON_SESSION_START_SH: &str = include_str!("../../../.claude/hooks/on-session-start.sh");
+const SCRIPT_ON_PRE_TOOL_USE_SH: &str = include_str!("../../../.claude/hooks/on-pre-tool-use.sh");
+const SCRIPT_ON_POST_TOOL_USE_SH: &str = include_str!("../../../.claude/hooks/on-post-tool-use.sh");
 const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
     include_str!("../../../.claude/hooks/on-user-prompt-submit.sh");
 const SCRIPT_ON_STOP_SH: &str = include_str!("../../../.claude/hooks/on-stop.sh");

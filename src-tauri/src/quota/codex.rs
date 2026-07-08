@@ -62,8 +62,8 @@ fn read_codex_credentials(codex_root: &str) -> Result<CodexCredentials, String> 
 
     let content = std::fs::read_to_string(&auth_path)
         .map_err(|e| format!("failed to read {}: {e}", auth_path.display()))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("failed to parse auth.json: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse auth.json: {e}"))?;
 
     // 新格式：tokens 物件包含 access_token / account_id
     if let Some(tokens) = json.get("tokens") {
@@ -165,10 +165,22 @@ fn count_monthly_tokens_from_jsonl(codex_root: &str) -> (u64, u64) {
                 }
 
                 if let Some(usage) = json.get("usage") {
-                    input_total += usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    input_total += usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    output_total += usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    output_total += usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    input_total += usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    input_total += usage
+                        .get("prompt_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    output_total += usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    output_total += usage
+                        .get("completion_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                 }
             }
         }
@@ -234,7 +246,11 @@ impl QuotaAdapter for CodexAdapter {
             source: "remote_api".to_string(),
             fetched_at: current_timestamp(),
             error_message: None,
-            windows: if windows.is_empty() { None } else { Some(windows) },
+            windows: if windows.is_empty() {
+                None
+            } else {
+                Some(windows)
+            },
             local_tokens: Some(LocalTokenUsage {
                 input_tokens,
                 output_tokens,
@@ -273,6 +289,7 @@ mod tests {
             minimize_to_tray: false,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            allow_create_project_config_dir: false,
         };
 
         let adapter = CodexAdapter;

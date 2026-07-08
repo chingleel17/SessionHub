@@ -34,7 +34,11 @@ fn parse_task_progress(tasks_path: &Path) -> Option<OpenSpecTaskProgress> {
             has_digit = true;
             chars.next();
         }
-        if !has_digit || chars.next() != Some('.') || chars.next() != Some(' ') || chars.next() != Some('[') {
+        if !has_digit
+            || chars.next() != Some('.')
+            || chars.next() != Some(' ')
+            || chars.next() != Some('[')
+        {
             continue;
         }
         let marker = match chars.next() {
@@ -124,7 +128,10 @@ fn resolve_change_created_at(change_dir: &Path) -> Option<String> {
     }
 
     let metadata = fs::metadata(change_dir).ok()?;
-    let timestamp = metadata.created().ok().or_else(|| metadata.modified().ok())?;
+    let timestamp = metadata
+        .created()
+        .ok()
+        .or_else(|| metadata.modified().ok())?;
     let datetime: DateTime<Utc> = timestamp.into();
     Some(datetime.to_rfc3339())
 }
