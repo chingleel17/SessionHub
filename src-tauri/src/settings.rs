@@ -45,6 +45,21 @@ pub(crate) fn resolve_claude_root(root_dir: Option<&str>) -> Result<PathBuf, Str
     }
 }
 
+pub(crate) fn default_agents_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    Ok(PathBuf::from(user_profile).join(".agents"))
+}
+
+/// 解析全域範圍 agents（skills/commands 正本）來源根目錄：使用者於設定頁自訂路徑優先，
+/// 否則沿用預設 `~/.agents`。僅套用於全域範圍，專案範圍固定使用 `<project>/.agents`。
+pub(crate) fn resolve_agents_source_root(configured_path: Option<&str>) -> Result<PathBuf, String> {
+    match configured_path.filter(|value| !value.trim().is_empty()) {
+        Some(value) => Ok(PathBuf::from(value)),
+        None => default_agents_root(),
+    }
+}
+
 pub(crate) fn resolve_claude_settings_path() -> Result<PathBuf, String> {
     Ok(default_claude_root()?.join(CLAUDE_HOOK_FILE_NAME))
 }
@@ -223,7 +238,31 @@ impl AppSettings {
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
             allow_create_project_config_dir: false,
+            agents_source_root: String::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_agents_source_root_uses_configured_path_when_present() {
+        let resolved = resolve_agents_source_root(Some("D:/custom/agents")).expect("resolve");
+        assert_eq!(resolved, PathBuf::from("D:/custom/agents"));
+    }
+
+    #[test]
+    fn resolve_agents_source_root_falls_back_to_default_when_blank() {
+        let resolved = resolve_agents_source_root(Some("   ")).expect("resolve");
+        assert_eq!(resolved, default_agents_root().expect("default"));
+    }
+
+    #[test]
+    fn resolve_agents_source_root_falls_back_to_default_when_none() {
+        let resolved = resolve_agents_source_root(None).expect("resolve");
+        assert_eq!(resolved, default_agents_root().expect("default"));
     }
 }
 

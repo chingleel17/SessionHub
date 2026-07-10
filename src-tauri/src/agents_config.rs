@@ -11,11 +11,13 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::db::ensure_parent_dir;
 use crate::settings::{
-    default_app_data_dir, default_opencode_config_root, load_settings_internal,
-    resolve_claude_root, resolve_codex_root, resolve_copilot_root,
+    default_agents_root, default_app_data_dir, default_opencode_config_root,
+    load_settings_internal, resolve_agents_source_root, resolve_claude_root, resolve_codex_root,
+    resolve_copilot_root,
 };
 use crate::types::{
-    AppSettings, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
+    AppSettings, AGENTS_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
+    OPENCODE_PROVIDER,
 };
 
 const AGENTS_FILE_NAME: &str = "AGENTS.md";
@@ -112,6 +114,15 @@ pub(crate) struct SkillsScanResult {
     pub(crate) source_root: String,
     pub(crate) skills: Vec<SkillEntry>,
     pub(crate) targets: Vec<TargetInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum AgentsRootLinkStatus {
+    Linked,
+    NotLinked,
+    Conflict,
+    Missing,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -331,7 +342,7 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
         AgentsScope::Project { project_cwd } => load_project_agents_prefs_internal(project_cwd)?,
         AgentsScope::Global => ProjectAgentsPrefs::default(),
     };
-    let source_root = skills_source_root(scope)?;
+    let source_root = skills_source_root(scope, &settings)?;
     let targets = skill_target_roots(scope, &settings)?;
     let target_infos = targets
         .iter()
@@ -388,6 +399,87 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
     })
 }
 
+/// 檢查 `~/.agents` 是否為指向全域自訂正本位置的 symlink，供設定頁 banner 呈現連結狀態。
+pub(crate) fn check_agents_root_link_internal() -> Result<AgentsRootLinkStatus, String> {
+    let settings = load_agents_settings()?;
+    let source_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
+    let default_root = default_agents_root()?;
+    check_agents_root_link_against(&default_root, &source_root)
+}
+
+fn check_agents_root_link_against(
+    agents_root: &Path,
+    source_root: &Path,
+) -> Result<AgentsRootLinkStatus, String> {
+    let symlink_meta = match fs::symlink_metadata(agents_root) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(AgentsRootLinkStatus::Missing),
+    };
+
+    if !symlink_meta.file_type().is_symlink() {
+        return Ok(AgentsRootLinkStatus::Conflict);
+    }
+
+    let link_target = fs::read_link(agents_root)
+        .map_err(|error| format!("failed to read symlink {}: {error}", agents_root.display()))?;
+    let resolved_link = match canonicalize_link_target(agents_root, &link_target) {
+        Ok(resolved) => resolved,
+        Err(_) => return Ok(AgentsRootLinkStatus::NotLinked),
+    };
+    let resolved_source = source_root.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve custom agents source {}: {error}",
+            source_root.display()
+        )
+    })?;
+
+    if resolved_link == resolved_source {
+        Ok(AgentsRootLinkStatus::Linked)
+    } else {
+        Ok(AgentsRootLinkStatus::NotLinked)
+    }
+}
+
+/// 建立 `~/.agents` → 全域自訂正本位置的目錄 symlink。`~/.agents` 已是實體目錄時回報衝突，
+/// 不覆蓋、不搬移，交由使用者手動合併後重試。
+pub(crate) fn link_agents_root_internal() -> Result<AgentsRootLinkStatus, String> {
+    let settings = load_agents_settings()?;
+    let source_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
+    let default_root = default_agents_root()?;
+    link_agents_root_to(&default_root, &source_root)
+}
+
+fn link_agents_root_to(
+    agents_root: &Path,
+    source_root: &Path,
+) -> Result<AgentsRootLinkStatus, String> {
+    let status = check_agents_root_link_against(agents_root, source_root)?;
+    if status == AgentsRootLinkStatus::Linked {
+        return Ok(status);
+    }
+    if status == AgentsRootLinkStatus::Conflict {
+        return Err("~/.agents already contains physical files".to_string());
+    }
+    if status == AgentsRootLinkStatus::NotLinked {
+        return Err("~/.agents symlink points to a different source".to_string());
+    }
+
+    if !source_root.exists() {
+        fs::create_dir_all(source_root).map_err(|error| {
+            format!(
+                "failed to create custom agents source {}: {error}",
+                source_root.display()
+            )
+        })?;
+    }
+    if let Some(parent) = agents_root.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create directory {}: {error}", parent.display()))?;
+    }
+    create_directory_symlink(source_root, agents_root)?;
+    Ok(AgentsRootLinkStatus::Linked)
+}
+
 /// Copilot 的 `.github/prompts/` 慣例要求副檔名為 `.prompt.md`（VS Code Copilot prompt files
 /// 規則），其餘 target（claude/codex/opencode）與來源端一律使用 `.md`。剝離／組裝檔名時皆須
 /// 依 target 分流，否則 copilot 端的 `xxx.prompt.md` 會被誤判為獨立於 `xxx` 的 command。
@@ -414,7 +506,7 @@ pub(crate) fn scan_agents_commands_internal(
     scope: &AgentsScope,
 ) -> Result<CommandsScanResult, String> {
     let settings = load_agents_settings()?;
-    let source_root = commands_source_root(scope)?;
+    let source_root = commands_source_root(scope, &settings)?;
     let targets = command_target_roots(scope, &settings)?;
     let target_infos = targets
         .iter()
@@ -1306,11 +1398,12 @@ fn load_agents_settings() -> Result<AppSettings, String> {
 }
 
 fn global_instruction_roots(settings: &AppSettings) -> Result<Vec<(String, PathBuf)>, String> {
+    let agents_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
     Ok(vec![
-        ("agents".to_string(), default_agents_root()?),
+        ("agents".to_string(), agents_root.clone()),
         (
             "agents-instructions".to_string(),
-            default_agents_root()?.join("instructions"),
+            agents_root.join("instructions"),
         ),
         (
             CLAUDE_PROVIDER.to_string(),
@@ -1331,19 +1424,23 @@ fn global_instruction_roots(settings: &AppSettings) -> Result<Vec<(String, PathB
     ])
 }
 
-fn skills_source_root(scope: &AgentsScope) -> Result<PathBuf, String> {
+fn skills_source_root(scope: &AgentsScope, settings: &AppSettings) -> Result<PathBuf, String> {
     match scope {
         AgentsScope::Project { project_cwd } => {
             Ok(PathBuf::from(project_cwd).join(".agents").join("skills"))
         }
-        AgentsScope::Global => Ok(default_agents_root()?.join("skills")),
+        AgentsScope::Global => {
+            Ok(resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?.join("skills"))
+        }
     }
 }
 
-fn commands_source_root(scope: &AgentsScope) -> Result<PathBuf, String> {
-    Ok(skills_source_root(scope)?.join("command"))
+fn commands_source_root(scope: &AgentsScope, settings: &AppSettings) -> Result<PathBuf, String> {
+    Ok(skills_source_root(scope, settings)?.join("command"))
 }
 
+/// Skills 目標僅剩 claude（唯一需同步的 provider）；全域範圍若自訂了正本位置（≠ `~/.agents`），
+/// 另外把 `~/.agents` 納入目標，讓自訂正本可佈署過去供 codex/opencode/copilot 原生讀取。
 fn skill_target_roots(
     scope: &AgentsScope,
     settings: &AppSettings,
@@ -1351,46 +1448,25 @@ fn skill_target_roots(
     match scope {
         AgentsScope::Project { project_cwd } => {
             let project_root = PathBuf::from(project_cwd);
-            Ok(vec![
-                (
-                    CLAUDE_PROVIDER.to_string(),
-                    project_root.join(".claude").join("skills"),
-                ),
-                (
-                    CODEX_PROVIDER.to_string(),
-                    project_root.join(".codex").join("skills"),
-                ),
-                (
-                    OPENCODE_PROVIDER.to_string(),
-                    project_root.join(".opencode").join("skills"),
-                ),
-                (
-                    COPILOT_PROVIDER.to_string(),
-                    resolve_project_target_root(
-                        &project_root.join(".github").join("skills"),
-                        &project_root.join(".copilot").join("skills"),
-                    ),
-                ),
-            ])
-        }
-        AgentsScope::Global => Ok(vec![
-            (
+            Ok(vec![(
                 CLAUDE_PROVIDER.to_string(),
-                resolve_claude_root(Some(settings.claude_root.as_str()))?.join("skills"),
-            ),
-            (
-                CODEX_PROVIDER.to_string(),
-                resolve_codex_root(Some(settings.codex_root.as_str()))?.join("skills"),
-            ),
-            (
-                OPENCODE_PROVIDER.to_string(),
-                default_opencode_config_root()?.join("skills"),
-            ),
-            (
-                COPILOT_PROVIDER.to_string(),
-                resolve_copilot_root(Some(settings.copilot_root.as_str()))?.join("skills"),
-            ),
-        ]),
+                project_root.join(".claude").join("skills"),
+            )])
+        }
+        AgentsScope::Global => {
+            let claude_root =
+                resolve_claude_root(Some(settings.claude_root.as_str()))?.join("skills");
+            let source_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
+            let default_root = default_agents_root()?;
+            if source_root != default_root {
+                Ok(vec![
+                    (AGENTS_PROVIDER.to_string(), default_root.join("skills")),
+                    (CLAUDE_PROVIDER.to_string(), claude_root),
+                ])
+            } else {
+                Ok(vec![(CLAUDE_PROVIDER.to_string(), claude_root)])
+            }
+        }
     }
 }
 
@@ -1442,12 +1518,6 @@ fn command_target_roots(
             ),
         ]),
     }
-}
-
-fn default_agents_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
-    Ok(PathBuf::from(user_profile).join(".agents"))
 }
 
 fn resolve_project_target_root(primary: &Path, fallback: &Path) -> PathBuf {
@@ -1925,7 +1995,9 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         {
-            let linked_target = root.join(".codex").join("skills").join("demo");
+            let broken_source = root.join(".agents").join("skills").join("broken-link-demo");
+            write_file(&broken_source.join("SKILL.md"), "broken link demo");
+            let linked_target = root.join(".claude").join("skills").join("broken-link-demo");
             fs::create_dir_all(linked_target.parent().expect("parent")).expect("parent");
             let missing_source = root.join("missing-skill-source");
             std::os::windows::fs::symlink_dir(&missing_source, &linked_target).expect("symlink");
@@ -1936,12 +2008,12 @@ mod tests {
             let entry = result
                 .skills
                 .iter()
-                .find(|skill| skill.name == "demo")
+                .find(|skill| skill.name == "broken-link-demo")
                 .expect("skill");
             let status = entry
                 .targets
                 .iter()
-                .find(|target_status| target_status.target_id == CODEX_PROVIDER)
+                .find(|target_status| target_status.target_id == CLAUDE_PROVIDER)
                 .expect("target");
             assert!(matches!(
                 status.status,
@@ -2016,6 +2088,93 @@ mod tests {
     }
 
     #[test]
+    fn skill_target_roots_project_scope_only_targets_claude() {
+        let settings = AppSettings::default().expect("default settings");
+        let targets = skill_target_roots(
+            &AgentsScope::Project {
+                project_cwd: "D:/demo".to_string(),
+            },
+            &settings,
+        )
+        .expect("targets");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, CLAUDE_PROVIDER);
+    }
+
+    #[test]
+    fn skill_target_roots_global_scope_default_source_only_targets_claude() {
+        let mut settings = AppSettings::default().expect("default settings");
+        settings.agents_source_root = String::new();
+        let targets =
+            skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, CLAUDE_PROVIDER);
+    }
+
+    #[test]
+    fn skill_target_roots_global_scope_custom_source_targets_agents_and_claude() {
+        let mut settings = AppSettings::default().expect("default settings");
+        settings.agents_source_root = "D:/custom/agents".to_string();
+        let targets =
+            skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].0, AGENTS_PROVIDER);
+        assert_eq!(targets[1].0, CLAUDE_PROVIDER);
+    }
+
+    #[test]
+    fn agents_root_link_missing_creates_symlink() {
+        let _guard = lock_test();
+        let root = unique_test_dir("agents-root-link-missing");
+        let agents_root = root.join(".agents");
+        let source_root = root.join("custom-agents");
+        fs::create_dir_all(&source_root).expect("create source");
+
+        assert_eq!(
+            check_agents_root_link_against(&agents_root, &source_root).expect("check"),
+            AgentsRootLinkStatus::Missing
+        );
+
+        #[cfg(target_os = "windows")]
+        {
+            let status = link_agents_root_to(&agents_root, &source_root).expect("link");
+            assert_eq!(status, AgentsRootLinkStatus::Linked);
+            assert_eq!(
+                check_agents_root_link_against(&agents_root, &source_root).expect("check"),
+                AgentsRootLinkStatus::Linked
+            );
+
+            // 已連結時再次呼叫應冪等，不報錯。
+            let status_again = link_agents_root_to(&agents_root, &source_root).expect("link again");
+            assert_eq!(status_again, AgentsRootLinkStatus::Linked);
+        }
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn agents_root_link_conflict_does_not_overwrite() {
+        let _guard = lock_test();
+        let root = unique_test_dir("agents-root-link-conflict");
+        let agents_root = root.join(".agents");
+        let source_root = root.join("custom-agents");
+        fs::create_dir_all(&source_root).expect("create source");
+        fs::create_dir_all(&agents_root).expect("create physical agents root");
+        write_file(&agents_root.join("marker.txt"), "existing content");
+
+        assert_eq!(
+            check_agents_root_link_against(&agents_root, &source_root).expect("check"),
+            AgentsRootLinkStatus::Conflict
+        );
+
+        let result = link_agents_root_to(&agents_root, &source_root);
+        assert!(result.is_err());
+        assert!(agents_root.join("marker.txt").is_file());
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
     fn project_target_root_prefers_github_when_present() {
         let _guard = lock_test();
         let root = unique_test_dir("project-target-root");
@@ -2031,28 +2190,30 @@ mod tests {
     }
 
     #[test]
-    fn project_skills_scan_reads_agents_source_with_github_target() {
+    fn project_skills_scan_only_targets_claude() {
         let _guard = lock_test();
-        let root = unique_test_dir("project-skills-github");
+        let root = unique_test_dir("project-skills-claude-only");
         let source_skill = root.join(".agents").join("skills").join("demo-skill");
-        let github_skill = root.join(".github").join("skills").join("demo-skill");
+        let claude_skill = root.join(".claude").join("skills").join("demo-skill");
 
         write_file(&source_skill.join("SKILL.md"), "demo skill");
-        write_file(&github_skill.join("SKILL.md"), "demo skill");
+        write_file(&claude_skill.join("SKILL.md"), "demo skill");
 
         let result = scan_agents_skills_internal(&AgentsScope::Project {
             project_cwd: normalize_display_path(&root),
         })
         .expect("scan skills");
 
+        assert_eq!(result.targets.len(), 1);
+        assert_eq!(result.targets[0].target_id, CLAUDE_PROVIDER);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "demo-skill");
-        let copilot = result.skills[0]
+        let claude = result.skills[0]
             .targets
             .iter()
-            .find(|target| target.target_id == COPILOT_PROVIDER)
-            .expect("copilot target");
-        assert_eq!(copilot.status, SyncStatus::InSync);
+            .find(|target| target.target_id == CLAUDE_PROVIDER)
+            .expect("claude target");
+        assert_eq!(claude.status, SyncStatus::InSync);
 
         fs::remove_dir_all(&root).expect("cleanup root");
     }

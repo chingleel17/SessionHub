@@ -1,9 +1,11 @@
 use crate::agents_config::{
+    check_agents_root_link_internal, link_agents_root_internal,
     load_project_agents_prefs_internal, read_agents_file_internal,
     save_project_agents_prefs_internal, scan_agents_commands_internal, scan_agents_md_internal,
     scan_agents_skills_internal, scan_global_agents_md_internal, sync_agents_items_internal,
-    write_agents_file_internal, AgentsMdScanResult, AgentsScope, CommandsScanResult,
-    ProjectAgentsPrefs, SaveProjectAgentsPrefsResult, SkillsScanResult, SyncReport, SyncRequest,
+    write_agents_file_internal, AgentsMdScanResult, AgentsRootLinkStatus, AgentsScope,
+    CommandsScanResult, ProjectAgentsPrefs, SaveProjectAgentsPrefsResult, SkillsScanResult,
+    SyncReport, SyncRequest,
 };
 use crate::commands::settings::get_settings_internal;
 
@@ -72,4 +74,18 @@ pub fn save_project_agents_prefs(
         &prefs,
         settings.allow_create_project_config_dir,
     )
+}
+
+#[tauri::command]
+pub async fn check_agents_root_link() -> Result<AgentsRootLinkStatus, String> {
+    tauri::async_runtime::spawn_blocking(check_agents_root_link_internal)
+        .await
+        .map_err(|error| format!("failed to join agents root link check task: {error}"))?
+}
+
+#[tauri::command]
+pub async fn link_agents_root() -> Result<AgentsRootLinkStatus, String> {
+    tauri::async_runtime::spawn_blocking(link_agents_root_internal)
+        .await
+        .map_err(|error| format!("failed to join agents root link task: {error}"))?
 }

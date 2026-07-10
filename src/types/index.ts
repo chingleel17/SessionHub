@@ -58,6 +58,7 @@ export type AppSettings = {
     enableQuotaMonitoring?: boolean;
     quotaEnabledProviders?: string[];
     allowCreateProjectConfigDir?: boolean;
+    agentsSourceRoot?: string;
 };
 
 export type AgentsScope =
@@ -76,6 +77,8 @@ export type SyncStatus =
 export type SyncDirection = "source-to-target" | "target-to-source";
 
 export type SyncMode = "copy" | "link";
+
+export type AgentsRootLinkStatus = "linked" | "not-linked" | "conflict" | "missing";
 
 export type FileFingerprint = {
     path: string;

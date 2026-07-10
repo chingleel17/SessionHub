@@ -92,6 +92,7 @@ pub fn run() {
                         analytics_panel_collapsed: false,
                         quota_enabled_providers: Vec::new(),
                         allow_create_project_config_dir: false,
+                        agents_source_root: String::new(),
                     });
                     if settings.enable_quota_monitoring {
                         commands::quota::refresh_quota_internal(
@@ -264,7 +265,9 @@ pub fn run() {
             read_agents_file,
             write_agents_file,
             load_project_agents_prefs,
-            save_project_agents_prefs
+            save_project_agents_prefs,
+            check_agents_root_link,
+            link_agents_root
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -70,6 +70,7 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         enable_quota_monitoring: true,
         quota_enabled_providers: default_enabled_providers_all(),
         allow_create_project_config_dir: false,
+        agents_source_root: String::new(),
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

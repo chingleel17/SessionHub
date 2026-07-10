@@ -11,6 +11,7 @@ import { useI18n } from "./i18n/I18nProvider";
 import type {
   ActivityHintPayload,
   AgentsMdScanResult,
+  AgentsRootLinkStatus,
   AnalyticsDataPoint,
   AnalyticsGroupBy,
   AppSettings,
@@ -845,6 +846,7 @@ function App() {
       overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"],
     allowCreateProjectConfigDir:
       overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
+    agentsSourceRoot: (overrides.agentsSourceRoot ?? settingsForm.agentsSourceRoot ?? "").trim(),
   });
 
   const persistSettingsSilently = async (next: AppSettings) => {
@@ -1332,6 +1334,28 @@ function App() {
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
     queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" } }),
+  });
+
+  const agentsSourceRootConfigured = Boolean((settingsForm.agentsSourceRoot ?? "").trim());
+
+  const agentsRootLinkQuery = useQuery({
+    queryKey: ["agents-root-link"],
+    enabled: activeView === "agents-global" && agentsSourceRootConfigured,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsRootLinkStatus>("check_agents_root_link"),
+  });
+
+  const linkAgentsRootMutation = useMutation({
+    mutationFn: () => invoke<AgentsRootLinkStatus>("link_agents_root"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agents-root-link"] });
+      void queryClient.invalidateQueries({ queryKey: ["agents-skills", "global"] });
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
   });
 
   const claudeHookInstalled = (settingsQuery.data?.providerIntegrations ?? [])
@@ -1827,7 +1851,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath" | "agentsSourceRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -2210,6 +2234,10 @@ function App() {
               onApplySync={handleApplyAgentsSync}
               onUpdatePrefs={async (prefs) => {
                 setGlobalAgentsPrefs(prefs);
+              }}
+              agentsRootLinkStatus={agentsSourceRootConfigured ? (agentsRootLinkQuery.data ?? null) : null}
+              onCreateAgentsRootLink={async () => {
+                await linkAgentsRootMutation.mutateAsync();
               }}
             />
           ) : null}

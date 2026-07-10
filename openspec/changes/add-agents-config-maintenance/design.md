@@ -8,7 +8,7 @@
 - **IPC 集中於 App.tsx**：子元件為純 props 驅動；掃描走 TanStack Query（`sisyphusQuery`/`openspecQuery`，staleTime 30s）；`openPath` / `revealItemInDir`（plugin-opener）已接好。
 - **Rust 掃描慣例**：`openspec_scan.rs` / `sisyphus.rs` 為單層 `fs::read_dir` 掃描；`resolve_openspec_file_internal` 示範 canonicalize + `starts_with` 的路徑穿越防護；`get_project_specs` 示範背景執行緒非同步掃描。專案目前**沒有**遞迴 walker 與 ignore 機制。
 - **Agent 根目錄解析**：`settings.rs` 已有 `resolve_claude_root` / `resolve_codex_root` / `resolve_copilot_root` / `default_opencode_config_root`（`~/.config/opencode`）。
-- **本機慣例（已實地確認）**：專案級 `.agents/skills/<name>/SKILL.md` 為來源 → `.claude/skills`、`.codex/skills`、`.opencode/skills`、`.copilot/skills`；commands 來源為 `.agents/skills/command/*.md` → `.claude/commands/`（可含子目錄如 `opsx/apply.md`）、`.codex/prompts/`、`.opencode/command/`、`.copilot/prompts/`。全域來源為 `~/.agents/skills/`（含 `command/` 子目錄）。
+- **本機慣例（已實地確認）**：專案級 `.agents/skills/<name>/SKILL.md` 為來源 → `.claude/skills`、`.codex/skills`、`.opencode/skills`、`.copilot/skills`；commands 來源為 `.agents/skills/command/*.md` → `.claude/commands/`（可含子目錄如 `opsx/apply.md`）、`.codex/prompts/`、`.opencode/command/`、`.copilot/prompts/`。全域來源預設為 `~/.agents/skills/`（含 `command/` 子目錄），可於設定頁以 `agentsSourceRoot` 覆寫（見 D8）。
 - **額外實際目錄**：使用者環境另有 `~/.agents/instructions/AGENTS.md`，需納入全域 AGENTS 掃描；部分專案或全域環境可能已存在 target 端 commands，但來源端 `.agents/skills/command/` 尚未建立，此情況在 UI 中仍需可見，避免使用者誤判為「沒有 command」。
 
 ## Goals / Non-Goals
@@ -157,6 +157,15 @@ Commands 與 skills 不同，使用者常先在 `.claude/commands` 或 `.opencod
 - App.tsx 接線：`activeView === "agents-global"` 新分支 + Sidebar 單一 Agents 按鈕（位置固定於 Settings 上方，不因收折狀態重複渲染）；ProjectView 新增 `"agents"` sub-tab；Query keys `["agents-md"|"agents-skills"|"agents-commands", scopeKey]` 與 `["agents-prefs", projectCwd]`，以較長 `staleTime` 保留掃描結果，並搭配 component-level state 保留當前分頁/選取狀態，避免在切換其他頁面後回來時重新載入與跳回初始畫面；同步 mutation 成功後 invalidate 三個掃描 query。
 - 視覺與密度：Agents 頁 SHALL 以工具面板為取向，移除不必要的外框、優先使用 icon button、壓縮 header 與 tab 區塊高度、減少巢狀滾動容器，讓主要矩陣與內容檢視區在常見桌面視窗中盡量完整顯示。
 - 主題切換：全域主題控制 SHALL 移至 Settings，不再在 Sidebar footer 顯示獨立切換器，避免導覽與設定控制重複。
+
+### D9. 全域 agents 來源根目錄可設定（`agentsSourceRoot`）
+
+全域範圍的 skills/commands 正本目錄原寫死為 `~/.agents`（`default_agents_root`），但實際上不同使用者可能將正本集中存放於自訂位置（例如以自己的同步腳本推送到各工具目錄），`.agents` 目錄本身可能不存在或只是巧合產物。因此新增 `AppSettings.agentsSourceRoot`（`#[serde(default)]`，預設空字串）：
+
+- **僅套用於全域範圍**：`skills_source_root`／`commands_source_root`／`global_instruction_roots`（AGENTS.md 全域掃描）在 `AgentsScope::Global` 時，改以 `resolve_agents_source_root(settings.agents_source_root)` 解析根目錄；未設定（空字串）時 fallback 至原本的 `~/.agents`。
+- **不套用於專案範圍**：`AgentsScope::Project` 固定使用 `<project>/.agents`，不受此設定影響——專案級正本本來就該隨專案而非隨使用者機器設定漂移。
+- **設定頁**：Settings 頁「Agents」區塊新增路徑輸入欄（含瀏覽資料夾按鈕），對應 `settings.fields.agentsSourceRoot`；留空時顯示預設值提示。
+- 向後相容：舊版設定檔缺少此欄位時，`serde(default)` 補空字串，行為與升級前一致。
 
 ## Risks / Trade-offs
 

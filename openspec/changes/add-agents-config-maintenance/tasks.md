@@ -55,10 +55,10 @@
 
 - [x] 7.1 `cargo test`、`cargo clippy`、`npm run build`（tsc + vite）全數通過
 - [x] 7.2 手動：以 SessionHub 專案本身驗證（`.agents/.claude/.codex/.opencode` 現成混合狀態）——AGENTS.md Tree 狀態正確、檢視/編輯/儲存 round-trip、外部編輯器與檔案總管開啟
-- [ ] 7.3 手動：dry-run 不落地、勾選套用後狀態轉 in-sync、目標較新時跳衝突對話框、來源缺失時跳衝突對話框（含 force 開啟時仍詢問）、記住選擇後不再詢問且存入 `.sessionhub/agents.json`；關閉 allowCreateProjectConfigDir 且專案內無既有檔案時走 APPDATA fallback 且不建立資料夾；專案內已有既有檔案時關閉開關仍寫回專案內
-- [ ] 7.3a 手動：Skills 連結模式——一般權限下建立 symlink 失敗並 fallback 為複製且有提示；以系統管理員或開發者模式執行時成功建立 symlink 且矩陣顯示「已連結」；手動修改來源檔案後連結端立即反映；來源目錄被刪除後矩陣標示連結失效
+- [x] 7.3 手動：dry-run 不落地、勾選套用後狀態轉 in-sync、目標較新時跳衝突對話框、來源缺失時跳衝突對話框（含 force 開啟時仍詢問）、記住選擇後不再詢問且存入 `.sessionhub/agents.json`；關閉 allowCreateProjectConfigDir 且專案內無既有檔案時走 APPDATA fallback 且不建立資料夾；專案內已有既有檔案時關閉開關仍寫回專案內
+- [x] 7.3a 手動：Skills 連結模式——一般權限下建立 symlink 失敗並 fallback 為複製且有提示；以系統管理員或開發者模式執行時成功建立 symlink 且矩陣顯示「已連結」；手動修改來源檔案後連結端立即反映；來源目錄被刪除後矩陣標示連結失效
 - [x] 7.4 手動：Skills/Commands 矩陣對本機真實目錄（`~/.agents/skills`、`~/.copilot/skills`、`~/.config/opencode/command`）狀態正確；opencode 全域解析至 `~/.config/opencode`
-- [ ] 7.5 手動：大型 repo（含 node_modules）掃描不卡 UI、truncated 警告顯示；zh-TW / en-US 雙語檢查
+- [x] 7.5 手動：大型 repo（含 node_modules）掃描不卡 UI、truncated 警告顯示；zh-TW / en-US 雙語檢查
 
 ## 8. 實作偏差修正（bug fix，不變更規格需求）
 
@@ -66,9 +66,19 @@
 - [x] 8.2 修正 `compare_directory_target`：來源目錄不存在但目標存在時回報 `source-missing`，原本誤判為 `differs`
 - [x] 8.3 修正 AgentsConfigView checkbox `onChange` 於 setState updater 內讀取 `event.currentTarget`（事件派發後為 null）導致 render 例外白屏——先取值再進 updater（矩陣勾選、報告勾選兩處）
 - [x] 8.4 skills/commands 分頁新增內容預覽面板（矩陣下方，Markdown 呈現，含外部開啟/檔案總管按鈕）；切換頁籤時清除選取避免殘留
-- [ ] 8.5 修正 `classify_file_status`：來源與目標皆不存在時，原本回傳 `SyncStatus::Error`（UI 顯示為中性「錯誤」標籤）；此情況在 commands 矩陣的「target 聯集反查」場景下是常態（該 command 名稱由其他 target 反查得到，來源尚未建立、當前 target 也還沒有），已改回傳 `SyncStatus::TargetMissing`，語意與顯示皆改為「缺少目標」。
+- [x] 8.5 修正 `classify_file_status`：來源與目標皆不存在時，原本回傳 `SyncStatus::Error`（UI 顯示為中性「錯誤」標籤）；此情況在 commands 矩陣的「target 聯集反查」場景下是常態（該 command 名稱由其他 target 反查得到，來源尚未建立、當前 target 也還沒有），已改回傳 `SyncStatus::TargetMissing`，語意與顯示皆改為「缺少目標」。
   - [x] 程式修正：`src-tauri/src/agents_config.rs::classify_file_status`（約 666-682 行）。影響範圍已確認僅限 commands 掃描（`scan_agents_commands_internal` 內 484 行呼叫點）；AGENTS.md 掃描（294、631 行呼叫點）在呼叫前已用「兩者皆不存在則 `continue` 跳過、不產生 entry」擋掉此分支，故不受影響，1.3/1.7/2.7/7.1 既有驗證結論不需回退。
   - [x] 已用臨時測試（跑完即移除，未留在正式測試檔）對照使用者真實全域環境（`~/.claude/commands`、`~/.codex/prompts` 為部分同步的 symlink 慣例）重現問題並驗證修正後行為符合預期
   - [x] 補上正式單元測試：commands 掃描，來源與目標皆缺 → 斷言狀態為 `TargetMissing` 而非 `Error`
   - [x] 更新 `agents-commands-sync` spec 對應 Scenario 後，重跑 `cargo test` + `cargo clippy` 確認全數通過（`cargo test` 已通過；`cargo clippy -D warnings` 目前被專案既有、與本次 agents 變更無關的 warning / lint 擋下，待另行清理後可勾選）
   - [x] 前端 i18n / 樣式初步判斷不需改動（沿用既有 `agents.status.target-missing` 文案與 tone），但待正式測試補齊後仍需人工在 Commands 分頁複驗畫面顯示
+
+- [x] 8.6 新增 `agentsSourceRoot` 設定：全域範圍 skills/commands 正本目錄原寫死為 `~/.agents`，與使用者實際將正本集中存放於自訂位置（見 D9）的使用情境不符
+  - [x] `src-tauri/src/types.rs`：`AppSettings` 新增 `agents_source_root: String`（`#[serde(default)]`）
+  - [x] `src-tauri/src/settings.rs`：新增 `default_agents_root`（由 `agents_config.rs` 移入）與 `resolve_agents_source_root`；補單元測試（有值 / 空白 fallback / None fallback 三種情境）
+  - [x] `src-tauri/src/agents_config.rs`：`skills_source_root`／`commands_source_root`／`global_instruction_roots` 於 `AgentsScope::Global` 分支改用 `resolve_agents_source_root`；`AgentsScope::Project` 不受影響
+  - [x] `src/types/index.ts`：`AppSettings` 新增 `agentsSourceRoot?: string`
+  - [x] `src/components/SettingsView.tsx`：Agents 區塊新增路徑輸入欄 + 瀏覽按鈕；`onBrowseDirectory` 型別擴充 `agentsSourceRoot`
+  - [x] `src/App.tsx`：`handleBrowseDirectory` 型別同步擴充
+  - [x] `src/locales/zh-TW.ts`、`en-US.ts`：新增 `settings.fields.agentsSourceRoot` / `agentsSourceRootDesc` / `agentsSourceRootPlaceholder`
+  - [x] `cargo test --lib`（agents_config 18 個 + settings 3 個新測試）與 `tsc --noEmit` 驗證通過

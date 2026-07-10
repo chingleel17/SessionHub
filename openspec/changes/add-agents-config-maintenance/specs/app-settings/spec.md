@@ -48,6 +48,32 @@
 - **WHEN** 偏好檔缺少部分欄位（舊版本寫入）
 - **THEN** 系統以預設值補齊缺少欄位，不報錯
 
+### Requirement: 全域 agents 來源根目錄可自訂
+
+系統 SHALL 於全域設定提供 `agentsSourceRoot` 欄位（預設為空字串），讓使用者自訂全域範圍 Skills / Commands / AGENTS.md 的正本來源目錄，覆寫預設的 `~/.agents`。此設定僅影響全域範圍（`AgentsScope::Global`），專案範圍固定使用 `<project>/.agents`，不受影響。
+
+#### Scenario: 設定頁顯示來源路徑欄位
+
+- **WHEN** 使用者開啟設定頁的「Agents」區塊
+- **THEN** 系統顯示「Agents 正本根目錄（全域範圍）」路徑輸入欄與「瀏覽」按鈕
+- **AND** 欄位留空時顯示預設值（`%USERPROFILE%\.agents`）作為提示文字
+
+#### Scenario: 設定自訂路徑後全域掃描改用該路徑
+
+- **WHEN** 使用者將 `agentsSourceRoot` 設為 `D:\ching\AI tool setting\agents` 並儲存
+- **THEN** 全域範圍的 Skills / Commands 矩陣改以 `D:\ching\AI tool setting\agents\skills`（及其 `command` 子目錄）為來源端進行掃描與同步
+- **AND** 全域 AGENTS.md 掃描改以該目錄為根
+
+#### Scenario: 欄位留空時維持原有預設行為
+
+- **WHEN** `agentsSourceRoot` 為空字串或僅含空白
+- **THEN** 系統 fallback 使用 `%USERPROFILE%\.agents` 作為全域來源根目錄，行為與升級前一致
+
+#### Scenario: 專案範圍不受此設定影響
+
+- **WHEN** 使用者已設定 `agentsSourceRoot`，並開啟某專案的 Agents 分頁
+- **THEN** 該專案範圍仍固定使用 `<project>/.agents` 作為來源根目錄，不套用全域自訂路徑
+
 ### Requirement: 主題色系改由設定頁管理
 
 系統 SHALL 將主題／色系切換集中於設定頁管理，避免 Sidebar 在展開與收折狀態出現不同位置或重複控制。

@@ -14,7 +14,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath" | "agentsSourceRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -408,6 +408,28 @@ export function SettingsView({
           <div className="settings-field settings-field--stacked">
             <label>{t("settings.agents.title")}</label>
             <p className="settings-field-desc settings-field-desc--block">{t("settings.agents.subtitle")}</p>
+
+            <label className="field-group">
+              <span>{t("settings.fields.agentsSourceRoot")}</span>
+              <p className="settings-field-desc settings-field-desc--block">{t("settings.fields.agentsSourceRootDesc")}</p>
+              <div className="field-with-action">
+                <input
+                  value={settingsForm.agentsSourceRoot ?? ""}
+                  placeholder={t("settings.fields.agentsSourceRootPlaceholder")}
+                  onChange={(event) =>
+                    onFormChange({ ...settingsForm, agentsSourceRoot: event.currentTarget.value })
+                  }
+                />
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => onBrowseDirectory("agentsSourceRoot")}
+                >
+                  {t("settings.actions.browseDirectory")}
+                </button>
+              </div>
+            </label>
+
             <label className="checkbox-group">
               <input
                 type="checkbox"

@@ -44,7 +44,7 @@ Project scope 的原生 enabled 旗標與停用策略與 global 相同（依 pro
 - 不做跨平台同步或複製（與 Agents skills 的同步矩陣不同）。
 - 不做 global↔project 之間的複製或繼承檢視（各 scope 各自獨立管理）。
 - 不驗證 MCP server 本身可否連線／啟動，只管設定檔內容。
-- 不驗證 codex 專案是否為 trusted（trust 由 codex CLI 自行判定；SessionHub 只負責寫入 `.codex/config.toml`）。
+- 不提供修改 codex trust 狀態的功能（trust 由 codex CLI 自行判定；SessionHub 只讀取並提示現況，不寫入 `[projects.*]` 區塊）。
 
 ## Decisions
 
@@ -114,6 +114,17 @@ struct McpProviderConfig { provider_id: String, config_path: String, config_exis
 - Project 入口：`ProjectView` 的 sub-tab 列（現有 sessions / plans / agents 等）新增 "mcp" 分頁，內容渲染 `McpConfigView` 並傳入 `{ kind: "project", projectCwd }`。project scope 的 MCP query 比照 agents 只在該 sub-tab 啟用時 fetch（`enabled` 條件），避免無謂 I/O。
 - i18n：`mcp.*` 鍵補齊 zh-TW / en-US。
 
+### D8: 停用中的 server 在清單中以獨立視覺樣式常駐顯示
+
+`list_mcp_configs` 已將停用暫存項目合併進 `servers`（見 D4），故清單本身天生就會顯示停用項目，不需要額外的「顯示暫存」開關。UI 需求收斂為：表格中每列的啟用狀態 SHALL 用可辨識的 pill 呈現（例如「啟用中」/「已停用」兩種樣式），停用列 SHALL 允許照常編輯/刪除/重新啟用，與啟用列同等可操作，只是不參與 provider 實際載入。
+
+### D9: codex 專案 trust 狀態改為主動偵測並顯示提示
+
+`~/.codex/config.toml` 有 `[projects."<絕對路徑>"]` 區塊記錄每個專案的 `trust_level`（例如 `trust_level = "trusted"`）。新增唯讀輔助函式 `is_codex_project_trusted(project_cwd) -> bool`：讀取 global `~/.codex/config.toml`，比對正規化後的專案路徑作為 key，找不到區塊或 `trust_level` 不是 `"trusted"` 一律視為 untrusted。
+
+此函式只在 project scope 的 codex 分頁使用，回應中額外帶一個 `codexTrusted: bool` 欄位（不影響 `McpProviderConfig` 既有結構，作為 sibling 欄位或另開一支輕量 command `check_codex_project_trust(project_cwd) -> bool`，避免污染四個泛用 CRUD command 的簽名）。前端在 codex 分頁頂端顯示提示 banner：untrusted 時提示「此專案尚未被 codex 信任，於此新增的 MCP 設定不會生效，請先於 codex CLI 執行信任該專案」；trusted 時不顯示。
+替代方案：只顯示靜態說明文字、不偵測——使用者仍可能誤以為設定已生效，放棄。
+
 ## Risks / Trade-offs
 
 - [改寫 `.claude.json` 損壞 Claude Code 設定] → atomic write（temp + rename）、只動 `mcpServers` 鍵、`preserve_order` 保序；解析失敗時整個操作中止並回傳錯誤，絕不寫入半成品。
@@ -122,6 +133,7 @@ struct McpProviderConfig { provider_id: String, config_path: String, config_exis
 - [CLI 工具讀檔瞬間撞上寫入] → atomic rename 保證讀到的是完整舊檔或完整新檔。
 - [同名 server 在 global 與多個專案間共用停用暫存互相覆蓋] → 暫存鍵含 provider + scopeKey（見 D4），彼此隔離。
 - [copilot 專案設定檔位置有 `.github/mcp.json` 與 `.mcp.json` 兩種慣例] → 本次固定寫 `.github/mcp.json`（官方文件主推、與既有 Agents 的 copilot 專案路徑慣例一致）；讀取時若 `.github/mcp.json` 不存在但 `.mcp.json` 存在則讀後者，寫入一律回 `.github/mcp.json`。
+- [codex trust 路徑比對因大小寫或斜線分隔符不同導致誤判 untrusted] → 比對前對兩側路徑做正規化（統一小寫、統一 `\`/`/`），與現有 `agents_config.rs` 的專案路徑正規化手法一致。
 
 ## Migration Plan
 
@@ -129,5 +141,4 @@ struct McpProviderConfig { provider_id: String, config_path: String, config_exis
 
 ## Open Questions
 
-- 停用暫存是否需要在設定頁提供「檢視暫存檔」入口？（暫定不需要，清單已顯示停用項目。）
-- codex 專案設定為 trusted 才生效——是否要在 project MCP 分頁提示「此專案需為 codex trusted 才會套用」？（暫定加一行說明文字，不主動偵測 trust 狀態。）
+（無未決問題；先前兩項已收斂為 D8、D9 並落實於 spec。）

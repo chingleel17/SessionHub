@@ -197,6 +197,8 @@ pub(crate) struct AppSettings {
     pub(crate) quota_enabled_providers: Vec<String>,
     #[serde(default = "default_false")]
     pub(crate) allow_create_project_config_dir: bool,
+    #[serde(default)]
+    pub(crate) agents_source_root: String,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;
@@ -204,6 +206,7 @@ pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
 pub(crate) const CODEX_PROVIDER: &str = "codex";
 pub(crate) const CLAUDE_PROVIDER: &str = "claude";
+pub(crate) const AGENTS_PROVIDER: &str = "agents";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
 pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
 pub(crate) const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";

@@ -6,6 +6,7 @@ import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
 import type {
   AgentsMdEntry,
   AgentsMdScanResult,
+  AgentsRootLinkStatus,
   AgentsScope,
   CommandsScanResult,
   ProjectAgentsPrefs,
@@ -55,9 +56,13 @@ type Props = {
   onPreviewSync: (request: SyncRequest) => Promise<SyncReport>;
   onApplySync: (request: SyncRequest) => Promise<SyncReport>;
   onUpdatePrefs: (prefs: ProjectAgentsPrefs) => Promise<void>;
+  agentsRootLinkStatus?: AgentsRootLinkStatus | null;
+  onCreateAgentsRootLink?: () => Promise<void>;
 };
 
 type MatrixEntry = SkillEntry | SkillsScanResult["skills"][number] | CommandsScanResult["commands"][number];
+
+const AGENTS_TARGET_ID = "agents";
 
 const DEFAULT_PREFS: ProjectAgentsPrefs = {
   conflictChoice: null,
@@ -93,9 +98,11 @@ function getStatusTone(status: SyncStatus): string {
   switch (status) {
     case "in-sync":
     case "linked":
+    case "canonical":
       return "done";
     case "target-missing":
     case "source-missing":
+    case "not-in-source":
       return "not_started";
     case "differs":
     case "link-broken":
@@ -140,6 +147,8 @@ export function AgentsConfigView({
   onPreviewSync,
   onApplySync,
   onUpdatePrefs,
+  agentsRootLinkStatus,
+  onCreateAgentsRootLink,
 }: Props) {
   const { t } = useI18n();
   const scopeStoragePrefix = getScopeStorageKey(scope, "");
@@ -153,7 +162,7 @@ export function AgentsConfigView({
   const [contentError, setContentError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [syncMode, setSyncMode] = useState<SyncMode>("copy");
+  const [syncMode, setSyncMode] = useState<SyncMode>("link");
   const [selectedMatrixNames, setSelectedMatrixNames] = useState<string[]>([]);
   const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
   const [selectedActionKeys, setSelectedActionKeys] = useState<string[]>([]);
@@ -215,11 +224,29 @@ export function AgentsConfigView({
     return agentsMdData.entries.find((entry) => entry.source.path === selectedNode.filePath || entry.target.path === selectedNode.filePath) ?? null;
   }, [agentsMdData, selectedNode]);
 
+  // Skills 的 agents 欄在預設情境（正本＝來源，未自訂正本位置）下不是後端 target，
+  // 而是由 source fingerprint 推導的虛擬欄位；全域自訂正本位置時後端才會回傳真正的 agents target。
+  const hasBackendAgentsTarget = activeTab === "skills"
+    && (skillsData?.targets ?? []).some((target) => target.targetId === AGENTS_TARGET_ID);
+  const showVirtualAgentsColumn = activeTab === "skills" && !hasBackendAgentsTarget;
+
   const targetInfos = useMemo<TargetInfo[]>(() => {
-    if (activeTab === "skills") return skillsData?.targets ?? [];
+    if (activeTab === "skills") {
+      const backendTargets = skillsData?.targets ?? [];
+      if (showVirtualAgentsColumn && skillsData) {
+        const sourceRootExists = skillsData.skills.some((skill) =>
+          (skill.targets ?? []).every((status) => status.status !== "source-missing"),
+        );
+        return [
+          { targetId: AGENTS_TARGET_ID, root: skillsData.sourceRoot, rootExists: sourceRootExists },
+          ...backendTargets,
+        ];
+      }
+      return backendTargets;
+    }
     if (activeTab === "commands") return commandsData?.targets ?? [];
     return [];
-  }, [activeTab, commandsData?.targets, skillsData?.targets]);
+  }, [activeTab, commandsData?.targets, showVirtualAgentsColumn, skillsData]);
 
   const matrixEntries = useMemo<(SkillEntry | CommandsScanResult["commands"][number])[]>(() => {
     if (activeTab === "skills") return skillsData?.skills ?? [];
@@ -230,7 +257,18 @@ export function AgentsConfigView({
   const previewHtml = useMemo(() => buildPreviewHtml(draft), [draft]);
   const reportSummary = useMemo(() => (syncReport ? summarizeReport(syncReport) : null), [syncReport]);
 
-  const resolveTargetStatuses = (entry: MatrixEntry): TargetStatus[] => entry.targets ?? [];
+  const resolveTargetStatuses = (entry: MatrixEntry): TargetStatus[] => {
+    const backendStatuses = entry.targets ?? [];
+    if (activeTab !== "skills" || !showVirtualAgentsColumn || !skillsData) return backendStatuses;
+    const isNotInSource = backendStatuses.some((status) => status.status === "source-missing");
+    const virtualStatus: TargetStatus = {
+      targetId: AGENTS_TARGET_ID,
+      targetRoot: skillsData.sourceRoot,
+      status: isNotInSource ? "not-in-source" : "canonical",
+      targetNewer: false,
+    };
+    return [virtualStatus, ...backendStatuses];
+  };
 
   const previewNode = selectedNode?.id.startsWith("agents-preview:") ? selectedNode : null;
 
@@ -409,6 +447,32 @@ export function AgentsConfigView({
           </div>
         </div>
 
+      {activeTab === "skills" ? (
+        <div className="agents-skills-compat-note">{t("agents.skills.compatNote")}</div>
+      ) : null}
+
+      {activeTab === "skills" && agentsRootLinkStatus && agentsRootLinkStatus !== "linked" ? (
+        <div className={`agents-root-link-banner agents-root-link-banner--${agentsRootLinkStatus}`}>
+          {agentsRootLinkStatus === "conflict" ? (
+            <>
+              <strong>{t("agents.rootLink.conflict.title")}</strong>
+              <span>{t("agents.rootLink.conflict.description")}</span>
+            </>
+          ) : (
+            <>
+              <strong>{t("agents.rootLink.notLinked.title")}</strong>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => void onCreateAgentsRootLink?.()}
+              >
+                {t("agents.rootLink.notLinked.action")}
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+
       {isLoading ? <div className="explorer-content-loading">{t("plansSpecs.loading")}</div> : null}
       {!isLoading && entries.length === 0 ? <div className="explorer-content-empty">{t(`agents.empty.${activeTab}` as never)}</div> : null}
 
@@ -418,19 +482,40 @@ export function AgentsConfigView({
             <thead>
               <tr>
                 <th>{t("agents.table.item")}</th>
-                {targetInfos.map((target) => (
-                  <th key={target.targetId}>
-                    <label className="checkbox-group checkbox-group--inline agents-target-toggle">
-                      <input
-                        type="checkbox"
-                        checked={(prefs.enabledTargets ?? []).includes(target.targetId)}
-                        disabled={!target.rootExists}
-                        onChange={(event) => void toggleTarget(target.targetId, event.currentTarget.checked)}
-                      />
-                      <span>{target.targetId}</span>
-                    </label>
-                  </th>
-                ))}
+                {targetInfos.map((target) => {
+                  const isVirtualAgentsColumn = activeTab === "skills"
+                    && target.targetId === AGENTS_TARGET_ID
+                    && showVirtualAgentsColumn;
+                  const canOpenDir = target.rootExists;
+                  const openDirTitle = canOpenDir
+                    ? t("agents.skills.openDirTitle", { path: target.root })
+                    : `${target.root} (${t("agents.skills.openDirUnavailable")})`;
+                  return (
+                    <th key={target.targetId}>
+                      <div className="agents-target-header">
+                        <button
+                          type="button"
+                          className="agents-target-header-name"
+                          title={openDirTitle}
+                          disabled={!canOpenDir}
+                          onClick={() => onOpenExternal(target.root)}
+                        >
+                          {target.targetId}
+                        </button>
+                        {isVirtualAgentsColumn ? null : (
+                          <label className="checkbox-group checkbox-group--inline agents-target-toggle">
+                            <input
+                              type="checkbox"
+                              checked={(prefs.enabledTargets ?? []).includes(target.targetId)}
+                              disabled={!target.rootExists}
+                              onChange={(event) => void toggleTarget(target.targetId, event.currentTarget.checked)}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -472,7 +557,10 @@ export function AgentsConfigView({
                   {targetInfos.map((targetInfo) => {
                     const status = resolveTargetStatuses(entry).find((item) => item.targetId === targetInfo.targetId);
                     const statusValue = status?.status ?? "target-missing";
-                    const isClickable = statusValue !== "target-missing";
+                    const isVirtualAgentsColumn = activeTab === "skills"
+                      && targetInfo.targetId === AGENTS_TARGET_ID
+                      && showVirtualAgentsColumn;
+                    const isClickable = statusValue !== "target-missing" && !isVirtualAgentsColumn;
                     const handleTargetPreview = () => {
                       if (!status) return;
                       const targetPath = activeTab === "skills"
