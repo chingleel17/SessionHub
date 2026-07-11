@@ -2,6 +2,7 @@ mod activity;
 mod agents_config;
 mod commands;
 mod db;
+mod mcp_config;
 mod openspec_scan;
 mod platform;
 mod provider;
@@ -267,10 +268,24 @@ pub fn run() {
             load_project_agents_prefs,
             save_project_agents_prefs,
             check_agents_root_link,
-            link_agents_root
+            link_agents_root,
+            list_mcp_configs,
+            upsert_mcp_server,
+            delete_mcp_server,
+            set_mcp_server_enabled,
+            check_codex_project_trust
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 跨測試模組共用的環境變數鎖：任何會改動行程層級 env（USERPROFILE / APPDATA /
+/// COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE）的測試都必須先取得此鎖，
+/// 否則平行執行的測試會互相汙染環境而間歇性失敗。
+#[cfg(test)]
+pub(crate) fn shared_env_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 #[cfg(test)]
@@ -358,8 +373,7 @@ mod tests {
     }
 
     fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::shared_env_test_lock()
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

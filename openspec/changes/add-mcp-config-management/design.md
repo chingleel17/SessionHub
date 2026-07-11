@@ -125,6 +125,76 @@ struct McpProviderConfig { provider_id: String, config_path: String, config_exis
 此函式只在 project scope 的 codex 分頁使用，回應中額外帶一個 `codexTrusted: bool` 欄位（不影響 `McpProviderConfig` 既有結構，作為 sibling 欄位或另開一支輕量 command `check_codex_project_trust(project_cwd) -> bool`，避免污染四個泛用 CRUD command 的簽名）。前端在 codex 分頁頂端顯示提示 banner：untrusted 時提示「此專案尚未被 codex 信任，於此新增的 MCP 設定不會生效，請先於 codex CLI 執行信任該專案」；trusted 時不顯示。
 替代方案：只顯示靜態說明文字、不偵測——使用者仍可能誤以為設定已生效，放棄。
 
+### D10: 專案 Agents 分頁採「單一頁籤列 + scope 分組清單」
+
+第一版雙收折分區（兩份完整 AgentsConfigView 實例）實測回饋：太佔空間、上下兩分區的內層頁籤各自獨立不同步，對照時要切兩次很不方便。修正決策——把層級反轉：**頁籤在外、scope 分組在內**。
+
+- **版面結構**：專案 Agents sub-tab 只有一列共用頁籤（AGENTS.md / Skills / Commands / MCP）。切換頁籤同時作用於專案與全域內容。頁籤內容以「專案」「全域」兩個可收折群組呈現（仿 VS Code 技能頁的「工作區 8 / 使用者 16」分組樣式）：群組標題列含名稱、項目計數與 chevron，點擊收折。
+- **各頁籤的分組內容**：
+  - AGENTS.md：專案群組 = 現有專案樹狀檢視；全域群組 = 現有全域根目錄清單檢視。
+  - Skills / Commands：各群組為該 scope 的項目清單（VS Code 式列表，見 D14）。
+  - MCP：provider 分頁（claude/codex/opencode/copilot）維持在頁籤內容頂部共用一列；其下依序為專案群組與全域群組，各含該 scope 的設定檔工具列與 server 清單。codex trust banner 僅出現在專案群組（維持 D9）。
+- **操作能力**：全域群組的操作與全域 Agents 頁共用同一套 global handlers 與 query（同 query key），操作後 invalidate global，兩處一致。全域 Agents 頁（sidebar 進入）不分組，維持單一 global scope 檢視。
+- **預設與記憶**：首次進入預設專案群組展開、全域群組收折；收折狀態存 localStorage（key 帶專案路徑），依使用者上次狀態還原。
+- **資料載入**：維持既有 lazy 條件（global queries 於 agents-global 頁或專案 agents sub-tab 啟用時 fetch）。
+
+替代方案：雙完整實例分區（第一版）——頁籤不同步且垂直空間翻倍，棄用。
+
+### D14: Skills / Commands 清單改 VS Code 式呈現，描述由 frontmatter 抽取
+
+實作後回饋：矩陣表格資訊密度低、且看不到 skill 用途。決策：
+
+- **清單樣式**：每列顯示名稱（粗體）與描述（次要文字、單行截斷 + tooltip），不再於清單內顯示 per-target 狀態矩陣欄；列尾可保留精簡的同步狀態摘要 badge（如「一致」「3 項需同步」）。群組標題顯示項目計數。
+- **搜尋**：頁籤內容頂部提供搜尋框，依名稱與描述過濾兩個群組的清單（全域 Agents 頁亦適用，僅單一清單）。
+- **描述來源**：skill 取 `SKILL.md` YAML frontmatter 的 `description`；command 取 `.md` frontmatter 的 `description`；無 frontmatter 或無該欄位時描述留空。後端掃描結果（`SkillEntry` / `CommandEntry`）新增 `description: Option<String>` 欄位，沿用既有 frontmatter 解析工具。
+- **點擊列**：維持既有整頁詳情模式預覽內容。
+
+### D15: 同步操作移入「同步」modal
+
+實作後回饋：同步矩陣、目標勾選與報告常駐在清單頁太佔空間。決策：清單頁移除同步矩陣與報告區塊，改於各群組（或工具列）提供「同步」按鈕，點擊開啟 modal（`dialog-backdrop`/`dialog-card`）：
+
+- Modal 內容：該 scope 的 per-target 狀態矩陣（項目勾選、目標欄勾選）、同步模式選擇（copy/link，僅 skills）、「預覽同步」與「套用同步」、同步結果報告與報告列勾選重跑——即現有矩陣 + 報告功能整組搬移。
+- 衝突處理沿用既有 SyncConflictDialog 流程，疊層高於同步 modal。
+- Modal 關閉時清除預覽報告與勾選狀態；AGENTS.md 頁籤的單目錄同步按鈕行為不變。
+
+### D16: 群組內容去重與寬度自適應
+
+第 8 節實作後回饋（2026-07-11）：群組內容區頂部又渲染了一個帶邊框圓角的「scope 名稱 + 計數」工具列，與收折群組標題列資訊重複、佔空間；且 sidebar 展開時內容區出現水平滾動條。決策：
+
+- **去重**：收折群組標題列（「專案 (8)」）是 scope 名稱與計數的唯一呈現處；群組內容區移除重複的工具列區塊（`agents-toolbar--compact` 的 meta 部分）。
+- **動作按鈕移位**：「同步」與重新整理按鈕併入內容區頂部既有說明列（skills 的 `.agents` 相容性說明）右側，說明文字縮排讓出空間；無說明列的頁籤（commands）以單一窄列容納按鈕，不另建整條工具列。
+- **寬度自適應**：Agents 頁全部內容以可用寬度為上限（`min-width: 0` 貫穿 flex/grid 鏈、表格外層 `overflow-x: auto` 侷限於卡片內、長文字截斷），sidebar 展開/收合皆不得出現頁面層級的水平滾動條。
+
+### D11: 全域 MCP 入口整合進 Agents 頁，移除獨立 sidebar 導覽
+
+實作後回饋：使用者預期在全域 Agents 頁看到 MCP（與專案級一致），而非另一個 sidebar 導覽項。決策：
+
+- 移除 sidebar footer 的 MCP 導覽鈕與 `activeView: "mcp-global"`（含標題列分支、view 重設條件、獨立 render 區塊）。
+- `AgentsConfigView` 新增第四個頁籤「MCP」：收 MCP 資料與 handlers props（providers、loading、upsert/delete/toggle、refresh、codexTrusted），頁籤內容渲染 `McpConfigView`（依實例自身的 scope）。全域 Agents 頁（agents-global）與專案分區、全域分區三處都因此具備 MCP 頁籤。
+- `ProjectView` 移除獨立的 "mcp" sub-tab；既有使用者的 localStorage 若殘留 `activeSubTab === "mcp"`，SHALL 正規化為 "agents" 處理，不得渲染空白。
+- `McpConfigView` 改為可內嵌的內容元件（去除自帶的 info-card 外框），由 `AgentsConfigView` 的頁籤容器提供外框。
+
+### D12: MCP 新增/編輯改為類型導向的結構化表單
+
+實作後回饋：raw JSON textarea 的輸入體驗不佳。決策：編輯 dialog 提供「類型」下拉選單，依類型顯示對應欄位，儲存時依 provider 組裝為該平台原生 schema；「自訂 JSON」類型保留完整 JSON 編輯能力（等同原行為）。
+
+類型與欄位：
+
+| 類型 | 欄位 | 組裝結果（依 provider 調整） |
+| --- | --- | --- |
+| HTTP/SSE | URL（必填）、Headers（選填、key:value） | claude/copilot=`{type:"http",url,headers?}`；codex=`{url,http_headers?}`；opencode=`{type:"remote",url,headers?}` |
+| npx 套件 | 套件名稱（必填）、額外參數、環境變數（選填） | claude/codex/copilot=`{command:"npx",args:["-y",pkg,...extra],env?}`；opencode=`{type:"local",command:["npx","-y",pkg,...extra],environment?}` |
+| 本機執行檔 | 執行檔路徑（必填）、參數、環境變數（選填） | claude/codex/copilot=`{command,args?,env?}`；opencode=`{type:"local",command:[cmd,...args],environment?}` |
+
+（依 D4，啟用狀態不在新增時寫入 `enabled` 鍵——預設即啟用。）
+| 自訂 JSON | JSON textarea（必須為合法 JSON 物件） | 原樣寫入 |
+
+編輯既有項目時 SHALL 嘗試反解析回結構化欄位（`url` → HTTP；`command === "npx"` → npx；其餘 `command` → 執行檔；無法對應者 → 自訂 JSON 模式帶入原始 JSON）。表單驗證：各類型必填欄位非空、Headers/環境變數須為合法 key-value、名稱非空與重名檢查沿用既有規則。後端介面不變（仍收 `configJson` 字串，D6）。
+
+### D13: 摘要欄精簡呈現
+
+實作後回饋：摘要欄直接顯示完整 command 路徑會撐爆欄位。決策：摘要依優先序取值——設定中的 `description` 欄位 > `url` > 指令檔名（basename）+ 參數；以單行截斷（ellipsis）顯示，完整內容放 tooltip（title 屬性）。不另外連線 MCP server 取得中繼資料（維持 Non-Goal：不驗證連線）。
+
 ## Risks / Trade-offs
 
 - [改寫 `.claude.json` 損壞 Claude Code 設定] → atomic write（temp + rename）、只動 `mcpServers` 鍵、`preserve_order` 保序；解析失敗時整個操作中止並回傳錯誤，絕不寫入半成品。

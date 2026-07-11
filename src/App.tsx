@@ -20,6 +20,7 @@ import type {
   ConfirmDialogState,
   EditDialogState,
   IdeLauncherType,
+  McpProviderConfig,
   OpenSpecData,
   ProjectAgentsPrefs,
   ProjectGroup,
@@ -43,7 +44,7 @@ import type {
 import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 
-import { AgentsConfigView } from "./components/AgentsConfigView";
+import { AgentsConfigView, type AgentsScopeDataBundle } from "./components/AgentsConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
@@ -1273,9 +1274,15 @@ function App() {
     staleTime: 30_000,
   });
 
+  // 專案 agents sub-tab 啟用時，除專案 scope queries 外也啟用 global queries，
+  // 供專案分頁的「全域」分區使用（雙分區，見 agents-config-view-ux spec）。
+  const projectAgentsSubTabActive =
+    Boolean(activeProject?.pathLabel) &&
+    (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false);
+
   const projectAgentsPrefsQuery = useQuery({
     queryKey: ["agents-prefs", activeProject?.pathLabel ?? ""],
-    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    enabled: projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1284,7 +1291,7 @@ function App() {
 
   const projectAgentsMdQuery = useQuery({
     queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
-    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    enabled: projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1293,7 +1300,7 @@ function App() {
 
   const projectAgentsSkillsQuery = useQuery({
     queryKey: ["agents-skills", activeProject?.pathLabel ?? ""],
-    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    enabled: projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1302,7 +1309,7 @@ function App() {
 
   const projectAgentsCommandsQuery = useQuery({
     queryKey: ["agents-commands", activeProject?.pathLabel ?? ""],
-    enabled: Boolean(activeProject?.pathLabel) && (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false),
+    enabled: projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1311,7 +1318,7 @@ function App() {
 
   const globalAgentsMdQuery = useQuery({
     queryKey: ["agents-md", "global"],
-    enabled: activeView === "agents-global",
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1320,7 +1327,7 @@ function App() {
 
   const globalAgentsSkillsQuery = useQuery({
     queryKey: ["agents-skills", "global"],
-    enabled: activeView === "agents-global",
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1329,7 +1336,7 @@ function App() {
 
   const globalAgentsCommandsQuery = useQuery({
     queryKey: ["agents-commands", "global"],
-    enabled: activeView === "agents-global",
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -1340,7 +1347,7 @@ function App() {
 
   const agentsRootLinkQuery = useQuery({
     queryKey: ["agents-root-link"],
-    enabled: activeView === "agents-global" && agentsSourceRootConfigured,
+    enabled: (activeView === "agents-global" || projectAgentsSubTabActive) && agentsSourceRootConfigured,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
     placeholderData: (previous) => previous,
@@ -1352,6 +1359,82 @@ function App() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["agents-root-link"] });
       void queryClient.invalidateQueries({ queryKey: ["agents-skills", "global"] });
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const globalMcpConfigsQuery = useQuery({
+    queryKey: ["mcp-configs", "global"],
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "global" } }),
+  });
+
+  const projectMcpConfigsQuery = useQuery({
+    queryKey: ["mcp-configs", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const codexProjectTrustQuery = useQuery({
+    queryKey: ["codex-project-trust", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<boolean>("check_codex_project_trust", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const invalidateMcpConfigs = async (scopeKeyForQuery: string) => {
+    await queryClient.invalidateQueries({ queryKey: ["mcp-configs", scopeKeyForQuery] });
+  };
+
+  const upsertMcpServerMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+      originalName?: string | null;
+      configJson: string;
+    }) => invoke("upsert_mcp_server", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const deleteMcpServerMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+    }) => invoke("delete_mcp_server", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const setMcpServerEnabledMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+      enabled: boolean;
+    }) => invoke("set_mcp_server_enabled", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
     },
     onError: (error) => {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
@@ -2095,6 +2178,63 @@ function App() {
     fetchDashboardAnalytics,
   ]);
 
+  const handleOpenPathExternal = (path: string) => {
+    openPath(path).catch((error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    });
+  };
+
+  const handleRevealPathInDir = (path: string) => {
+    revealItemInDir(path).catch((error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    });
+  };
+
+  // 全域 Agents 資料集合：供全域 Agents 頁（獨立元件）與專案分頁的 globalData prop 共用。
+  const globalAgentsData: AgentsScopeDataBundle = {
+    scope: { kind: "global" },
+    agentsMdData: globalAgentsMdQuery.data,
+    skillsData: globalAgentsSkillsQuery.data,
+    commandsData: globalAgentsCommandsQuery.data,
+    prefs: globalAgentsPrefs,
+    isAgentsMdLoading: globalAgentsMdQuery.isLoading,
+    isSkillsLoading: globalAgentsSkillsQuery.isLoading,
+    isCommandsLoading: globalAgentsCommandsQuery.isLoading,
+    isPrefsLoading: false,
+    onRefreshAgentsMd: handleRefreshGlobalAgents,
+    onRefreshSkills: handleRefreshGlobalAgents,
+    onRefreshCommands: handleRefreshGlobalAgents,
+    onPreviewSync: handlePreviewAgentsSync,
+    onApplySync: handleApplyAgentsSync,
+    onUpdatePrefs: async (prefs) => {
+      setGlobalAgentsPrefs(prefs);
+    },
+    agentsRootLinkStatus: agentsSourceRootConfigured ? (agentsRootLinkQuery.data ?? null) : null,
+    onCreateAgentsRootLink: async () => {
+      await linkAgentsRootMutation.mutateAsync();
+    },
+    mcpProviders: globalMcpConfigsQuery.data ?? [],
+    mcpLoading: globalMcpConfigsQuery.isLoading,
+    onRefreshMcp: async () => { await globalMcpConfigsQuery.refetch(); },
+    onUpsertMcpServer: (provider, name, originalName, configJson) =>
+      upsertMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name, originalName, configJson }),
+    onDeleteMcpServer: (provider, name) =>
+      deleteMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name }),
+    onSetMcpServerEnabled: (provider, name, enabled) =>
+      setMcpServerEnabledMutation.mutateAsync({ scope: { kind: "global" }, provider, name, enabled }),
+  };
+
+  // 全域 Agents 檢視（含 MCP 頁籤）：獨立元件，供全域 Agents 頁（agents-global）渲染。
+  const globalAgentsView = (
+    <AgentsConfigView
+      {...globalAgentsData}
+      onReadFile={handleReadAgentsFile}
+      onWriteFile={handleWriteGlobalAgentsFile}
+      onOpenExternal={handleOpenPathExternal}
+      onRevealPath={handleRevealPathInDir}
+    />
+  );
+
   return (
     <main className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Sidebar
@@ -2204,43 +2344,7 @@ function App() {
             />
           ) : null}
 
-          {activeView === "agents-global" ? (
-            <AgentsConfigView
-              scope={{ kind: "global" }}
-              agentsMdData={globalAgentsMdQuery.data}
-              skillsData={globalAgentsSkillsQuery.data}
-              commandsData={globalAgentsCommandsQuery.data}
-              prefs={globalAgentsPrefs}
-              isAgentsMdLoading={globalAgentsMdQuery.isLoading}
-              isSkillsLoading={globalAgentsSkillsQuery.isLoading}
-              isCommandsLoading={globalAgentsCommandsQuery.isLoading}
-              isPrefsLoading={false}
-              onRefreshAgentsMd={handleRefreshGlobalAgents}
-              onRefreshSkills={handleRefreshGlobalAgents}
-              onRefreshCommands={handleRefreshGlobalAgents}
-              onReadFile={handleReadAgentsFile}
-              onWriteFile={handleWriteGlobalAgentsFile}
-              onOpenExternal={(path) => {
-                openPath(path).catch((error) => {
-                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
-                });
-              }}
-              onRevealPath={(path) => {
-                revealItemInDir(path).catch((error) => {
-                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
-                });
-              }}
-              onPreviewSync={handlePreviewAgentsSync}
-              onApplySync={handleApplyAgentsSync}
-              onUpdatePrefs={async (prefs) => {
-                setGlobalAgentsPrefs(prefs);
-              }}
-              agentsRootLinkStatus={agentsSourceRootConfigured ? (agentsRootLinkQuery.data ?? null) : null}
-              onCreateAgentsRootLink={async () => {
-                await linkAgentsRootMutation.mutateAsync();
-              }}
-            />
-          ) : null}
+          {activeView === "agents-global" ? globalAgentsView : null}
 
           {activeProject ? (
             <ProjectView
@@ -2300,6 +2404,35 @@ function App() {
               onPreviewAgentsSync={handlePreviewAgentsSync}
               onApplyAgentsSync={handleApplyAgentsSync}
               onUpdateProjectAgentsPrefs={handleUpdateProjectAgentsPrefs}
+              mcpProviders={projectMcpConfigsQuery.data ?? []}
+              mcpLoading={projectMcpConfigsQuery.isLoading}
+              onRefreshMcp={async () => { await projectMcpConfigsQuery.refetch(); }}
+              onUpsertMcpServer={(provider, name, originalName, configJson) =>
+                upsertMcpServerMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                  originalName,
+                  configJson,
+                })
+              }
+              onDeleteMcpServer={(provider, name) =>
+                deleteMcpServerMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                })
+              }
+              onSetMcpServerEnabled={(provider, name, enabled) =>
+                setMcpServerEnabledMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                  enabled,
+                })
+              }
+              codexTrusted={codexProjectTrustQuery.data ?? false}
+              globalAgentsData={globalAgentsData}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}

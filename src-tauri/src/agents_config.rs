@@ -106,6 +106,7 @@ pub(crate) struct SkillEntry {
     pub(crate) skill_md_path: String,
     pub(crate) file_count: u64,
     pub(crate) targets: Vec<TargetStatus>,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +133,7 @@ pub(crate) struct CommandEntry {
     pub(crate) source_path: String,
     pub(crate) sync_source_path: String,
     pub(crate) targets: Vec<TargetStatus>,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -383,12 +385,16 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
             )?);
         }
 
+        let skill_md_path = preview_dir.join(SKILL_FILE_NAME);
+        let description = read_frontmatter_description(&skill_md_path);
+
         skills.push(SkillEntry {
             name,
             source_dir: normalize_display_path(&skill_dir),
-            skill_md_path: normalize_display_path(&preview_dir.join(SKILL_FILE_NAME)),
+            skill_md_path: normalize_display_path(&skill_md_path),
             file_count: source_fp.file_count,
             targets: statuses,
+            description,
         });
     }
 
@@ -478,6 +484,21 @@ fn link_agents_root_to(
     }
     create_directory_symlink(source_root, agents_root)?;
     Ok(AgentsRootLinkStatus::Linked)
+}
+
+/// 從 Markdown 檔案開頭的 YAML frontmatter（以 `---` 包夾）讀取 `description` 欄位。
+/// 檔案不存在、無 frontmatter 或無該欄位時回傳 `None`，不視為錯誤。
+fn read_frontmatter_description(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let after_open = content.strip_prefix("---\r\n").or_else(|| content.strip_prefix("---\n"))?;
+    let end = after_open.find("\n---")?;
+    let frontmatter = &after_open[..end];
+    let parsed: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    parsed
+        .get("description")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Copilot 的 `.github/prompts/` 慣例要求副檔名為 `.prompt.md`（VS Code Copilot prompt files
@@ -594,11 +615,14 @@ pub(crate) fn scan_agents_commands_internal(
                 reason: None,
             });
         }
+        let description = read_frontmatter_description(&preview_source_path);
+
         commands.push(CommandEntry {
             name,
             source_path: normalize_display_path(&preview_source_path),
             sync_source_path: normalize_display_path(&sync_source_path),
             targets: statuses,
+            description,
         });
     }
 
@@ -1618,7 +1642,7 @@ fn has_parent_dir_component(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
-fn atomic_write_file(path: &Path, content: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write_file(path: &Path, content: &[u8]) -> Result<(), String> {
     ensure_parent_dir(path)?;
     let file_name = path
         .file_name()
@@ -2214,6 +2238,108 @@ mod tests {
             .find(|target| target.target_id == CLAUDE_PROVIDER)
             .expect("claude target");
         assert_eq!(claude.status, SyncStatus::InSync);
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn project_skills_scan_extracts_description_from_frontmatter() {
+        let _guard = lock_test();
+        let root = unique_test_dir("project-skills-description");
+        let source_skill = root.join(".agents").join("skills").join("demo-skill");
+        write_file(
+            &source_skill.join(SKILL_FILE_NAME),
+            "---\nname: demo-skill\ndescription: Does the demo thing.\n---\n\nbody",
+        );
+
+        let result = scan_agents_skills_internal(&AgentsScope::Project {
+            project_cwd: normalize_display_path(&root),
+        })
+        .expect("scan skills");
+
+        let entry = result
+            .skills
+            .iter()
+            .find(|skill| skill.name == "demo-skill")
+            .expect("demo-skill");
+        assert_eq!(entry.description.as_deref(), Some("Does the demo thing."));
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn project_skills_scan_description_absent_without_frontmatter() {
+        let _guard = lock_test();
+        let root = unique_test_dir("project-skills-no-description");
+        let source_skill = root.join(".agents").join("skills").join("plain-skill");
+        write_file(&source_skill.join(SKILL_FILE_NAME), "no frontmatter here");
+
+        let result = scan_agents_skills_internal(&AgentsScope::Project {
+            project_cwd: normalize_display_path(&root),
+        })
+        .expect("scan skills");
+
+        let entry = result
+            .skills
+            .iter()
+            .find(|skill| skill.name == "plain-skill")
+            .expect("plain-skill");
+        assert_eq!(entry.description, None);
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn project_commands_scan_extracts_description_from_frontmatter() {
+        let _guard = lock_test();
+        let root = unique_test_dir("project-commands-description");
+        let source_command = root
+            .join(".agents")
+            .join("skills")
+            .join("command")
+            .join("apply.md");
+        write_file(
+            &source_command,
+            "---\ndescription: Apply the change.\n---\n\n# apply",
+        );
+
+        let result = scan_agents_commands_internal(&AgentsScope::Project {
+            project_cwd: normalize_display_path(&root),
+        })
+        .expect("scan commands");
+
+        let entry = result
+            .commands
+            .iter()
+            .find(|command| command.name == "apply")
+            .expect("apply command");
+        assert_eq!(entry.description.as_deref(), Some("Apply the change."));
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn project_commands_scan_description_absent_without_frontmatter() {
+        let _guard = lock_test();
+        let root = unique_test_dir("project-commands-no-description");
+        let source_command = root
+            .join(".agents")
+            .join("skills")
+            .join("command")
+            .join("build.md");
+        write_file(&source_command, "# build\nno frontmatter");
+
+        let result = scan_agents_commands_internal(&AgentsScope::Project {
+            project_cwd: normalize_display_path(&root),
+        })
+        .expect("scan commands");
+
+        let entry = result
+            .commands
+            .iter()
+            .find(|command| command.name == "build")
+            .expect("build command");
+        assert_eq!(entry.description, None);
 
         fs::remove_dir_all(&root).expect("cleanup root");
     }

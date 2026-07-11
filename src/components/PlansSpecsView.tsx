@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
-import { buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
+import { ARCHIVED_CHANGES_GROUP_ID, buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
 import { ContentViewer } from "./ContentViewer";
 import { ExplorerTree } from "./ExplorerTree";
 
@@ -24,12 +24,12 @@ type SortDir = "asc" | "desc";
 
 type ChangeAction = {
   label: string;
-  command: string;
+  command: string | null;
   tone: "not_started" | "in_progress" | "done";
 };
 
-function resolveChangeAction(entryNode: TreeNode): ChangeAction {
-  const changeName = entryNode.id.replace(/^openspec:change:/, "");
+function resolveChangeAction(entryNode: TreeNode, isArchived: boolean): ChangeAction {
+  const changeName = entryNode.id.replace(/^openspec:(change|archived):/, "");
   const children = entryNode.children ?? [];
   const hasProposal = children.some((c) => c.icon === "proposal");
   const hasTasks = children.some((c) => c.icon === "tasks");
@@ -42,6 +42,9 @@ function resolveChangeAction(entryNode: TreeNode): ChangeAction {
     return { label: "可 apply", command: `/opsx:apply ${changeName}`, tone: "not_started" };
   }
   if (progress.done >= progress.total && progress.total > 0) {
+    if (isArchived) {
+      return { label: "已封存", command: null, tone: "done" };
+    }
     return { label: "可封存", command: `/opsx:archive ${changeName}`, tone: "done" };
   }
   return {
@@ -636,6 +639,11 @@ export function PlansSpecsView({
                               className={`explorer-cols-entry${isActive ? " explorer-cols-entry--active" : ""}`}
                               onClick={() => {
                                 setColumnsChangeId(entryNode.id);
+                                if (entryNode.icon === "spec") {
+                                  const selectableNode = getSelectableNode(entryNode);
+                                  if (selectableNode) void handleSelect(selectableNode);
+                                  return;
+                                }
                                 const tasksNode = (entryNode.children ?? []).find((c) => c.id.endsWith(":tasks"));
                                 if (tasksNode) {
                                   const selectableNode = getSelectableNode(tasksNode);
@@ -659,28 +667,30 @@ export function PlansSpecsView({
                                   />
                                 </div>
                               ) : null}
-                              {(() => {
-                                const action = resolveChangeAction(entryNode);
+                              {entryNode.icon === "spec" ? null : (() => {
+                                const action = resolveChangeAction(entryNode, groupNode.id === ARCHIVED_CHANGES_GROUP_ID);
                                 const isCopied = copiedEntryId === entryNode.id;
                                 return (
                                   <div className="explorer-cols-action">
                                     <span className={`explorer-cols-action-label explorer-cols-action-label--${action.tone}`}>
                                       {action.label}
                                     </span>
-                                    <button
-                                      type="button"
-                                      className={`explorer-cols-action-copy${isCopied ? " explorer-cols-action-copy--copied" : ""}`}
-                                      title={action.command}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        navigator.clipboard.writeText(action.command).then(() => {
-                                          setCopiedEntryId(entryNode.id);
-                                          setTimeout(() => setCopiedEntryId((prev) => prev === entryNode.id ? null : prev), 500);
-                                        }).catch(() => { /* 靜默失敗 */ });
-                                      }}
-                                    >
-                                      {isCopied ? "✓" : "⎘"}
-                                    </button>
+                                    {action.command ? (
+                                      <button
+                                        type="button"
+                                        className={`explorer-cols-action-copy${isCopied ? " explorer-cols-action-copy--copied" : ""}`}
+                                        title={action.command}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          navigator.clipboard.writeText(action.command!).then(() => {
+                                            setCopiedEntryId(entryNode.id);
+                                            setTimeout(() => setCopiedEntryId((prev) => prev === entryNode.id ? null : prev), 500);
+                                          }).catch(() => { /* 靜默失敗 */ });
+                                        }}
+                                      >
+                                        {isCopied ? "✓" : "⎘"}
+                                      </button>
+                                    ) : null}
                                   </div>
                                 );
                               })()}

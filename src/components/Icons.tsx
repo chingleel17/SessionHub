@@ -149,6 +149,15 @@ export const RefreshIcon = icon(
 
 export const ChevronLeftIcon = icon(<polyline points="15 18 9 12 15 6" />);
 
+export const PlugIcon = icon(
+  <>
+    <path d="M12 22v-5" />
+    <path d="M9 8V2" />
+    <path d="M15 8V2" />
+    <path d="M18 8v5a6 6 0 0 1-12 0V8z" />
+  </>,
+);
+
 export const ExternalLinkIcon = icon(
   <>
     <path d="M14 3h7v7" />
@@ -176,5 +185,12 @@ export const EyeIcon = icon(
   <>
     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
     <circle cx="12" cy="12" r="3" />
+  </>,
+);
+
+export const SearchIcon = icon(
+  <>
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
   </>,
 );

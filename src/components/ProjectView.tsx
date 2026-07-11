@@ -7,6 +7,7 @@ import type {
   AnalyticsDataPoint,
   AnalyticsGroupBy,
   IdeLauncherType,
+  McpProviderConfig,
   OpenSpecData,
   ProjectAgentsPrefs,
   ProjectGroup,
@@ -22,7 +23,7 @@ import type {
   SortKey,
   ToolAvailability,
 } from "../types";
-import { AgentsConfigView } from "./AgentsConfigView";
+import { AgentsConfigView, type AgentsScopeDataBundle } from "./AgentsConfigView";
 import { ProjectAnalyticsTab } from "./ProjectAnalyticsTab";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
@@ -120,6 +121,19 @@ type Props = {
   onPreviewAgentsSync: (request: SyncRequest) => Promise<SyncReport>;
   onApplyAgentsSync: (request: SyncRequest) => Promise<SyncReport>;
   onUpdateProjectAgentsPrefs: (prefs: ProjectAgentsPrefs) => Promise<void>;
+  mcpProviders: McpProviderConfig[];
+  mcpLoading: boolean;
+  onRefreshMcp: () => Promise<void>;
+  onUpsertMcpServer: (
+    provider: string,
+    name: string,
+    originalName: string | null | undefined,
+    configJson: string,
+  ) => Promise<unknown>;
+  onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
+  onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
+  codexTrusted: boolean;
+  globalAgentsData: AgentsScopeDataBundle;
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
@@ -245,6 +259,14 @@ export function ProjectView({
   onPreviewAgentsSync,
   onApplyAgentsSync,
   onUpdateProjectAgentsPrefs,
+  mcpProviders,
+  mcpLoading,
+  onRefreshMcp,
+  onUpsertMcpServer,
+  onDeleteMcpServer,
+  onSetMcpServerEnabled,
+  codexTrusted,
+  globalAgentsData,
   activePlanSessionId,
   onActivePlanChange,
   planDraft,
@@ -264,6 +286,8 @@ export function ProjectView({
   toolAvailability,
 }: Props) {
   const { t } = useI18n();
+  // 舊版曾有獨立 "mcp" sub-tab（現併入 agents 頁籤）；殘留狀態正規化為 agents，避免空白內容。
+  const normalizedSubTab = activeSubTab === "mcp" ? "agents" : activeSubTab;
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -392,28 +416,28 @@ export function ProjectView({
           <div className="sub-tab-bar">
             <button
               type="button"
-              className={`sub-tab-item ${activeSubTab === "sessions" ? "sub-tab-item--active" : ""}`}
+              className={`sub-tab-item ${normalizedSubTab === "sessions" ? "sub-tab-item--active" : ""}`}
               onClick={() => setActiveSubTab("sessions")}
             >
               {t("project.subTab.sessions")}
             </button>
             <button
               type="button"
-              className={`sub-tab-item ${activeSubTab === "plans-specs" ? "sub-tab-item--active" : ""}`}
+              className={`sub-tab-item ${normalizedSubTab === "plans-specs" ? "sub-tab-item--active" : ""}`}
               onClick={() => setActiveSubTab("plans-specs")}
             >
               {t("project.subTab.plansSpecs")}
             </button>
             <button
               type="button"
-              className={`sub-tab-item ${activeSubTab === "analytics" ? "sub-tab-item--active" : ""}`}
+              className={`sub-tab-item ${normalizedSubTab === "analytics" ? "sub-tab-item--active" : ""}`}
               onClick={() => setActiveSubTab("analytics")}
             >
               {t("project.subTab.analytics")}
             </button>
             <button
               type="button"
-              className={`sub-tab-item ${activeSubTab === "agents" ? "sub-tab-item--active" : ""}`}
+              className={`sub-tab-item ${normalizedSubTab === "agents" ? "sub-tab-item--active" : ""}`}
               onClick={() => setActiveSubTab("agents")}
             >
               {t("project.subTab.agents")}
@@ -761,7 +785,7 @@ export function ProjectView({
           refreshToken={plansSpecsRefreshToken}
           projectCwd={project.pathLabel}
         />
-      ) : activeSubTab === "agents" ? (
+      ) : normalizedSubTab === "agents" ? (
         <AgentsConfigView
           scope={{ kind: "project", projectCwd: project.pathLabel }}
           agentsMdData={agentsMdData}
@@ -782,6 +806,14 @@ export function ProjectView({
           onPreviewSync={onPreviewAgentsSync}
           onApplySync={onApplyAgentsSync}
           onUpdatePrefs={onUpdateProjectAgentsPrefs}
+          mcpProviders={mcpProviders}
+          mcpLoading={mcpLoading}
+          onRefreshMcp={onRefreshMcp}
+          onUpsertMcpServer={onUpsertMcpServer}
+          onDeleteMcpServer={onDeleteMcpServer}
+          onSetMcpServerEnabled={onSetMcpServerEnabled}
+          codexTrusted={codexTrusted}
+          globalData={globalAgentsData}
         />
       ) : activeSubTab.startsWith("plan:") ? (
         (() => {

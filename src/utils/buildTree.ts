@@ -3,6 +3,8 @@ import type { MessageKey } from "../locales/zh-TW";
 
 type TranslateFn = (key: MessageKey) => string;
 
+export const ARCHIVED_CHANGES_GROUP_ID = "openspec:archived-changes";
+
 function progressTone(status: string | null | undefined): TreeNode["tone"] {
   switch (status) {
     case "not_started":
@@ -159,7 +161,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
 
   if (data.archivedChanges.length > 0) {
     sections.push({
-      id: "openspec:archived-changes",
+      id: ARCHIVED_CHANGES_GROUP_ID,
       label: `${t("plansSpecs.openspec.archivedChanges")} (${data.archivedChanges.length})`,
       icon: "section",
       defaultOpen: false,
@@ -209,6 +211,20 @@ function agentsStatusTone(status: string): TreeNode["tone"] {
     default:
       return "neutral";
   }
+}
+
+function getAgentsEntryBadge(entry: AgentsMdScanResult["entries"][number], t: TranslateFn): string {
+  const present: string[] = [];
+  if (entry.source.exists) present.push("AGENTS.md");
+  if (entry.target.exists) present.push("CLAUDE.md");
+
+  if (present.length === 0) {
+    return t("agents.status.target-missing");
+  }
+  if (present.length === 2 && entry.status === "differs") {
+    return `${present.join(" + ")} (${t("agents.status.differs")})`;
+  }
+  return present.join(" + ");
 }
 
 function getAgentsEntryLabel(entry: AgentsMdScanResult["entries"][number], root: string, t: TranslateFn): string {
@@ -261,7 +277,7 @@ export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): T
     const leaf: TreeNode = {
       id: `agents-md:${entry.dir}`,
       label: getAgentsEntryLabel(entry, result.root, t),
-      badge: t(`agents.status.${entry.status}` as MessageKey),
+      badge: getAgentsEntryBadge(entry, t),
       icon: "agents",
       tone: agentsStatusTone(entry.status),
       filePath: entry.source.exists ? entry.source.path : entry.target.path,

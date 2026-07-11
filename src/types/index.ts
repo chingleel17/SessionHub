@@ -123,6 +123,7 @@ export type SkillEntry = {
     skillMdPath: string;
     fileCount: number;
     targets: TargetStatus[];
+    description?: string | null;
 };
 
 export type SkillsScanResult = {
@@ -136,6 +137,7 @@ export type CommandEntry = {
     sourcePath: string;
     syncSourcePath: string;
     targets: TargetStatus[];
+    description?: string | null;
 };
 
 export type CommandsScanResult = {
@@ -191,6 +193,24 @@ export type ProjectAgentsPrefs = {
 export type SaveProjectAgentsPrefsResult = {
     storedPath: string;
     createdProjectConfigDir: boolean;
+};
+
+export type McpScope =
+    | { kind: "global" }
+    | { kind: "project"; projectCwd: string };
+
+export type McpServerEntry = {
+    name: string;
+    enabled: boolean;
+    configJson: string;
+};
+
+export type McpProviderConfig = {
+    providerId: string;
+    configPath: string;
+    configExists: boolean;
+    servers: McpServerEntry[];
+    error?: string | null;
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";

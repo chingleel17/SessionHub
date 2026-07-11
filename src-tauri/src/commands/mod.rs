@@ -1,5 +1,6 @@
 pub mod agents_config;
 pub mod analytics;
+pub mod mcp_config;
 pub mod notifications;
 pub mod plan;
 pub mod provider;
@@ -10,6 +11,7 @@ pub mod tools;
 
 pub(crate) use agents_config::*;
 pub(crate) use analytics::*;
+pub(crate) use mcp_config::*;
 pub(crate) use notifications::*;
 pub(crate) use plan::*;
 pub(crate) use provider::*;
