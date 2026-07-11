@@ -22,4 +22,4 @@
 ## 5. 驗證
 
 - [x] 5.1 執行 `npm run build`（或 `tsc --noEmit` + `vite build`）確認型別與建置通過。
-- [ ] 5.2 於實際 app 開啟 Agents → Skills / Commands，驗證四種狀態組合（已載入/需同步/未安裝）晶片與 tooltip 正確，全域群組圖例與同步入口可用。
+- [x] 5.2 於實際 app 開啟 Agents → Skills / Commands，驗證四種狀態組合（已載入/需同步/未安裝）晶片與 tooltip 正確，全域群組圖例與同步入口可用。

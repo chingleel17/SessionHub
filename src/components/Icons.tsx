@@ -149,6 +149,14 @@ export const RefreshIcon = icon(
 
 export const ChevronLeftIcon = icon(<polyline points="15 18 9 12 15 6" />);
 
+export const SaveIcon = icon(
+  <>
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <polyline points="17 21 17 13 7 13 7 21" />
+    <polyline points="7 3 7 8 15 8" />
+  </>,
+);
+
 export const PlugIcon = icon(
   <>
     <path d="M12 22v-5" />

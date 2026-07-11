@@ -283,8 +283,53 @@ export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
           ))}
         </div>
       ) : (
-        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} />
+        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} inlineHeader />
       )}
+    </div>
+  );
+}
+
+/** 操作按鈕群（外開 / 資料夾 / 重整 / 新增），供收折標題列或單一群組內嵌列共用。 */
+function McpHeaderActions({
+  configPath,
+  onOpenExternal,
+  onRevealPath,
+  onRefresh,
+  onAdd,
+}: {
+  configPath: string | undefined;
+  onOpenExternal: (path: string) => void;
+  onRevealPath: (path: string) => void;
+  onRefresh: () => void;
+  onAdd: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="settings-actions agents-toolbar-actions">
+      <button
+        type="button"
+        className="ghost-button agents-icon-button"
+        disabled={!configPath}
+        onClick={() => configPath && onOpenExternal(configPath)}
+        title={t("agents.action.openExternal")}
+      >
+        <ExternalLinkIcon size={15} />
+      </button>
+      <button
+        type="button"
+        className="ghost-button agents-icon-button"
+        disabled={!configPath}
+        onClick={() => configPath && onRevealPath(configPath)}
+        title={t("agents.action.reveal")}
+      >
+        <FolderIcon size={15} />
+      </button>
+      <button type="button" className="ghost-button agents-icon-button" onClick={onRefresh} title={t("app.actions.refresh")}>
+        <RefreshIcon size={15} />
+      </button>
+      <button type="button" className="primary-button" onClick={onAdd}>
+        {t("mcp.action.add")}
+      </button>
     </div>
   );
 }
@@ -309,6 +354,8 @@ function McpGroupCollapsible({
     if (stored === "false") return false;
     return group.scope.kind === "project";
   });
+  // 「新增」由標題列按鈕觸發，開啟訊號下傳給 panel。
+  const [addSignal, setAddSignal] = useState(0);
 
   const toggle = () => {
     setExpanded((current) => {
@@ -319,8 +366,25 @@ function McpGroupCollapsible({
   };
 
   return (
-    <CollapsibleSection title={`${group.label} (${count})`} expanded={expanded} onToggle={toggle}>
-      <McpProviderPanel group={group} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} />
+    <CollapsibleSection
+      title={`${group.label} (${count})`}
+      expanded={expanded}
+      onToggle={toggle}
+      titleMeta={currentConfig?.configPath ?? undefined}
+      actions={
+        <McpHeaderActions
+          configPath={currentConfig?.configPath}
+          onOpenExternal={onOpenExternal}
+          onRevealPath={onRevealPath}
+          onRefresh={() => void group.onRefresh()}
+          onAdd={() => {
+            if (!expanded) toggle();
+            setAddSignal((n) => n + 1);
+          }}
+        />
+      }
+    >
+      <McpProviderPanel group={group} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} addSignal={addSignal} />
     </CollapsibleSection>
   );
 }
@@ -330,16 +394,28 @@ function McpProviderPanel({
   activeProvider,
   onOpenExternal,
   onRevealPath,
+  inlineHeader = false,
+  addSignal = 0,
 }: {
   group: McpScopeGroup;
   activeProvider: string;
   onOpenExternal: (path: string) => void;
   onRevealPath: (path: string) => void;
+  /** 單一群組（無收折標題列）情境：在內容頂部自帶一列操作按鈕。 */
+  inlineHeader?: boolean;
+  /** 收折標題列「新增」按鈕的觸發訊號（遞增即開啟編輯器）。 */
+  addSignal?: number;
 }) {
   const { t } = useI18n();
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<McpServerEntry | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 收折標題列的「新增」按鈕透過 addSignal 遞增觸發開啟編輯器。
+  useEffect(() => {
+    if (addSignal > 0) setEditor(emptyEditor());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addSignal]);
 
   useEffect(() => {
     setEditor(null);
@@ -426,38 +502,20 @@ function McpProviderPanel({
 
   return (
     <div className="mcp-provider-panel">
-      <div className="agents-toolbar mcp-toolbar">
-        <div className="agents-toolbar-meta">
-          <strong>{t(`mcp.provider.${activeProvider}` as never)}</strong>
-          <span>{currentConfig?.configPath ?? ""}</span>
+      {inlineHeader ? (
+        <div className="mcp-inline-header">
+          {currentConfig?.configPath ? (
+            <span className="mcp-inline-header-path">{currentConfig.configPath}</span>
+          ) : null}
+          <McpHeaderActions
+            configPath={currentConfig?.configPath}
+            onOpenExternal={onOpenExternal}
+            onRevealPath={onRevealPath}
+            onRefresh={() => void group.onRefresh()}
+            onAdd={() => setEditor(emptyEditor())}
+          />
         </div>
-        <div className="settings-actions agents-toolbar-actions">
-          <button
-            type="button"
-            className="ghost-button agents-icon-button"
-            disabled={!currentConfig?.configPath}
-            onClick={() => currentConfig?.configPath && onOpenExternal(currentConfig.configPath)}
-            title={t("agents.action.openExternal")}
-          >
-            <ExternalLinkIcon size={15} />
-          </button>
-          <button
-            type="button"
-            className="ghost-button agents-icon-button"
-            disabled={!currentConfig?.configPath}
-            onClick={() => currentConfig?.configPath && onRevealPath(currentConfig.configPath)}
-            title={t("agents.action.reveal")}
-          >
-            <FolderIcon size={15} />
-          </button>
-          <button type="button" className="ghost-button agents-icon-button" onClick={() => void group.onRefresh()} title={t("app.actions.refresh")}>
-            <RefreshIcon size={15} />
-          </button>
-          <button type="button" className="primary-button" onClick={() => setEditor(emptyEditor())}>
-            {t("mcp.action.add")}
-          </button>
-        </div>
-      </div>
+      ) : null}
 
       {showCodexTrustBanner ? (
         <div className="mcp-codex-trust-banner">

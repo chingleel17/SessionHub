@@ -35,6 +35,7 @@ import {
   EyeIcon,
   FolderIcon,
   RefreshIcon,
+  SaveIcon,
   SearchIcon,
   SyncIcon,
 } from "./Icons";
@@ -269,29 +270,25 @@ export function AgentsConfigView(props: Props) {
       ) ?? null
       : null;
 
-    return (
-      <div className="agents-md-layout">
-        <div className="agents-toolbar">
-          <div className="agents-toolbar-meta">
-            <strong>{t("agents.tab.agentsMd")}</strong>
-            <span>{data.agentsMdData?.truncated ? t("agents.report.truncated") : t("agents.empty.agentsMdHint")}</span>
-          </div>
-          <div className="settings-actions agents-toolbar-actions">
-            <button type="button" className="ghost-button agents-icon-button" onClick={() => void data.onRefreshAgentsMd()} title={t("app.actions.refresh")}>
-              <RefreshIcon size={15} />
-            </button>
-            <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onOpenExternal(groupSelectedNode.filePath)} title={t("agents.action.openExternal")}>
-              <ExternalLinkIcon size={15} />
-            </button>
-            <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onRevealPath(groupSelectedNode.filePath)} title={t("agents.action.reveal")}>
-              <FolderIcon size={15} />
-            </button>
-            <button type="button" className="ghost-button agents-icon-button" disabled={!selectedMdEntry} onClick={() => selectedMdEntry && void handlePreview(data, buildAgentsMdSyncRequest(selectedMdEntry, true))} title={t("agents.action.syncThisDir")}>
-              <SyncIcon size={15} />
-            </button>
-          </div>
-        </div>
+    const mdActions = (
+      <div className="settings-actions agents-toolbar-actions">
+        <button type="button" className="ghost-button agents-icon-button" onClick={() => void data.onRefreshAgentsMd()} title={t("app.actions.refresh")}>
+          <RefreshIcon size={15} />
+        </button>
+        <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onOpenExternal(groupSelectedNode.filePath)} title={t("agents.action.openExternal")}>
+          <ExternalLinkIcon size={15} />
+        </button>
+        <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onRevealPath(groupSelectedNode.filePath)} title={t("agents.action.reveal")}>
+          <FolderIcon size={15} />
+        </button>
+        <button type="button" className="ghost-button agents-icon-button" disabled={!selectedMdEntry} onClick={() => selectedMdEntry && void handlePreview(data, buildAgentsMdSyncRequest(selectedMdEntry, true))} title={t("agents.action.syncThisDir")}>
+          <SyncIcon size={15} />
+        </button>
+      </div>
+    );
 
+    const body = (
+      <div className="agents-md-layout">
         {treeNodes.length === 0 && !data.isAgentsMdLoading ? (
           <div className="explorer-content-empty">{t("agents.empty.agentsMd")}</div>
         ) : (
@@ -314,20 +311,22 @@ export function AgentsConfigView(props: Props) {
                   {isEditing ? <EyeIcon size={15} /> : <EditNotesIcon size={15} />}
                   {isEditing ? t("agents.action.preview") : t("agents.action.edit")}
                 </button>
-                <button
-                  type="button"
-                  className="primary-button agents-inline-button"
-                  disabled={!groupSelectedNode?.filePath || !isEditing}
-                  onClick={async () => {
-                    if (!groupSelectedNode?.filePath) return;
-                    await onWriteFile(groupSelectedNode.filePath, draft);
-                    setContent(draft);
-                    setIsEditing(false);
-                  }}
-                >
-                  <SyncIcon size={15} />
-                  {t("agents.action.save")}
-                </button>
+                {isEditing ? (
+                  <button
+                    type="button"
+                    className="primary-button agents-inline-button"
+                    disabled={!groupSelectedNode?.filePath}
+                    onClick={async () => {
+                      if (!groupSelectedNode?.filePath) return;
+                      await onWriteFile(groupSelectedNode.filePath, draft);
+                      setContent(draft);
+                      setIsEditing(false);
+                    }}
+                  >
+                    <SaveIcon size={15} />
+                    {t("agents.action.save")}
+                  </button>
+                ) : null}
               </div>
 
               {isEditing ? (
@@ -357,6 +356,8 @@ export function AgentsConfigView(props: Props) {
         )}
       </div>
     );
+
+    return { actions: mdActions, body };
   };
 
   function treeContainsNodeId(nodes: TreeNode[], id: string): boolean {
@@ -628,14 +629,25 @@ export function AgentsConfigView(props: Props) {
       {activeTab === "agents-md" ? (
         globalData ? (
           <div className="agents-scope-groups">
-            {groups.map((data) => (
-              <CollapsibleGroup key={scopeGroupKey(data.scope)} scope={data.scope} storageKey={groupExpandKey("agents-md")} count={data.agentsMdData?.entries.length ?? 0} label={scopeGroupLabel(data.scope)}>
-                {renderAgentsMdGroup(data)}
-              </CollapsibleGroup>
-            ))}
+            {groups.map((data) => {
+              const { actions, body } = renderAgentsMdGroup(data);
+              return (
+                <CollapsibleGroup key={scopeGroupKey(data.scope)} scope={data.scope} storageKey={groupExpandKey("agents-md")} count={data.agentsMdData?.entries.length ?? 0} label={scopeGroupLabel(data.scope)} actions={actions}>
+                  {body}
+                </CollapsibleGroup>
+              );
+            })}
           </div>
         ) : (
-          renderAgentsMdGroup(primary)
+          (() => {
+            const { actions, body } = renderAgentsMdGroup(primary);
+            return (
+              <>
+                <div className="agents-inline-header">{actions}</div>
+                {body}
+              </>
+            );
+          })()
         )
       ) : null}
 
@@ -677,6 +689,9 @@ export function AgentsConfigView(props: Props) {
                 <button type="button" className="ghost-button agents-icon-button" onClick={() => previewNode.filePath && onRevealPath(previewNode.filePath)} title={t("agents.action.reveal")}>
                   <FolderIcon size={15} />
                 </button>
+                <button type="button" className="ghost-button agents-icon-button agents-detail-close" onClick={closeDetail} title={t("tabs.close")} aria-label={t("tabs.close")}>
+                  ×
+                </button>
               </div>
             </div>
             <ContentViewer
@@ -704,12 +719,14 @@ function CollapsibleGroup({
   storageKey,
   count,
   label,
+  actions,
   children,
 }: {
   scope: AgentsScope;
   storageKey: string;
   count: number;
   label: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const key = `${storageKey}:${scope.kind === "global" ? "global" : scope.projectCwd.toLowerCase()}:${scope.kind}`;
@@ -729,7 +746,7 @@ function CollapsibleGroup({
   };
 
   return (
-    <CollapsibleSection title={`${label} (${count})`} expanded={expanded} onToggle={toggle}>
+    <CollapsibleSection title={`${label} (${count})`} expanded={expanded} onToggle={toggle} actions={actions}>
       {children}
     </CollapsibleSection>
   );

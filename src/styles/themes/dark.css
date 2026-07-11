@@ -1,28 +1,64 @@
 :root[data-theme="dark"] {
-  --color-surface-app: #0f1117;
-  --color-surface-panel: #1a1d27;
-  --color-surface: #1a1d27;
-  --color-surface-secondary: #22263a;
-  --color-surface-tertiary: #2a2f3d;
-  --color-surface-accent: rgba(77, 132, 255, 0.12);
-  --color-border: #2a2f3d;
+  /* ── Minimal 冷灰中性背景與表面（避免純黑；panel 與 app 保留可辨色差） ── */
+  --color-surface-app: #0e1014;
+  --color-surface-panel: #181b22;
+  --color-surface: #181b22;
+  --color-surface-subtle: #1d212a;
+  --color-surface-secondary: #212530;
+  --color-surface-tertiary: #262b36;
+  --color-surface-accent: rgba(59, 130, 246, 0.1);
 
-  --color-text-primary: #e8edf5;
-  --color-text-secondary: #7f8fa8;
+  /* ── 邊框（dark 下略提以維持卡片邊界可辨識） ── */
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.09);
 
-  --color-border-subtle: #2a2f3d;
+  /* 冷灰中性文字（去藍味） */
+  --color-text-primary: #e6e8ec;
+  --color-text-secondary: #8b9099;
 
-  --color-action-primary: #4d84ff;
+  /* ── 極淡冷灰漸層光暈 ── */
+  --gradient-app:
+    radial-gradient(1200px 600px at 100% -10%, rgba(120, 140, 180, 0.06), transparent 60%),
+    radial-gradient(900px 500px at -10% 0%, rgba(120, 140, 180, 0.045), transparent 55%),
+    var(--color-surface-app);
+  --gradient-panel-header: linear-gradient(180deg, #1b1e26 0%, #15181f 100%);
+
+  /* ── 品牌主色（暗色提亮以維持對比） ── */
+  --color-action-primary: #3b82f6;
   --color-action-primary-text: #ffffff;
 
   --color-badge-bg: #1a2a4a;
-  --color-badge-text: #4d84ff;
+  --color-badge-text: #6ea0ff;
 
-  --shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.3);
+  /* ── 圓角統一系統 ── */
+  --radius-button: 10px;
+  --radius-input: 12px;
+  --radius-card: 16px;
+  --radius-modal: 20px;
+  --radius-md: 12px;
+  --radius-xl: 16px;
+
+  /* ── 輕量陰影 ── */
+  --shadow-panel: 0 2px 12px rgba(0, 0, 0, 0.06);
+  --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* ── Glassmorphism 專用 ── */
+  --glass-blur: 20px;
+  --glass-bg: rgba(23, 26, 33, 0.7);
+
+  /* ── 動畫 ── */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 250ms;
+  --motion-ease: ease-out;
+
+  /* ── Scrollbar（冷灰半透明） ── */
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.14);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.26);
 
   --color-surface-sidebar: linear-gradient(180deg, #141720 0%, #111420 100%);
   --color-surface-sidebar-muted: #141720;
-  --color-surface-input: #1e2230;
+  --color-surface-input: #1c202a;
 
   --color-realtime-dot: #3d5070;
   --color-status-success: #2da05f;
@@ -42,8 +78,8 @@
 
   --color-toast-bg: #0a0f1a;
 
-  --color-action-primary-subtle-border: rgba(77, 132, 255, 0.24);
-  --color-action-primary-subtle-bg: rgba(77, 132, 255, 0.12);
+  --color-action-primary-subtle-border: rgba(59, 130, 246, 0.24);
+  --color-action-primary-subtle-bg: rgba(59, 130, 246, 0.12);
 
   --color-shadow-dialog: rgba(0, 0, 0, 0.4);
   --color-dialog-overlay: rgba(0, 0, 0, 0.6);
@@ -58,11 +94,11 @@
 
 /* ── Explorer Panel 深色模式覆寫 ── */
 [data-theme="dark"] .explorer-panel {
-  background: var(--color-surface-panel);
+  background: transparent;
 }
 
 [data-theme="dark"] .explorer-panel-header {
-  background: rgba(26, 29, 39, 0.92);
+  background: transparent;
 }
 
 [data-theme="dark"] .explorer-refresh-btn {
@@ -88,28 +124,17 @@
   color: var(--color-action-primary-text);
 }
 
-[data-theme="dark"] .agents-config-card {
-  background:
-    radial-gradient(circle at top right, rgba(47, 109, 246, 0.16), transparent 28%),
-    linear-gradient(180deg, rgba(19, 23, 32, 0.98), rgba(15, 19, 28, 0.98));
-  border-color: rgba(120, 148, 214, 0.16);
-  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.32);
-}
-
-[data-theme="dark"] .agents-toolbar,
-[data-theme="dark"] .agents-matrix-card,
-[data-theme="dark"] .agents-detail-view,
-[data-theme="dark"] .agents-sync-report,
+/* Minimal 去卡片：toolbar / matrix / detail / sync-report / content-actions 皆透明，
+   僅同步 modal 內的 conflict 項目保留卡片背景。 */
 [data-theme="dark"] .sync-conflict-dialog,
-[data-theme="dark"] .sync-conflict-item,
-[data-theme="dark"] .agents-content-actions {
-  background: rgba(22, 27, 38, 0.9);
-  border-color: rgba(107, 122, 153, 0.22);
+[data-theme="dark"] .sync-conflict-item {
+  background: var(--color-surface-panel);
+  border-color: var(--color-border-subtle);
 }
 
 [data-theme="dark"] .agents-detail-header {
-  background: rgba(27, 33, 46, 0.92);
-  border-color: rgba(107, 122, 153, 0.22);
+  background: var(--gradient-panel-header);
+  border-color: var(--color-border-subtle);
 }
 
 [data-theme="dark"] .agents-link-button {
@@ -133,37 +158,20 @@
   border-color: rgba(107, 122, 153, 0.24);
 }
 
-[data-theme="dark"] .agents-matrix-table thead {
-  background: linear-gradient(180deg, rgba(32, 38, 52, 0.94), rgba(25, 30, 43, 0.98));
-}
-
 [data-theme="dark"] .agents-matrix-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="dark"] .agents-report-row {
-  background: rgba(27, 33, 46, 0.88);
-  border-color: rgba(107, 122, 153, 0.18);
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border-subtle);
 }
 
-/* ── Sticky Project Shell（Sub-tab Bar 容器）深色模式覆寫 ── */
+/* ── Sticky Project Shell 深色模式覆寫（Minimal：不透明實底 + 輕陰影） ── */
 [data-theme="dark"] .sticky-project-shell::before {
   border-color: var(--color-border-subtle);
-  background: linear-gradient(
-    180deg,
-    rgba(26, 29, 39, 0.9) 0%,
-    rgba(20, 23, 32, 0.85) 100%
-  );
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.3);
-}
-
-/* ── Sub-tab Bar 深色模式 box-shadow 覆寫 ── */
-[data-theme="dark"] .sub-tab-bar {
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-
-[data-theme="dark"] .sub-tab-item--active {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  background: var(--color-surface-app);
+  box-shadow: var(--shadow-panel);
 }
 
 /* ── Explorer Tree 深色模式 hover/selected 覆寫 ── */
