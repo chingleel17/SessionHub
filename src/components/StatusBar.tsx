@@ -27,6 +27,7 @@ const PROVIDER_ABBR: Record<string, string> = {
   copilot: "GH",
   opencode: "OC",
   codex: "CX",
+  antigravity: "AG",
 };
 
 // provider 品牌代表色（用於縮寫文字上色，不使用商標圖形）
@@ -35,7 +36,15 @@ const PROVIDER_COLOR: Record<string, string> = {
   copilot: "#57ab5a",
   opencode: "#8957e5",
   codex: "#10a37f",
+  antigravity: "#4285F4",
 };
+
+// 底部狀態列只顯示 Antigravity 的 Gemini 模型群組視窗，Claude/GPT 群組留給 Dashboard
+function statusBarWindowsForSnapshot(snap: QuotaSnapshot) {
+  const windows = snap.windows ?? [];
+  if (snap.provider !== "antigravity") return windows;
+  return windows.filter((w) => (w.group ?? "").toLowerCase().includes("gemini"));
+}
 
 // utilisation 0-100 → bar colour token（與 QuotaOverview 的 barColor 門檻/色票一致）
 function quotaBarColor(pct: number): string {
@@ -123,7 +132,7 @@ function formatResetDateTime(iso: string | null | undefined, amLabel: string, pm
 
 function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel }: { snap: QuotaSnapshot; amLabel: string; pmLabel: string; resetsLabel: string }) {
   const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
-  const windows = snap.windows ?? [];
+  const windows = statusBarWindowsForSnapshot(snap);
   const topWindow = windows[0];
   const pct = topWindow ? Math.round(topWindow.utilization * 100) : null;
   const tooltip = [
@@ -247,11 +256,11 @@ export function StatusBar({
 
       {/* Right: remote quota snapshots (utilization bars from API) */}
       {quotaSnapshots
-        .filter((s) => s.status === "ok" && s.source === "remote_api" && quotaEnabledProviders.includes(s.provider))
+        .filter((s) => s.status === "ok" && (s.source === "remote_api" || s.provider === "antigravity") && quotaEnabledProviders.includes(s.provider))
         .length > 0 && (
         <div className="global-status-bar-quota global-status-bar-quota--snapshots">
           {quotaSnapshots
-            .filter((s) => s.status === "ok" && s.source === "remote_api" && quotaEnabledProviders.includes(s.provider))
+            .filter((s) => s.status === "ok" && (s.source === "remote_api" || s.provider === "antigravity") && quotaEnabledProviders.includes(s.provider))
             .map((s) => (
               <QuotaSnapshotChip
                 key={s.provider}

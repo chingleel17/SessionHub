@@ -505,6 +505,7 @@ export const zhTwMessages = {
   "settings.claude.subtitle": "管理 Claude Code CLI session 掃描、Hook 整合與用量追蹤",
   "settings.fields.claudeRoot": "Claude Code 資料目錄",
   "settings.fields.providerClaude": "Claude Code",
+  "settings.fields.providerAntigravity": "Antigravity",
   "settings.fields.minimizeToTray": "關閉時最小化至系統匣",
   "settings.fields.minimizeToTrayDesc": "關閉視窗後保持背景執行，仍可接收 Hook 事件",
   "quota.title": "平台用量",

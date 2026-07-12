@@ -510,6 +510,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.claude.subtitle": "Manage Claude Code CLI session scanning, hook integration and usage tracking",
   "settings.fields.claudeRoot": "Claude Code data directory",
   "settings.fields.providerClaude": "Claude Code",
+  "settings.fields.providerAntigravity": "Antigravity",
   "settings.fields.minimizeToTray": "Minimize to system tray on close",
   "settings.fields.minimizeToTrayDesc": "Keep running in the background after closing so hook events are still received",
   "quota.title": "Platform Usage",

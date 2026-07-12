@@ -9,16 +9,19 @@ use crate::db::{
     load_sessions_cache_from_db, persist_provider_cache,
 };
 use crate::settings::{
-    resolve_claude_root, resolve_codex_root, resolve_copilot_root, resolve_opencode_root,
+    resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
+    resolve_opencode_root,
 };
 use crate::types::*;
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod git;
 pub mod opencode;
 
+pub(crate) use antigravity::*;
 pub(crate) use claude::*;
 pub(crate) use codex::*;
 pub(crate) use copilot::*;
@@ -30,6 +33,7 @@ pub(crate) fn get_sessions_internal(
     opencode_root: Option<String>,
     codex_root: Option<String>,
     claude_root: Option<String>,
+    antigravity_root: Option<String>,
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
@@ -46,6 +50,7 @@ pub(crate) fn get_sessions_internal(
     let resolved_opencode = resolve_opencode_root(opencode_root.as_deref()).ok();
     let resolved_codex = resolve_codex_root(codex_root.as_deref()).ok();
     let resolved_claude = resolve_claude_root(claude_root.as_deref()).ok();
+    let resolved_antigravity = resolve_antigravity_root(antigravity_root.as_deref()).ok();
     let providers = enabled_providers.unwrap_or_else(default_enabled_providers);
     let show_archived = show_archived.unwrap_or(false);
     let force = force_full.unwrap_or(false);
@@ -321,6 +326,75 @@ pub(crate) fn get_sessions_internal(
             if let Some(cache) = claude_guard.as_ref() {
                 if let Err(error) = persist_provider_cache(&connection, CLAUDE_PROVIDER, cache) {
                     eprintln!("failed to persist claude cache: {error}");
+                }
+            }
+        }
+    }
+
+    // ── Antigravity provider ──────────────────────────────────────────────────
+    if providers.iter().any(|p| p == ANTIGRAVITY_PROVIDER) {
+        if let Some(antigravity_root) = &resolved_antigravity {
+            let mut antigravity_guard = scan_cache
+                .antigravity
+                .lock()
+                .map_err(|_| "failed to lock antigravity scan cache".to_string())?;
+
+            if antigravity_guard.is_none() {
+                let sessions = load_sessions_cache_from_db(&connection, Some(ANTIGRAVITY_PROVIDER))
+                    .unwrap_or_default();
+                let mtimes = load_session_mtimes_from_db(&connection, ANTIGRAVITY_PROVIDER)
+                    .unwrap_or_default();
+                let (last_full_scan_at, last_cursor) =
+                    load_scan_state_from_db(&connection, ANTIGRAVITY_PROVIDER).unwrap_or((0, 0));
+                *antigravity_guard = Some(ProviderCache {
+                    sessions,
+                    session_mtimes: mtimes,
+                    last_full_scan_at: instant_from_unix_secs(last_full_scan_at),
+                    last_cursor,
+                });
+            }
+
+            let antigravity_force_full = force
+                || antigravity_guard
+                    .as_ref()
+                    .map(|cache| cache.sessions.is_empty())
+                    .unwrap_or(true);
+
+            if should_full_scan(&antigravity_guard, antigravity_force_full) {
+                match scan_antigravity_sessions_internal(antigravity_root, show_archived, &connection)
+                {
+                    Ok(sessions) => {
+                        let mtimes = build_antigravity_session_mtimes(&sessions);
+                        *antigravity_guard = Some(ProviderCache {
+                            sessions: sessions.clone(),
+                            session_mtimes: mtimes,
+                            last_full_scan_at: Instant::now(),
+                            last_cursor: 0,
+                        });
+                        all_sessions.extend(sessions);
+                    }
+                    Err(error) => {
+                        eprintln!("antigravity provider error (ignored): {error}");
+                    }
+                }
+            } else {
+                let cache = antigravity_guard
+                    .as_mut()
+                    .expect("cache is Some after should_full_scan check");
+                if let Err(error) = scan_antigravity_incremental_internal(
+                    antigravity_root,
+                    show_archived,
+                    &connection,
+                    cache,
+                ) {
+                    eprintln!("antigravity incremental scan error (ignored): {error}");
+                }
+                all_sessions.extend(cache.sessions.iter().cloned());
+            }
+
+            if let Some(cache) = antigravity_guard.as_ref() {
+                if let Err(error) = persist_provider_cache(&connection, ANTIGRAVITY_PROVIDER, cache) {
+                    eprintln!("failed to persist antigravity cache: {error}");
                 }
             }
         }

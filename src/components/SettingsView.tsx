@@ -14,7 +14,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath" | "agentsSourceRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "hookScriptsPath" | "agentsSourceRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -47,6 +47,7 @@ function getProviderLabel(
       return provider;
   }
 }
+
 
 function getProviderStatusLabel(
   status: ProviderIntegrationState,
@@ -143,6 +144,7 @@ export function SettingsView({
     opencode: t("settings.fields.providerOpencode"),
     codex: t("settings.fields.providerCodex"),
     claude: t("settings.fields.providerClaude"),
+    antigravity: t("settings.fields.providerAntigravity"),
   };
   const statusLabels: Record<ProviderIntegrationState, string> = {
     installed: t("settings.integrations.status.installed"),
@@ -170,6 +172,7 @@ export function SettingsView({
                   { id: "opencode", labelKey: "settings.fields.providerOpencode", field: "opencodeRoot", path: settingsForm.opencodeRoot },
                   { id: "codex", labelKey: "settings.fields.providerCodex", field: "codexRoot", path: settingsForm.codexRoot },
                   { id: "claude", labelKey: "settings.fields.providerClaude", field: "claudeRoot", path: settingsForm.claudeRoot ?? "" },
+                  { id: "antigravity", labelKey: "settings.fields.providerAntigravity", field: "antigravityRoot", path: settingsForm.antigravityRoot ?? "" },
                 ] as const
               ).map(({ id, labelKey, field, path }) => (
                 <div key={id} className="checkbox-group">
@@ -685,9 +688,9 @@ export function SettingsView({
               <div className="settings-field">
                 <label>{t("quota.monitoring.perProvider")}</label>
                 <div className="quota-provider-toggle-list">
-                  {(["claude", "copilot", "codex", "opencode"] as const).map((provider) => {
+                  {(["claude", "copilot", "codex", "opencode", "antigravity"] as const).map((provider) => {
                     const enabledProviders =
-                      settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"];
+                      settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"];
                     const checked = enabledProviders.includes(provider);
                     return (
                       <label key={provider} className="checkbox-group checkbox-group--inline">

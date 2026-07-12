@@ -70,8 +70,10 @@ function windowLabelKey(key: string): MessageKey {
   const map: Record<string, MessageKey> = {
     five_hour: "quota.window.fiveHour",
     primary: "quota.window.fiveHour",
+    "5h": "quota.window.fiveHour",
     seven_day: "quota.window.sevenDay",
     secondary: "quota.window.sevenDay",
+    weekly: "quota.window.sevenDay",
     seven_day_sonnet: "quota.window.sevenDaySonnet",
     seven_day_opus: "quota.window.sevenDayOpus",
   };
@@ -84,7 +86,19 @@ const PROVIDER_LABELS: Record<string, string> = {
   copilot: "Copilot",
   opencode: "OpenCode",
   codex: "Codex",
+  antigravity: "Antigravity",
 };
+
+// 依 QuotaWindow.group 分組（Antigravity 用），無 group 資訊的 provider 回傳單一未命名分組
+function groupWindows(windows: QuotaWindow[]): Array<{ group: string | null; windows: QuotaWindow[] }> {
+  const byGroup = new Map<string | null, QuotaWindow[]>();
+  for (const w of windows) {
+    const key = w.group ?? null;
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key)!.push(w);
+  }
+  return Array.from(byGroup.entries()).map(([group, groupWindows]) => ({ group, windows: groupWindows }));
+}
 
 // ─── sub-components ──────────────────────────────────────────────────────────
 
@@ -154,8 +168,13 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
       {/* windows */}
       {isOk && windows.length > 0 ? (
         <div className="qo-windows">
-          {windows.map((w) => (
-            <WindowRow key={w.windowKey} w={w} />
+          {groupWindows(windows).map(({ group, windows: groupedWindows }) => (
+            <div className="qo-window-group" key={group ?? "__default"}>
+              {group ? <div className="qo-window-group-title">{group}</div> : null}
+              {groupedWindows.map((w) => (
+                <WindowRow key={`${group ?? "default"}-${w.windowKey}`} w={w} />
+              ))}
+            </div>
           ))}
         </div>
       ) : null}
@@ -292,6 +311,7 @@ function providerIcon(provider: string): string {
     copilot: "◎",
     opencode: "◈",
     codex: "◇",
+    antigravity: "⟡",
   };
   return icons[provider] ?? "◆";
 }

@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use crate::db::ensure_parent_dir;
 use crate::types::*;
 
+pub mod antigravity;
 pub mod bridge;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod opencode;
 
+pub(crate) use antigravity::*;
 pub(crate) use bridge::*;
 pub(crate) use claude::*;
 pub(crate) use codex::*;
@@ -262,6 +264,7 @@ pub(crate) fn recheck_provider_integration_status(
         OPENCODE_PROVIDER => Ok(detect_opencode_integration_status()),
         CODEX_PROVIDER => Ok(detect_codex_integration_status(codex_root)),
         CLAUDE_PROVIDER => Ok(detect_claude_integration_status(hook_scripts_path)),
+        ANTIGRAVITY_PROVIDER => Ok(detect_antigravity_integration_status()),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -277,6 +280,7 @@ pub(crate) fn install_or_update_provider_integration(
         OPENCODE_PROVIDER => Ok(install_or_update_opencode_integration()),
         CODEX_PROVIDER => Ok(install_or_update_codex_integration(codex_root)),
         CLAUDE_PROVIDER => Ok(install_or_update_claude_integration(hook_scripts_path)),
+        ANTIGRAVITY_PROVIDER => Ok(install_or_update_antigravity_integration()),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -292,6 +296,7 @@ pub(crate) fn uninstall_provider_integration(
         OPENCODE_PROVIDER => Ok(uninstall_opencode_integration()),
         CODEX_PROVIDER => Ok(uninstall_codex_integration(codex_root)),
         CLAUDE_PROVIDER => Ok(uninstall_claude_integration(hook_scripts_path)),
+        ANTIGRAVITY_PROVIDER => Ok(uninstall_antigravity_integration()),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }

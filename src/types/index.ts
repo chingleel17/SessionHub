@@ -51,6 +51,7 @@ export type AppSettings = {
     analyticsPanelCollapsed?: boolean;
     minimizeToTray?: boolean;
     claudeRoot?: string;
+    antigravityRoot?: string;
     hookScriptsPath?: string;
     claudeQuotaResetDay?: number;
     claudeMonthlyLimitTokens?: number | null;
@@ -453,6 +454,8 @@ export type QuotaWindow = {
     label: string;
     utilization: number;
     resetsAt?: string | null;
+    /** 模型群組名稱（如 "Gemini Models"），僅 Antigravity 使用 */
+    group?: string | null;
 };
 
 export type LocalTokenUsage = {

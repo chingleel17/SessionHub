@@ -1917,6 +1917,117 @@ textarea {
   background: var(--color-error-chip-bg);
 }
 
+.ghost-button--active {
+  border-color: var(--color-action-primary);
+  color: var(--color-action-primary);
+}
+
+/* ── Antigravity hooks panel ── */
+.antigravity-hooks-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.antigravity-hooks-scope-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.antigravity-hooks-error {
+  color: var(--color-error-text);
+  font-size: 12px;
+}
+
+.antigravity-hooks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.antigravity-hooks-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.antigravity-hooks-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.antigravity-hooks-group {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.antigravity-hooks-event {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: var(--color-chip-bg);
+  color: var(--color-text-secondary);
+}
+
+.antigravity-hooks-matcher {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.antigravity-hooks-command {
+  font-size: 12px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.antigravity-hooks-timeout {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.antigravity-hooks-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.antigravity-hooks-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.antigravity-hooks-form-row {
+  display: flex;
+  gap: 8px;
+}
+
+.antigravity-hooks-form-row input,
+.antigravity-hooks-form-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.antigravity-hooks-command-input {
+  flex: 2;
+}
+
+.antigravity-hooks-timeout-input {
+  max-width: 100px;
+}
+
 .project-item {
   display: flex;
   align-items: center;
@@ -6121,6 +6232,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .qo-tab--active.qo-tab--copilot { border-bottom-color: var(--quota-accent-copilot); color: var(--quota-accent-copilot); }
 .qo-tab--active.qo-tab--opencode{ border-bottom-color: var(--quota-accent-opencode);color: var(--quota-accent-opencode); }
 .qo-tab--active.qo-tab--codex   { border-bottom-color: var(--quota-accent-codex);   color: var(--quota-accent-codex); }
+.qo-tab--active.qo-tab--antigravity { border-bottom-color: var(--quota-accent-antigravity); color: var(--quota-accent-antigravity); }
 
 .qo-tab-icon { font-size: 16px; line-height: 1; }
 .qo-tab-label { font-size: 13px; }
@@ -6195,6 +6307,20 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.qo-window-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qo-window-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--quota-reset-text);
 }
 
 .qo-window-label {

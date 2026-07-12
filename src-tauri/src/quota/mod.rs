@@ -1,5 +1,6 @@
 use crate::types::{AppSettings, QuotaSnapshot};
 
+pub mod antigravity;
 pub mod cache;
 pub mod claude;
 pub mod codex;
@@ -23,6 +24,7 @@ impl QuotaManager {
                 Box::new(copilot::CopilotAdapter),
                 Box::new(opencode::OpenCodeAdapter),
                 Box::new(codex::CodexAdapter),
+                Box::new(antigravity::AntigravityAdapter),
             ],
         }
     }

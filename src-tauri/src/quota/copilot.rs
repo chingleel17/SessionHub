@@ -178,6 +178,7 @@ impl QuotaAdapter for CopilotAdapter {
                 label: primary_label.to_string(),
                 utilization: ((100.0 - q.remaining_percent) / 100.0).clamp(0.0, 1.0),
                 resets_at: quota_reset_at.clone(),
+                group: None,
             });
         }
         if let Some(q) = secondary {
@@ -186,6 +187,7 @@ impl QuotaAdapter for CopilotAdapter {
                 label: secondary_label.to_string(),
                 utilization: ((100.0 - q.remaining_percent) / 100.0).clamp(0.0, 1.0),
                 resets_at: quota_reset_at.clone(),
+                group: None,
             });
         }
 
@@ -229,6 +231,7 @@ mod tests {
             copilot_root: String::new(),
             opencode_root: String::new(),
             codex_root: String::new(),
+            antigravity_root: String::new(),
             terminal_path: None,
             external_editor_path: None,
             show_archived: false,

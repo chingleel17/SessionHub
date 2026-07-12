@@ -45,6 +45,20 @@ pub(crate) fn resolve_claude_root(root_dir: Option<&str>) -> Result<PathBuf, Str
     }
 }
 
+pub(crate) fn default_antigravity_root() -> Result<PathBuf, String> {
+    let user_profile = env::var("USERPROFILE")
+        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+
+    Ok(PathBuf::from(user_profile).join(".gemini"))
+}
+
+pub(crate) fn resolve_antigravity_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
+    match root_dir {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        _ => default_antigravity_root(),
+    }
+}
+
 pub(crate) fn default_agents_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -220,6 +234,7 @@ impl AppSettings {
             opencode_root: default_opencode_root()?.to_string_lossy().to_string(),
             codex_root: default_codex_root()?.to_string_lossy().to_string(),
             claude_root: default_claude_root()?.to_string_lossy().to_string(),
+            antigravity_root: default_antigravity_root()?.to_string_lossy().to_string(),
             hook_scripts_path: default_hook_scripts_root()?.to_string_lossy().to_string(),
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
@@ -276,6 +291,7 @@ pub(crate) fn collect_provider_integration_statuses(
         crate::provider::detect_opencode_integration_status(),
         crate::provider::detect_codex_integration_status(codex_root),
         crate::provider::detect_claude_integration_status(hook_scripts_path),
+        crate::provider::detect_antigravity_integration_status(),
     ]
 }
 

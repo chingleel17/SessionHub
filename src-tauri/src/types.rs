@@ -64,6 +64,7 @@ pub(crate) fn default_enabled_providers() -> Vec<String> {
         "copilot".to_string(),
         "opencode".to_string(),
         "codex".to_string(),
+        ANTIGRAVITY_PROVIDER.to_string(),
     ]
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn default_enabled_providers_all() -> Vec<String> {
         COPILOT_PROVIDER.to_string(),
         OPENCODE_PROVIDER.to_string(),
         CODEX_PROVIDER.to_string(),
+        ANTIGRAVITY_PROVIDER.to_string(),
     ]
 }
 
@@ -185,6 +187,8 @@ pub(crate) struct AppSettings {
     pub(crate) analytics_panel_collapsed: bool,
     #[serde(default)]
     pub(crate) claude_root: String,
+    #[serde(default)]
+    pub(crate) antigravity_root: String,
     #[serde(default = "default_hook_scripts_path")]
     pub(crate) hook_scripts_path: String,
     #[serde(default = "default_claude_quota_reset_day")]
@@ -206,6 +210,7 @@ pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
 pub(crate) const CODEX_PROVIDER: &str = "codex";
 pub(crate) const CLAUDE_PROVIDER: &str = "claude";
+pub(crate) const ANTIGRAVITY_PROVIDER: &str = "antigravity";
 pub(crate) const AGENTS_PROVIDER: &str = "agents";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
 pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
@@ -231,6 +236,10 @@ pub(crate) struct QuotaWindow {
     pub(crate) label: String,
     pub(crate) utilization: f64,
     pub(crate) resets_at: Option<String>,
+    /// 模型群組名稱（如 "Gemini Models" / "Claude and GPT models"），僅 Antigravity 使用；
+    /// 其餘 provider 維持 None，供前端依顯示情境過濾群組。
+    #[serde(default)]
+    pub(crate) group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -571,6 +580,7 @@ pub(crate) struct ScanCache {
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
     pub(crate) codex: Mutex<Option<ProviderCache>>,
     pub(crate) claude: Mutex<Option<ProviderCache>>,
+    pub(crate) antigravity: Mutex<Option<ProviderCache>>,
     // session_id → (events_mtime_secs, SessionActivityStatus)
     pub(crate) activity: Mutex<HashMap<String, (i64, SessionActivityStatus)>>,
     // 防止同時進行多個掃描的全局互斥體
@@ -584,6 +594,7 @@ impl Default for ScanCache {
             opencode: Mutex::new(None),
             codex: Mutex::new(None),
             claude: Mutex::new(None),
+            antigravity: Mutex::new(None),
             activity: Mutex::new(HashMap::new()),
             scan_lock: Mutex::new(()),
         }

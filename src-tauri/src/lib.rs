@@ -1,5 +1,6 @@
 mod activity;
 mod agents_config;
+mod antigravity_hooks;
 mod commands;
 mod db;
 mod mcp_config;
@@ -76,6 +77,7 @@ pub fn run() {
                         opencode_root: String::new(),
                         codex_root: String::new(),
                         claude_root: String::new(),
+                        antigravity_root: String::new(),
                         hook_scripts_path: String::new(),
                         claude_quota_reset_day: 1,
                         minimize_to_tray: false,
@@ -1438,6 +1440,7 @@ mod tests {
                 Some(opencode_root.to_string_lossy().to_string()),
                 Some(String::new()),
                 Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![COPILOT_PROVIDER.to_string()]),
                 Some(true),
@@ -1453,6 +1456,7 @@ mod tests {
                 Some(opencode_root.to_string_lossy().to_string()),
                 Some(String::new()),
                 Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![OPENCODE_PROVIDER.to_string()]),
                 Some(true),
@@ -1466,6 +1470,7 @@ mod tests {
             let all_providers = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
                 Some(String::new()),
                 Some(String::new()),
                 Some(false),

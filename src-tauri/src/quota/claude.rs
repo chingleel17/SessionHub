@@ -232,6 +232,7 @@ fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<Quota
         label: label.to_string(),
         utilization,
         resets_at,
+        group: None,
     })
 }
 
@@ -388,6 +389,7 @@ mod tests {
             copilot_root: String::new(),
             opencode_root: String::new(),
             codex_root: String::new(),
+            antigravity_root: String::new(),
             terminal_path: None,
             external_editor_path: None,
             show_archived: false,

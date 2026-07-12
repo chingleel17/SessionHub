@@ -379,12 +379,13 @@ function App() {
     analyticsPanelCollapsed: false,
     minimizeToTray: false,
     claudeRoot: "",
+    antigravityRoot: "",
     hookScriptsPath: "",
       claudeQuotaResetDay: 1,
       claudeMonthlyLimitTokens: null,
       claudeMonthlyLimitUsd: null,
       enableQuotaMonitoring: true,
-      quotaEnabledProviders: ["claude", "copilot", "opencode", "codex"],
+      quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
       allowCreateProjectConfigDir: false,
     });
 
@@ -415,6 +416,7 @@ function App() {
       settingsQuery.data?.opencodeRoot ?? "",
       settingsQuery.data?.codexRoot ?? "",
       settingsQuery.data?.claudeRoot ?? "",
+      settingsQuery.data?.antigravityRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
     ],
@@ -429,6 +431,7 @@ function App() {
         opencodeRoot: settingsQuery.data?.opencodeRoot,
         codexRoot: settingsQuery.data?.codexRoot,
         claudeRoot: settingsQuery.data?.claudeRoot,
+        antigravityRoot: settingsQuery.data?.antigravityRoot,
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
         forceFull,
@@ -486,13 +489,14 @@ function App() {
         analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
         minimizeToTray: settingsQuery.data.minimizeToTray ?? false,
         claudeRoot: settingsQuery.data.claudeRoot ?? "",
+        antigravityRoot: settingsQuery.data.antigravityRoot ?? "",
         hookScriptsPath: settingsQuery.data.hookScriptsPath ?? "",
         claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
         claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
         claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
         enableQuotaMonitoring: settingsQuery.data.enableQuotaMonitoring ?? true,
         quotaEnabledProviders:
-          settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"],
+          settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
         allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
@@ -835,6 +839,7 @@ function App() {
       overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
     minimizeToTray: overrides.minimizeToTray ?? settingsForm.minimizeToTray ?? false,
     claudeRoot: overrides.claudeRoot ?? settingsForm.claudeRoot ?? "",
+    antigravityRoot: (overrides.antigravityRoot ?? settingsForm.antigravityRoot ?? "").trim(),
     hookScriptsPath: (overrides.hookScriptsPath ?? settingsForm.hookScriptsPath ?? "").trim(),
     claudeQuotaResetDay: overrides.claudeQuotaResetDay ?? settingsForm.claudeQuotaResetDay ?? 1,
     claudeMonthlyLimitTokens:
@@ -844,7 +849,7 @@ function App() {
     enableQuotaMonitoring:
       overrides.enableQuotaMonitoring ?? settingsForm.enableQuotaMonitoring ?? true,
     quotaEnabledProviders:
-      overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex"],
+      overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
     allowCreateProjectConfigDir:
       overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
     agentsSourceRoot: (overrides.agentsSourceRoot ?? settingsForm.agentsSourceRoot ?? "").trim(),
@@ -1934,7 +1939,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "hookScriptsPath" | "agentsSourceRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "hookScriptsPath" | "agentsSourceRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
