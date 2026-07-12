@@ -1,5 +1,7 @@
 import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../locales/zh-TW";
 import type { BridgeEventLogEntry, ProviderQuota, QuotaSnapshot } from "../types";
+import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 
 type Props = {
   lastBridgeEvent: { entry: BridgeEventLogEntry; receivedAt: Date } | null;
@@ -53,6 +55,40 @@ function quotaBarColor(pct: number): string {
   return "var(--quota-bar-ok)";
 }
 
+// 精簡用量指示：小型 SVG 圓環（stroke-dasharray 依 pct 繪製）
+function QuotaRing({ pct }: { pct: number }) {
+  const clamped = Math.min(Math.max(pct, 0), 100);
+  const size = 14;
+  const stroke = 2;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dash = (clamped / 100) * circumference;
+  const color = quotaBarColor(clamped);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="global-status-bar-quota-ring">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="var(--color-border)"
+        strokeWidth={stroke}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeDasharray={`${dash} ${circumference}`}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+      />
+    </svg>
+  );
+}
+
 function truncateCwd(cwd: string, maxLen = 40): string {
   if (cwd.length <= maxLen) return cwd;
   return "…" + cwd.slice(-(maxLen - 1));
@@ -99,15 +135,12 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
         <span className="global-status-bar-quota-cost">${quota.costUsd.toFixed(2)}</span>
       )}
       {hasLimit && (
-        <span className="global-status-bar-quota-bar">
-          <span
-            className="global-status-bar-quota-fill"
-            style={{
-              width: `${limitPct.toFixed(1)}%`,
-              background: quotaBarColor(limitPct),
-            }}
-          />
-        </span>
+        <>
+          <QuotaRing pct={limitPct} />
+          <span className="global-status-bar-quota-pct" style={{ color: quotaBarColor(limitPct) }}>
+            {Math.round(limitPct)}%
+          </span>
+        </>
       )}
     </span>
   );
@@ -130,7 +163,7 @@ function formatResetDateTime(iso: string | null | undefined, amLabel: string, pm
   }
 }
 
-function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel }: { snap: QuotaSnapshot; amLabel: string; pmLabel: string; resetsLabel: string }) {
+function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel, t }: { snap: QuotaSnapshot; amLabel: string; pmLabel: string; resetsLabel: string; t: (key: MessageKey) => string }) {
   const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
   const windows = statusBarWindowsForSnapshot(snap);
   const topWindow = windows[0];
@@ -140,7 +173,8 @@ function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel }: { snap: Quot
     ...windows.map((w) => {
       const wPct = Math.round(w.utilization * 100);
       const reset = w.resetsAt ? ` · ${resetsLabel}: ${formatResetDateTime(w.resetsAt, amLabel, pmLabel)}` : "";
-      return `${w.label}: ${wPct}%${reset}`;
+      const wLabel = localizedWindowLabel(snap.provider, w.windowKey, w.label, t);
+      return `${wLabel}: ${wPct}%${reset}`;
     }),
   ].filter(Boolean).join("\n");
 
@@ -154,13 +188,10 @@ function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel }: { snap: Quot
       </span>
       {pct !== null ? (
         <>
-          <span className="global-status-bar-quota-bar">
-            <span
-              className="global-status-bar-quota-fill"
-              style={{ width: `${Math.min(pct, 100)}%`, background: quotaBarColor(pct) }}
-            />
+          <QuotaRing pct={pct} />
+          <span className="global-status-bar-quota-pct" style={{ color: quotaBarColor(pct) }}>
+            {pct}%
           </span>
-          <span className="global-status-bar-quota-cost">{pct}%</span>
         </>
       ) : null}
     </span>
@@ -268,6 +299,7 @@ export function StatusBar({
                 amLabel={t("quota.period.am")}
                 pmLabel={t("quota.period.pm")}
                 resetsLabel={t("quota.resetsLabel")}
+                t={t}
               />
             ))}
         </div>

@@ -32,8 +32,6 @@ export const enUsMessages: Record<MessageKey, string> = {
     "Language is set to Traditional Chinese in v1; English and other locales can be added later.",
   "sidebar.iconStyle.label": "Theme",
   "sidebar.iconStyle.current": "Light theme",
-  "sidebar.iconStyle.description":
-    "Currently using a clean CRM-style info panel; more branded styles can be added later.",
   "sidebar.version": "App version",
   "sidebar.language.zhTW": "繁體中文（zh-TW）",
   "sidebar.language.enUS": "English (en-US)",
@@ -106,7 +104,6 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.fields.codexRoot": "Codex data directory",
   "settings.fields.terminalPath": "Terminal path",
   "settings.fields.externalEditorPath": "External editor path",
-  "settings.fields.hookScriptsPath": "Claude hook scripts path",
   "settings.fields.agentsSourceRoot": "Agents source root (global scope)",
   "settings.fields.agentsSourceRootDesc": "Source directory for global-scope Skills / Commands / AGENTS.md. Leave empty to use the default %USERPROFILE%\\.agents. .agents is natively read by codex / opencode / copilot; when using a custom location, link ~/.agents to it so those tools keep reading the canonical source. Only affects global scope; project scope always uses <project>/.agents.",
   "settings.fields.agentsSourceRootPlaceholder": "%USERPROFILE%\\.agents",

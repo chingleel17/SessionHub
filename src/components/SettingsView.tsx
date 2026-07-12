@@ -14,7 +14,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "hookScriptsPath" | "agentsSourceRoot") => void;
+  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "agentsSourceRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -246,25 +246,6 @@ export function SettingsView({
             </div>
           </label>
 
-          <label className="field-group">
-            <span>{t("settings.fields.hookScriptsPath")}</span>
-            <div className="field-with-action">
-              <input
-                value={settingsForm.hookScriptsPath ?? ""}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, hookScriptsPath: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => onBrowseDirectory("hookScriptsPath")}
-              >
-                {t("settings.actions.browseDirectory")}
-              </button>
-            </div>
-          </label>
-
           <label className="checkbox-group">
             <input
               type="checkbox"
@@ -388,7 +369,6 @@ export function SettingsView({
 
           <div className="settings-field settings-field--stacked">
             <label>{t("sidebar.iconStyle.label")}</label>
-            <p className="settings-field-desc settings-field-desc--block">{t("sidebar.iconStyle.description")}</p>
             <div className="theme-toggle-row theme-toggle-row--settings">
               <span className={`theme-toggle-icon ${theme === "light" ? "active" : ""}`}><SunIcon size={15} /></span>
               <button

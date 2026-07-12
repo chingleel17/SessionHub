@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { MessageKey } from "../locales/zh-TW";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
+import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -65,21 +65,6 @@ function barColor(pct: number): string {
   return "var(--quota-bar-ok)";
 }
 
-// window key → i18n key（統一以時間週期呈現，不分 provider）
-function windowLabelKey(key: string): MessageKey {
-  const map: Record<string, MessageKey> = {
-    five_hour: "quota.window.fiveHour",
-    primary: "quota.window.fiveHour",
-    "5h": "quota.window.fiveHour",
-    seven_day: "quota.window.sevenDay",
-    secondary: "quota.window.sevenDay",
-    weekly: "quota.window.sevenDay",
-    seven_day_sonnet: "quota.window.sevenDaySonnet",
-    seven_day_opus: "quota.window.sevenDayOpus",
-  };
-  return map[key] ?? "quota.window.fiveHour";
-}
-
 // provider display name
 const PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -115,7 +100,7 @@ function UtilisationBar({ pct }: { pct: number }) {
   );
 }
 
-function WindowRow({ w }: { w: QuotaWindow }) {
+function WindowRow({ w, provider }: { w: QuotaWindow; provider: string }) {
   const { t } = useI18n();
   const pct = w.utilization;
   const countdown = formatResetCountdown(
@@ -128,7 +113,7 @@ function WindowRow({ w }: { w: QuotaWindow }) {
   const datetime = formatResetDateTime(w.resetsAt, t("quota.period.am"), t("quota.period.pm"));
   return (
     <div className="qo-window" data-key={w.windowKey}>
-      <div className="qo-window-label">{t(windowLabelKey(w.windowKey))}</div>
+      <div className="qo-window-label">{localizedWindowLabel(provider, w.windowKey, w.label, t)}</div>
       <UtilisationBar pct={pct} />
       <div className="qo-window-meta">
         <span className="qo-pct">{t("quota.usedPct", { pct: Math.round(pct * 100) })}</span>
@@ -172,7 +157,7 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
             <div className="qo-window-group" key={group ?? "__default"}>
               {group ? <div className="qo-window-group-title">{group}</div> : null}
               {groupedWindows.map((w) => (
-                <WindowRow key={`${group ?? "default"}-${w.windowKey}`} w={w} />
+                <WindowRow key={`${group ?? "default"}-${w.windowKey}`} w={w} provider={snap.provider} />
               ))}
             </div>
           ))}

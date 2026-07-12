@@ -192,6 +192,7 @@ function getProviderLabel(
   opencodeLabel: string,
   codexLabel: string,
   claudeLabel?: string,
+  antigravityLabel?: string,
 ): string {
   switch (provider) {
     case "copilot":
@@ -202,6 +203,8 @@ function getProviderLabel(
       return codexLabel;
     case "claude":
       return claudeLabel ?? provider;
+    case "antigravity":
+      return antigravityLabel ?? provider;
     default:
       return provider;
   }
@@ -748,6 +751,7 @@ function App() {
         t("settings.fields.providerOpencode"),
         t("settings.fields.providerCodex"),
         t("settings.fields.providerClaude"),
+        t("settings.fields.providerAntigravity"),
       );
       setSettingsForm((current) => ({
         ...current,
@@ -785,6 +789,7 @@ function App() {
         t("settings.fields.providerOpencode"),
         t("settings.fields.providerCodex"),
         t("settings.fields.providerClaude"),
+        t("settings.fields.providerAntigravity"),
       );
       showToast(
         resolveErrorMessage(
@@ -1939,7 +1944,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "hookScriptsPath" | "agentsSourceRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "agentsSourceRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };

@@ -90,6 +90,10 @@
   --color-provider-opencode-text: #4dd88a;
   --color-provider-codex-bg: #2a1e46;
   --color-provider-codex-text: #c39bff;
+  --color-provider-claude-bg: #45261c;
+  --color-provider-claude-text: #f0a688;
+  --color-provider-antigravity-bg: #16305e;
+  --color-provider-antigravity-text: #8ab4ff;
 }
 
 /* ── Explorer Panel 深色模式覆寫 ── */

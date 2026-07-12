@@ -90,6 +90,10 @@
   --color-provider-opencode-text: #1a7a42;
   --color-provider-codex-bg: #f3ebff;
   --color-provider-codex-text: #6e3ad0;
+  --color-provider-claude-bg: #fbe9e2;
+  --color-provider-claude-text: #a8431f;
+  --color-provider-antigravity-bg: #e8f0fe;
+  --color-provider-antigravity-text: #1a56c4;
 
   /* Quota overview */
   --quota-bar-track: #e2e8f4;
