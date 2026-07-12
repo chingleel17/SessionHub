@@ -1,7 +1,7 @@
 [package]
 name = "session-hub"
-version = "0.1.5"
-description = "Windows desktop app for managing GitHub Copilot CLI sessions"
+version = "0.1.6"
+description = "Windows desktop app for managing AI coding CLI sessions (Copilot, OpenCode, Codex, Claude, Antigravity)"
 authors = ["ching"]
 edition = "2021"
 
