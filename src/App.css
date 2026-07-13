@@ -3681,7 +3681,7 @@ textarea {
   width: 26px;
   height: 26px;
   border: 1px solid transparent;
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--color-surface-input);
   cursor: pointer;
   color: var(--color-text-secondary);
   border-radius: 8px;
@@ -3690,9 +3690,9 @@ textarea {
 }
 
 .explorer-refresh-btn:hover:not(:disabled) {
-  background: #eef4ff;
+  background: var(--color-action-primary-subtle-bg);
   color: var(--color-text-primary);
-  border-color: rgba(59, 130, 246, 0.2);
+  border-color: var(--color-action-primary-subtle-border);
 }
 
 .explorer-refresh-btn:disabled {
@@ -3707,7 +3707,7 @@ textarea {
   padding: 3px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
-  background: rgba(248, 250, 252, 0.92);
+  background: var(--color-surface-input);
   margin-left: auto;
 }
 
@@ -3729,8 +3729,8 @@ textarea {
 }
 
 .explorer-view-btn--active {
-  background: #2563eb;
-  color: #ffffff;
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-text);
 }
 
 .explorer-sort-switcher {
@@ -3757,8 +3757,8 @@ textarea {
 }
 
 .explorer-sort-btn--active {
-  background: #2563eb;
-  color: #ffffff;
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-text);
 }
 
 .explorer-tree {
@@ -5005,7 +5005,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   height: 18px;
   border: 1px solid var(--color-border-strong, #8c959f);
   border-radius: 4px;
-  background: var(--color-canvas-default, #ffffff);
+  background: var(--color-surface-input);
   box-sizing: border-box;
 }
 
@@ -5066,9 +5066,9 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   margin: 12px;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background: #fdecea;
-  color: #c62828;
-  border: 1px solid #ef9a9a;
+  background: var(--color-error-surface);
+  color: var(--color-error-text);
+  border: 1px solid var(--color-error-border);
   font-size: 13px;
 }
 
@@ -5338,7 +5338,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .explorer-list-group-count {
   font-size: 10px;
   color: var(--color-text-secondary);
-  background: var(--color-bg-subtle, #f1f5f9);
+  background: var(--color-surface-input);
   border-radius: 999px;
   padding: 1px 6px;
 }
@@ -5354,12 +5354,12 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .explorer-list-row--active {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
 }
 
 .explorer-list-row--active .explorer-list-row-name {
-  color: #1d4ed8;
+  color: var(--color-action-primary);
 }
 
 .explorer-list-row-header {
@@ -5388,7 +5388,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .explorer-list-row-name:hover {
-  color: #1d4ed8;
+  color: var(--color-action-primary);
 }
 
 .explorer-list-specs-count {
@@ -5409,10 +5409,10 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
-  background: #f8fafc;
-  color: #475569;
+  background: var(--color-surface-input);
+  color: var(--color-text-secondary);
   cursor: pointer;
   font: inherit;
   font-size: 11px;
@@ -5420,9 +5420,9 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 .explorer-chip:hover,
 .explorer-chip--active {
-  border-color: #bfdbfe;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border-color: var(--color-action-primary-subtle-border);
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-action-primary);
 }
 
 /* tasks badge 內的進度數字 + 色點 */
@@ -5471,14 +5471,14 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 .explorer-row-btn:hover,
 .explorer-column-item:hover {
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--color-surface-input);
 }
 
 .explorer-row-btn--active,
 .explorer-column-item--active {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
+  color: var(--color-action-primary);
 }
 
 .explorer-columns-shell {
@@ -5498,7 +5498,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   padding: 5px 9px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--color-surface-input);
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: 10px;
@@ -5506,9 +5506,9 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .explorer-root-pill--active {
-  border-color: #bfdbfe;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border-color: var(--color-action-primary-subtle-border);
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-action-primary);
 }
 
 .explorer-columns {
@@ -5531,7 +5531,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   min-width: 0;
   overflow-y: auto;
   padding: 4px;
-  border-right: 1px solid #eef2f7;
+  border-right: 1px solid var(--color-border-subtle);
 }
 
 .explorer-column:last-child {
@@ -5609,7 +5609,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .explorer-cols-group-header:hover {
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--color-surface-input);
   color: var(--color-text-primary);
 }
 
@@ -5653,13 +5653,13 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .explorer-cols-entry:hover {
-  background: rgba(241, 245, 249, 0.9);
+  background: var(--color-surface-input);
 }
 
 .explorer-cols-entry--active {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
+  color: var(--color-action-primary);
 }
 
 .explorer-cols-entry-top {
@@ -5683,7 +5683,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .explorer-cols-progress {
   height: 3px;
   border-radius: 2px;
-  background: #e2e8f0;
+  background: var(--color-surface-input);
   overflow: hidden;
 }
 
@@ -5754,7 +5754,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 .explorer-cols-action-copy:hover {
   color: var(--color-text-primary);
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--color-surface-input);
 }
 
 .explorer-cols-action-copy--copied {

@@ -331,7 +331,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {

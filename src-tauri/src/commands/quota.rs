@@ -108,7 +108,6 @@ pub fn set_provider_quota_settings(
 
 #[tauri::command]
 pub fn get_claude_usage_blocks(
-    db_state: State<'_, DbState>,
     session_dir: String,
 ) -> Result<Vec<ClaudeUsageBlock>, String> {
     let path = std::path::PathBuf::from(&session_dir);
@@ -232,8 +231,8 @@ pub fn refresh_claude_quota(
 
     let mut total_input: u64 = 0;
     let mut total_output: u64 = 0;
-    let mut total_cache_creation: u64 = 0;
-    let mut total_cache_read: u64 = 0;
+    let total_cache_creation: u64 = 0;
+    let total_cache_read: u64 = 0;
     let mut total_cost: f64 = 0.0;
 
     for path in session_files {

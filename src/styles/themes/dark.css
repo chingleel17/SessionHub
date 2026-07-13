@@ -105,29 +105,6 @@
   background: transparent;
 }
 
-[data-theme="dark"] .explorer-refresh-btn {
-  background: var(--color-surface-input);
-}
-
-[data-theme="dark"] .explorer-refresh-btn:hover:not(:disabled) {
-  background: var(--color-action-primary-subtle-bg);
-  border-color: var(--color-action-primary-subtle-border);
-}
-
-[data-theme="dark"] .explorer-view-switcher {
-  background: var(--color-surface-input);
-}
-
-[data-theme="dark"] .explorer-view-btn--active {
-  background: var(--color-action-primary);
-  color: var(--color-action-primary-text);
-}
-
-[data-theme="dark"] .explorer-sort-btn--active {
-  background: var(--color-action-primary);
-  color: var(--color-action-primary-text);
-}
-
 /* Minimal 去卡片：toolbar / matrix / detail / sync-report / content-actions 皆透明，
    僅同步 modal 內的 conflict 項目保留卡片背景。 */
 [data-theme="dark"] .sync-conflict-dialog,
@@ -197,35 +174,9 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-[data-theme="dark"] .explorer-list-row--active {
-  background: var(--color-action-primary-subtle-bg);
-  border-color: var(--color-action-primary-subtle-border);
-}
-
-[data-theme="dark"] .explorer-list-row--active .explorer-list-row-name {
-  color: var(--color-action-primary);
-}
-
-[data-theme="dark"] .explorer-list-row-name:hover {
-  color: var(--color-action-primary);
-}
-
-[data-theme="dark"] .explorer-chip:hover,
-[data-theme="dark"] .explorer-chip--active {
-  border-color: var(--color-action-primary-subtle-border);
-  background: var(--color-action-primary-subtle-bg);
-  color: var(--color-action-primary);
-}
-
 /* ── Explorer Cols 深色模式 hover/selected 覆寫 ── */
 [data-theme="dark"] .explorer-cols-entry:hover {
   background: rgba(255, 255, 255, 0.06);
-}
-
-[data-theme="dark"] .explorer-cols-entry--active {
-  background: var(--color-action-primary-subtle-bg);
-  border-color: var(--color-action-primary-subtle-border);
-  color: var(--color-action-primary);
 }
 
 [data-theme="dark"] .explorer-cols-group-header:hover {

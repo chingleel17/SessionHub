@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -1760,6 +1759,7 @@ fn normalize_display_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::env;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::Duration;

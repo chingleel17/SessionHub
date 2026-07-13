@@ -175,28 +175,6 @@ fn refresh_oauth_token(refresh_token: &str) -> Result<String, String> {
         .ok_or_else(|| format!("access_token missing from token response: {json}"))
 }
 
-fn get_valid_access_token(claude_root: &str) -> Result<String, String> {
-    let creds = read_claude_credentials(claude_root)?;
-
-    // Use cached access_token if not expired
-    if let Some(ref at) = creds.access_token {
-        if !is_token_expired(creds.expires_at_ms) {
-            return Ok(at.clone());
-        }
-    }
-
-    // Try to refresh using refresh_token
-    if let Some(ref rt) = creds.refresh_token {
-        return refresh_oauth_token(rt)
-            .map_err(|e| format!("access token expired and refresh failed: {e}"));
-    }
-
-    // Fall back to access_token even if possibly expired
-    creds
-        .access_token
-        .ok_or_else(|| "no valid OAuth token found".to_string())
-}
-
 fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<QuotaWindow> {
     // "utilization" is the correct field name (costats-confirmed, 0–100 range)
     // fall back to "used_percentage" for older API versions

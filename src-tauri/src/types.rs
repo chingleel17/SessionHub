@@ -217,7 +217,6 @@ pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
 pub(crate) const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";
 pub(crate) const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider-event-bridge:";
 pub(crate) const CLAUDE_HOOK_FILE_NAME: &str = "settings.json";
-pub(crate) const SESSIONHUB_CLAUDE_HOOK_MARKER: &str = "sessionhub-provider-event-bridge";
 
 pub(crate) fn default_provider_bridge_version() -> u32 {
     PROVIDER_INTEGRATION_VERSION
@@ -864,6 +863,7 @@ pub struct ToolAvailability {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub(crate) struct ClaudeEntry {
     #[serde(rename = "type")]
     pub(crate) entry_type: String,
@@ -892,6 +892,7 @@ pub(crate) struct ClaudeEntry {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClaudeMessage {
     pub(crate) id: Option<String>,
+    #[allow(dead_code)]
     pub(crate) role: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) usage: Option<ClaudeUsage>,
@@ -920,20 +921,6 @@ pub(crate) struct ClaudeCacheCreation {
     pub(crate) ephemeral_1h_input_tokens: u64,
     #[serde(default)]
     pub(crate) ephemeral_5m_input_tokens: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ClaudeSessionStats {
-    pub(crate) input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) cache_creation_tokens_1h: u64,
-    pub(crate) cache_creation_tokens_5m: u64,
-    pub(crate) cache_read_tokens: u64,
-    pub(crate) models_used: Vec<String>,
-    pub(crate) interaction_count: u32,
-    pub(crate) tool_call_count: u32,
-    pub(crate) cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

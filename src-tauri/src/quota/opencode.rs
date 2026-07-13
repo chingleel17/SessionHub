@@ -15,7 +15,6 @@ fn count_monthly_tokens_from_db(opencode_root: &str) -> Option<(u64, u64)> {
     }
 
     let conn = rusqlite::Connection::open(&db_path).ok()?;
-    let now = chrono::Utc::now();
     // Filter sessions updated in the current month (time_updated is ms since epoch)
     let month_start_ms = chrono::Utc::now()
         .with_day(1)?

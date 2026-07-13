@@ -334,7 +334,7 @@ fn epoch_to_ymd_hms(secs: u128) -> (u32, u32, u32, u32, u32, u32) {
     let h = (secs / 3600) % 24;
     let days = secs / 86400;
     // Tomohiko Sakamoto's algorithm
-    let mut z = days + 719468;
+    let z = days + 719468;
     let era = z / 146097;
     let doe = z % 146097;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
