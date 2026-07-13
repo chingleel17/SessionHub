@@ -69,6 +69,24 @@
 - **AND** 第二欄每個 change 列顯示 `done/total` 進度 badge 與進度條
 - **AND** 點擊最終可讀取檔案後，右側面板顯示對應內容
 
+#### Scenario: Cols 模式 Active Changes 顯示待辦動作徽章
+
+- **WHEN** Cols 模式第二欄呈現 `Active Changes` 群組內的 change 項目
+- **THEN** 系統依 change 目前具備的 artifact 與任務進度，顯示 `待 propose`、`可 apply`、`進行中 x/y`、`可封存` 其中之一的動作徽章與對應可複製的 slash command
+
+#### Scenario: Cols 模式 Archived Changes 顯示已封存狀態
+
+- **WHEN** Cols 模式第二欄呈現 `Archived Changes` 群組內的 change 項目
+- **THEN** 系統一律顯示「已封存」狀態徽章，不顯示「可封存」或其他 Active Changes 專屬的動作徽章
+- **AND** 「已封存」徽章不提供可複製的 slash command
+
+#### Scenario: Cols 模式 Specs 群組不顯示 change 動作徽章
+
+- **WHEN** Cols 模式第二欄呈現 `Specs` 群組內的規格項目
+- **THEN** 系統不對規格項目套用 `hasProposal`/`hasDesign`/`hasTasks` 等 change 專屬完整性檢查
+- **AND** 不顯示「待 propose」或任何 change 動作徽章與可複製指令
+- **AND** 僅含 `spec.md` 的規格目錄視為完整規格
+
 #### Scenario: OpenSpec artifact 顯示固定 icon
 
 - **WHEN** 左側顯示 OpenSpec change 內的 `proposal.md`、`design.md`、`tasks.md`
