@@ -540,6 +540,7 @@ export const zhTwMessages = {
   "quota.window.sevenDay": "1 週",
   "quota.window.sevenDaySonnet": "1 週・Sonnet",
   "quota.window.sevenDayOpus": "1 週・Opus",
+  "quota.window.sevenDayFable": "1 週・Fable",
   "quota.unit.day": "天",
   "quota.unit.hour": "小時",
   "quota.unit.minute": "分鐘",

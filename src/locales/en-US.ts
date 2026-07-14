@@ -544,6 +544,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "quota.window.sevenDay": "1 Week",
   "quota.window.sevenDaySonnet": "1 Week · Sonnet",
   "quota.window.sevenDayOpus": "1 Week · Opus",
+  "quota.window.sevenDayFable": "1 Week · Fable",
   "quota.unit.day": "d ",
   "quota.unit.hour": "h ",
   "quota.unit.minute": "m",

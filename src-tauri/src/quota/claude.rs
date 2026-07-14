@@ -178,6 +178,61 @@ fn refresh_oauth_token(refresh_token: &str) -> Result<String, String> {
         .ok_or_else(|| format!("access_token missing from token response: {json}"))
 }
 
+/// 解析 usage API 回應 `limits` 陣列中，依模型範圍（scope.model.display_name）的每週視窗。
+/// Fable 等 scoped 額度僅出現在此處（頂層對應 key 為 null），故資料驅動地各產生一個視窗。
+/// `existing_keys` 為頂層解析已產生的 window_key，用於去重避免重複計入。
+fn parse_scoped_weekly_windows(
+    body: &serde_json::Value,
+    existing_keys: &[String],
+) -> Vec<QuotaWindow> {
+    let mut windows = Vec::new();
+    let Some(limits) = body.get("limits").and_then(|v| v.as_array()) else {
+        return windows;
+    };
+
+    for item in limits {
+        let is_weekly = item.get("group").and_then(|v| v.as_str()) == Some("weekly");
+        if !is_weekly {
+            continue;
+        }
+        let Some(display_name) = item
+            .get("scope")
+            .and_then(|s| s.get("model"))
+            .and_then(|m| m.get("display_name"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            continue;
+        };
+
+        let window_key = format!("seven_day_{}", display_name.to_lowercase());
+        if existing_keys.iter().any(|k| k == &window_key)
+            || windows.iter().any(|w: &QuotaWindow| w.window_key == window_key)
+        {
+            continue;
+        }
+
+        let Some(percent) = item.get("percent").and_then(|v| v.as_f64()) else {
+            continue;
+        };
+        let utilization = if percent > 1.0 { percent / 100.0 } else { percent };
+        let resets_at = item
+            .get("resets_at")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        windows.push(QuotaWindow {
+            window_key,
+            label: display_name.to_string(),
+            utilization,
+            resets_at,
+            group: None,
+        });
+    }
+
+    windows
+}
+
 fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<QuotaWindow> {
     // "utilization" is the correct field name (costats-confirmed, 0–100 range)
     // fall back to "used_percentage" for older API versions
@@ -315,6 +370,11 @@ impl QuotaAdapter for ClaudeAdapter {
             }
         }
 
+        // 追加 limits[] 中依模型範圍的每週視窗（如 Fable），頂層 key 為 null 故只在此出現
+        let existing_keys: Vec<String> =
+            windows.iter().map(|w| w.window_key.clone()).collect();
+        windows.extend(parse_scoped_weekly_windows(&body, &existing_keys));
+
         // Parse extra_usage
         let extra_usage_raw = body
             .get("extra_usage")
@@ -363,6 +423,79 @@ impl QuotaAdapter for ClaudeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_scoped_weekly_windows_extracts_fable() {
+        // 取自實際 Anthropic OAuth usage API 回應的 limits 結構
+        let body = json!({
+            "limits": [
+                { "kind": "session", "group": "session", "percent": 20,
+                  "resets_at": "2026-07-14T18:10:00.245240+00:00", "scope": null },
+                { "kind": "weekly_all", "group": "weekly", "percent": 93,
+                  "resets_at": "2026-07-14T16:00:00.245266+00:00", "scope": null },
+                { "kind": "weekly_scoped", "group": "weekly", "percent": 100,
+                  "resets_at": "2026-07-14T16:00:00.245603+00:00",
+                  "scope": { "model": { "id": null, "display_name": "Fable" } },
+                  "is_active": true }
+            ]
+        });
+
+        let windows = parse_scoped_weekly_windows(&body, &[]);
+        assert_eq!(windows.len(), 1);
+        let w = &windows[0];
+        assert_eq!(w.window_key, "seven_day_fable");
+        assert_eq!(w.label, "Fable");
+        assert_eq!(w.utilization, 1.0);
+        assert_eq!(
+            w.resets_at.as_deref(),
+            Some("2026-07-14T16:00:00.245603+00:00")
+        );
+    }
+
+    #[test]
+    fn parse_scoped_weekly_windows_handles_unknown_model_and_skips_session() {
+        let body = json!({
+            "limits": [
+                { "group": "session", "percent": 10, "scope": { "model": { "display_name": "X" } } },
+                { "group": "weekly", "percent": 50,
+                  "resets_at": "2026-07-20T00:00:00Z",
+                  "scope": { "model": { "display_name": "Newmodel" } } }
+            ]
+        });
+
+        let windows = parse_scoped_weekly_windows(&body, &[]);
+        assert_eq!(windows.len(), 1, "session-group 項目不應產生視窗");
+        assert_eq!(windows[0].window_key, "seven_day_newmodel");
+        assert_eq!(windows[0].label, "Newmodel");
+        assert_eq!(windows[0].utilization, 0.5);
+    }
+
+    #[test]
+    fn parse_scoped_weekly_windows_dedups_existing_key() {
+        let body = json!({
+            "limits": [
+                { "group": "weekly", "percent": 30, "resets_at": "2026-07-20T00:00:00Z",
+                  "scope": { "model": { "display_name": "Fable" } } }
+            ]
+        });
+
+        let existing = vec!["seven_day_fable".to_string()];
+        let windows = parse_scoped_weekly_windows(&body, &existing);
+        assert!(windows.is_empty(), "已存在的 window_key 應被去重");
+    }
+
+    #[test]
+    fn parse_scoped_weekly_windows_empty_when_no_scoped_limits() {
+        assert!(parse_scoped_weekly_windows(&json!({}), &[]).is_empty());
+        let body = json!({
+            "limits": [
+                { "group": "weekly", "percent": 93, "scope": null },
+                { "group": "weekly", "percent": 20, "scope": { "model": { "display_name": "" } } }
+            ]
+        });
+        assert!(parse_scoped_weekly_windows(&body, &[]).is_empty());
+    }
 
     #[test]
     fn claude_adapter_returns_no_auth_when_credentials_missing() {

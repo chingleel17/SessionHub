@@ -10,6 +10,7 @@ const WINDOW_KEY_MAP: Record<string, MessageKey> = {
   "7d": "quota.window.sevenDay",
   seven_day_sonnet: "quota.window.sevenDaySonnet",
   seven_day_opus: "quota.window.sevenDayOpus",
+  seven_day_fable: "quota.window.sevenDayFable",
 };
 
 // provider-aware 視窗標籤本地化：copilot 的 primary/secondary 語意是 Premium/Chat（非時間視窗），維持原字串
