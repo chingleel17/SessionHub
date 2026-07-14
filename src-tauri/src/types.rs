@@ -258,6 +258,21 @@ pub(crate) struct ExtraCredits {
     pub(crate) utilization: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResetCreditEntry {
+    pub(crate) granted_at: Option<String>,
+    pub(crate) expires_at: Option<String>,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResetCredits {
+    pub(crate) available_count: u32,
+    pub(crate) credits: Vec<ResetCreditEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct QuotaSnapshot {
@@ -271,6 +286,8 @@ pub(crate) struct QuotaSnapshot {
     pub(crate) windows: Option<Vec<QuotaWindow>>,
     pub(crate) local_tokens: Option<LocalTokenUsage>,
     pub(crate) extra_credits: Option<ExtraCredits>,
+    #[serde(default)]
+    pub(crate) reset_credits: Option<ResetCredits>,
 }
 
 pub(crate) struct QuotaCache {

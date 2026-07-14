@@ -23,6 +23,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -127,6 +129,7 @@ impl QuotaAdapter for CopilotAdapter {
                     windows: None,
                     local_tokens: None,
                     extra_credits: None,
+                    reset_credits: None,
                 };
             }
             Err(e) => {
@@ -203,6 +206,7 @@ impl QuotaAdapter for CopilotAdapter {
                 windows: None,
                 local_tokens: None,
                 extra_credits: None,
+                reset_credits: None,
             };
         }
 
@@ -215,6 +219,7 @@ impl QuotaAdapter for CopilotAdapter {
             windows: Some(windows),
             local_tokens: None,
             extra_credits: None,
+            reset_credits: None,
         }
     }
 }

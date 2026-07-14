@@ -18,6 +18,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -31,6 +32,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -274,6 +276,7 @@ impl QuotaAdapter for AntigravityAdapter {
                         windows: if windows.is_empty() { None } else { Some(windows) },
                         local_tokens: None,
                         extra_credits: None,
+                        reset_credits: None,
                     };
                 }
                 Err(error) => {

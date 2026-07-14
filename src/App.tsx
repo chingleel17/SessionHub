@@ -2478,6 +2478,7 @@ function App() {
             providerQuotas={providerQuotaQuery.data ?? []}
             quotaSnapshots={quotaSnapshotQuery.data ?? []}
             quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
+            onRefreshQuota={handleRefreshQuota}
           />
         ) : null}
       </section>

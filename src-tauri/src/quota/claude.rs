@@ -20,6 +20,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -33,6 +34,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -57,6 +59,7 @@ fn rate_limited_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -352,6 +355,7 @@ impl QuotaAdapter for ClaudeAdapter {
             },
             local_tokens: None,
             extra_credits,
+            reset_credits: None,
         }
     }
 }

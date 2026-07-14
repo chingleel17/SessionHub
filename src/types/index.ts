@@ -471,6 +471,17 @@ export type ExtraCredits = {
     utilization?: number | null;
 };
 
+export type ResetCreditEntry = {
+    grantedAt?: string | null;
+    expiresAt?: string | null;
+    status: string;
+};
+
+export type ResetCredits = {
+    availableCount: number;
+    credits: ResetCreditEntry[];
+};
+
 export type QuotaSnapshot = {
     provider: string;
     /** "ok" | "error" | "unsupported" | "no_auth" | "rate_limited" */
@@ -482,6 +493,7 @@ export type QuotaSnapshot = {
     windows?: QuotaWindow[] | null;
     localTokens?: LocalTokenUsage | null;
     extraCredits?: ExtraCredits | null;
+    resetCredits?: ResetCredits | null;
 };
 
 export type ClaudeUsageBlock = {

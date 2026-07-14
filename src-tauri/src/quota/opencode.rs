@@ -138,6 +138,7 @@ impl QuotaAdapter for OpenCodeAdapter {
                 period_label,
             }),
             extra_credits: None,
+            reset_credits: None,
         }
     }
 }

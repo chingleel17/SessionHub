@@ -1,7 +1,11 @@
+import { useEffect, useRef, useState } from "react";
+
 import { useI18n } from "../i18n/I18nProvider";
 import type { MessageKey } from "../locales/zh-TW";
 import type { BridgeEventLogEntry, ProviderQuota, QuotaSnapshot } from "../types";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+
+import { QuotaOverview } from "./QuotaOverview";
 
 type Props = {
   lastBridgeEvent: { entry: BridgeEventLogEntry; receivedAt: Date } | null;
@@ -14,6 +18,7 @@ type Props = {
   providerQuotas?: ProviderQuota[];
   quotaSnapshots?: QuotaSnapshot[];
   quotaEnabledProviders?: string[];
+  onRefreshQuota?: (provider?: string) => void;
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -32,7 +37,6 @@ const PROVIDER_ABBR: Record<string, string> = {
   antigravity: "AG",
 };
 
-// provider 品牌代表色（用於縮寫文字上色，不使用商標圖形）
 const PROVIDER_COLOR: Record<string, string> = {
   claude: "#D97757",
   copilot: "#57ab5a",
@@ -41,21 +45,18 @@ const PROVIDER_COLOR: Record<string, string> = {
   antigravity: "#4285F4",
 };
 
-// 底部狀態列只顯示 Antigravity 的 Gemini 模型群組視窗，Claude/GPT 群組留給 Dashboard
 function statusBarWindowsForSnapshot(snap: QuotaSnapshot) {
   const windows = snap.windows ?? [];
   if (snap.provider !== "antigravity") return windows;
   return windows.filter((w) => (w.group ?? "").toLowerCase().includes("gemini"));
 }
 
-// utilisation 0-100 → bar colour token（與 QuotaOverview 的 barColor 門檻/色票一致）
 function quotaBarColor(pct: number): string {
   if (pct >= 90) return "var(--quota-bar-danger)";
   if (pct >= 70) return "var(--quota-bar-warning)";
   return "var(--quota-bar-ok)";
 }
 
-// 精簡用量指示：小型 SVG 圓環（stroke-dasharray 依 pct 繪製）
 function QuotaRing({ pct }: { pct: number }) {
   const clamped = Math.min(Math.max(pct, 0), 100);
   const size = 14;
@@ -100,6 +101,34 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
+function formatResetDateTime(iso: string | null | undefined, amLabel: string, pmLabel: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const MM = String(d.getMonth() + 1).padStart(2, "0");
+    const DD = String(d.getDate()).padStart(2, "0");
+    const rawHours = d.getHours();
+    const period = rawHours < 12 ? amLabel : pmLabel;
+    const hours12 = rawHours % 12 === 0 ? 12 : rawHours % 12;
+    const hh = String(hours12).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${MM}/${DD} ${period}${hh}:${mm}`;
+  } catch {
+    return iso;
+  }
+}
+
+function getNearestResetCreditExpiry(snapshot: QuotaSnapshot): string | null {
+  const candidates = (snapshot.resetCredits?.credits ?? [])
+    .map((credit) => credit.expiresAt)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => ({ value, time: new Date(value).getTime() }))
+    .filter((entry) => !Number.isNaN(entry.time) && entry.time > Date.now())
+    .sort((left, right) => left.time - right.time);
+
+  return candidates[0]?.value ?? null;
+}
+
 function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel: string }) {
   const totalTokens = quota.inputTokens + quota.outputTokens;
   const abbr = PROVIDER_ABBR[quota.provider] ?? quota.provider.slice(0, 2).toUpperCase();
@@ -124,50 +153,48 @@ function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel
   const limitPct = hasLimit ? Math.min(100, (totalTokens / quota.monthlyLimitTokens!) * 100) : 0;
 
   return (
-    <span
-      className="global-status-bar-quota-chip"
-      title={tooltipLines}
-    >
+    <span className="global-status-bar-quota-chip" title={tooltipLines}>
       <span className="global-status-bar-quota-abbr" style={{ color: PROVIDER_COLOR[quota.provider] }}>
         {abbr}
       </span>
-      {hasCost && (
-        <span className="global-status-bar-quota-cost">${quota.costUsd.toFixed(2)}</span>
-      )}
-      {hasLimit && (
+      {hasCost ? <span className="global-status-bar-quota-cost">${quota.costUsd.toFixed(2)}</span> : null}
+      {hasLimit ? (
         <>
           <QuotaRing pct={limitPct} />
           <span className="global-status-bar-quota-pct" style={{ color: quotaBarColor(limitPct) }}>
             {Math.round(limitPct)}%
           </span>
         </>
-      )}
+      ) : null}
     </span>
   );
 }
 
-function formatResetDateTime(iso: string | null | undefined, amLabel: string, pmLabel: string): string {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    const MM = String(d.getMonth() + 1).padStart(2, "0");
-    const DD = String(d.getDate()).padStart(2, "0");
-    const rawHours = d.getHours();
-    const period = rawHours < 12 ? amLabel : pmLabel;
-    const hours12 = rawHours % 12 === 0 ? 12 : rawHours % 12;
-    const hh = String(hours12).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${MM}/${DD} ${period}${hh}:${mm}`;
-  } catch {
-    return iso;
-  }
-}
-
-function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel, t }: { snap: QuotaSnapshot; amLabel: string; pmLabel: string; resetsLabel: string; t: (key: MessageKey) => string }) {
+function QuotaSnapshotChip({
+  snap,
+  amLabel,
+  pmLabel,
+  resetsLabel,
+  t,
+}: {
+  snap: QuotaSnapshot;
+  amLabel: string;
+  pmLabel: string;
+  resetsLabel: string;
+  t: (key: MessageKey, params?: Record<string, string | number>) => string;
+}) {
   const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
   const windows = statusBarWindowsForSnapshot(snap);
   const topWindow = windows[0];
   const pct = topWindow ? Math.round(topWindow.utilization * 100) : null;
+  const nearestExpiry = getNearestResetCreditExpiry(snap);
+  const resetCreditsSummary =
+    snap.provider === "codex" && snap.resetCredits
+      ? t("quota.resetCredits.tooltipSummary", {
+          count: snap.resetCredits.availableCount,
+          expiresAt: nearestExpiry ? formatResetDateTime(nearestExpiry, amLabel, pmLabel) : t("quota.resetCredits.noExpiry"),
+        })
+      : null;
   const tooltip = [
     `${snap.provider} · ${snap.source}`,
     ...windows.map((w) => {
@@ -176,13 +203,13 @@ function QuotaSnapshotChip({ snap, amLabel, pmLabel, resetsLabel, t }: { snap: Q
       const wLabel = localizedWindowLabel(snap.provider, w.windowKey, w.label, t);
       return `${wLabel}: ${wPct}%${reset}`;
     }),
-  ].filter(Boolean).join("\n");
+    resetCreditsSummary,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
-    <span
-      className="global-status-bar-quota-chip global-status-bar-quota-chip--snapshot"
-      title={tooltip}
-    >
+    <span className="global-status-bar-quota-chip global-status-bar-quota-chip--snapshot" title={tooltip}>
       <span className="global-status-bar-quota-abbr" style={{ color: PROVIDER_COLOR[snap.provider] }}>
         {abbr}
       </span>
@@ -209,18 +236,50 @@ export function StatusBar({
   providerQuotas = [],
   quotaSnapshots = [],
   quotaEnabledProviders = [],
+  onRefreshQuota,
 }: Props) {
   const { t } = useI18n();
+  const [isQuotaPopupOpen, setIsQuotaPopupOpen] = useState(false);
+  const quotaPopupRef = useRef<HTMLDivElement | null>(null);
   const dash = isLoadingSessions ? "-" : undefined;
   const activeQuotas = providerQuotas.filter(
     (q) =>
       quotaEnabledProviders.includes(q.provider) &&
       (q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0),
   );
+  const visibleSnapshots = quotaSnapshots.filter(
+    (s) =>
+      s.status === "ok" &&
+      (s.source === "remote_api" || s.provider === "antigravity") &&
+      quotaEnabledProviders.includes(s.provider),
+  );
+  const hasQuotaContent = activeQuotas.length > 0 || visibleSnapshots.length > 0;
+
+  useEffect(() => {
+    if (!isQuotaPopupOpen) return undefined;
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!quotaPopupRef.current?.contains(event.target as Node)) {
+        setIsQuotaPopupOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsQuotaPopupOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isQuotaPopupOpen]);
 
   return (
     <div className="global-status-bar">
-      {/* Left: bridge events */}
       <button
         type="button"
         className="global-status-bar-event"
@@ -241,69 +300,75 @@ export function StatusBar({
               ●
             </span>
             <span className="global-status-bar-status-label">{lastBridgeEvent.entry.status}</span>
-            {lastBridgeEvent.entry.cwd && (
+            {lastBridgeEvent.entry.cwd ? (
               <span className="global-status-bar-cwd" title={lastBridgeEvent.entry.cwd}>
                 {truncateCwd(lastBridgeEvent.entry.cwd)}
               </span>
-            )}
+            ) : null}
           </>
         ) : (
           <span className="global-status-bar-no-event">{t("statusBar.noEvent")}</span>
         )}
       </button>
 
-      {/* Middle: session counts */}
       <div className="global-status-bar-counts">
-        <span
-          className={`global-status-bar-count${activeSessions === 0 ? " global-status-bar-count--zero" : ""}`}
-        >
+        <span className={`global-status-bar-count${activeSessions === 0 ? " global-status-bar-count--zero" : ""}`}>
           ▶ {dash ?? activeSessions} {t("statusBar.active")}
         </span>
-        <span
-          className={`global-status-bar-count${waitingSessions === 0 ? " global-status-bar-count--zero" : ""}`}
-        >
+        <span className={`global-status-bar-count${waitingSessions === 0 ? " global-status-bar-count--zero" : ""}`}>
           ⏳ {dash ?? waitingSessions} {t("statusBar.waiting")}
         </span>
-        <span
-          className={`global-status-bar-count${idleSessions === 0 ? " global-status-bar-count--zero" : ""}`}
-        >
+        <span className={`global-status-bar-count${idleSessions === 0 ? " global-status-bar-count--zero" : ""}`}>
           ◌ {dash ?? idleSessions} {t("statusBar.idle")}
         </span>
-        <span
-          className={`global-status-bar-count${doneSessions === 0 ? " global-status-bar-count--zero" : ""}`}
-        >
+        <span className={`global-status-bar-count${doneSessions === 0 ? " global-status-bar-count--zero" : ""}`}>
           ✓ {dash ?? doneSessions} {t("statusBar.done")}
         </span>
       </div>
 
-      {/* Right: provider quota (local aggregates) */}
-      {activeQuotas.length > 0 && (
-        <div className="global-status-bar-quota">
-          {activeQuotas.map((q) => (
-            <QuotaChip key={q.provider} quota={q} noLimitLabel={t("quota.noLimit")} />
-          ))}
-        </div>
-      )}
+      {hasQuotaContent ? (
+        <div className="global-status-bar-quota-anchor" ref={quotaPopupRef}>
+          <button
+            type="button"
+            className={`global-status-bar-quota-trigger${isQuotaPopupOpen ? " global-status-bar-quota-trigger--active" : ""}`}
+            onClick={() => setIsQuotaPopupOpen((open) => !open)}
+          >
+            {activeQuotas.length > 0 ? (
+              <div className="global-status-bar-quota">
+                {activeQuotas.map((q) => (
+                  <QuotaChip key={q.provider} quota={q} noLimitLabel={t("quota.noLimit")} />
+                ))}
+              </div>
+            ) : null}
 
-      {/* Right: remote quota snapshots (utilization bars from API) */}
-      {quotaSnapshots
-        .filter((s) => s.status === "ok" && (s.source === "remote_api" || s.provider === "antigravity") && quotaEnabledProviders.includes(s.provider))
-        .length > 0 && (
-        <div className="global-status-bar-quota global-status-bar-quota--snapshots">
-          {quotaSnapshots
-            .filter((s) => s.status === "ok" && (s.source === "remote_api" || s.provider === "antigravity") && quotaEnabledProviders.includes(s.provider))
-            .map((s) => (
-              <QuotaSnapshotChip
-                key={s.provider}
-                snap={s}
-                amLabel={t("quota.period.am")}
-                pmLabel={t("quota.period.pm")}
-                resetsLabel={t("quota.resetsLabel")}
-                t={t}
+            {visibleSnapshots.length > 0 ? (
+              <div className="global-status-bar-quota global-status-bar-quota--snapshots">
+                {visibleSnapshots.map((s) => (
+                  <QuotaSnapshotChip
+                    key={s.provider}
+                    snap={s}
+                    amLabel={t("quota.period.am")}
+                    pmLabel={t("quota.period.pm")}
+                    resetsLabel={t("quota.resetsLabel")}
+                    t={t}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </button>
+
+          {isQuotaPopupOpen ? (
+            <div className="global-status-bar-quota-popup" role="dialog" aria-label={t("quota.monitoring.overview")}>
+              <QuotaOverview
+                snapshots={quotaSnapshots.filter((snapshot) => quotaEnabledProviders.includes(snapshot.provider))}
+                onRefresh={() => onRefreshQuota?.()}
+                onRefreshProvider={(provider) => onRefreshQuota?.(provider)}
+                storageKey="quota-popup-active-provider"
               />
-            ))}
+            </div>
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

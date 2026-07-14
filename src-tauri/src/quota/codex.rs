@@ -1,6 +1,9 @@
 use std::env;
 
-use crate::types::{AppSettings, LocalTokenUsage, QuotaSnapshot, QuotaWindow, CODEX_PROVIDER};
+use crate::types::{
+    AppSettings, LocalTokenUsage, QuotaSnapshot, QuotaWindow, ResetCreditEntry,
+    ResetCredits, CODEX_PROVIDER,
+};
 
 use super::QuotaAdapter;
 
@@ -12,6 +15,7 @@ const FIVE_HOUR_MIN_SECONDS: i64 = HOUR_SECONDS;
 const FIVE_HOUR_MAX_SECONDS: i64 = DAY_SECONDS;
 const SEVEN_DAY_MIN_SECONDS: i64 = 2 * DAY_SECONDS;
 const SEVEN_DAY_MAX_SECONDS: i64 = 14 * DAY_SECONDS;
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 fn current_timestamp() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -27,6 +31,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -40,6 +45,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         local_tokens: None,
         extra_credits: None,
+        reset_credits: None,
     }
 }
 
@@ -158,6 +164,105 @@ fn parse_window_with_now(obj: &serde_json::Value, now_timestamp: i64) -> Option<
 
 fn parse_window(obj: &serde_json::Value) -> Option<QuotaWindow> {
     parse_window_with_now(obj, chrono::Utc::now().timestamp())
+}
+
+fn normalize_timestamp_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        serde_json::Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            if let Ok(timestamp) = trimmed.parse::<i64>() {
+                return chrono::DateTime::from_timestamp(timestamp, 0)
+                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            }
+
+            chrono::DateTime::parse_from_rfc3339(trimmed)
+                .ok()
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Utc)
+                        .format("%Y-%m-%dT%H:%M:%SZ")
+                        .to_string()
+                })
+        }
+        _ => None,
+    }
+}
+
+fn parse_reset_credit_entry(obj: &serde_json::Value) -> Option<ResetCreditEntry> {
+    let status = obj
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let granted_at = obj.get("granted_at").and_then(normalize_timestamp_value);
+    let expires_at = obj.get("expires_at").and_then(normalize_timestamp_value);
+
+    if status.is_empty() && granted_at.is_none() && expires_at.is_none() {
+        return None;
+    }
+
+    Some(ResetCreditEntry {
+        granted_at,
+        expires_at,
+        status,
+    })
+}
+
+fn parse_reset_credits_response(body: &serde_json::Value) -> ResetCredits {
+    let available_count = body
+        .get("available_count")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    let credits = body
+        .get("credits")
+        .and_then(|value| value.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(parse_reset_credit_entry)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ResetCredits {
+        available_count,
+        credits,
+    }
+}
+
+fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>, String> {
+    let mut request = ureq::get(RESET_CREDITS_URL)
+        .set("Authorization", &format!("Bearer {}", creds.access_token))
+        .set("Accept", "application/json");
+
+    if let Some(account_id) = &creds.account_id {
+        request = request.set("ChatGPT-Account-Id", account_id);
+    }
+
+    let response = match request.call() {
+        Ok(response) => response,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(error) => return Err(format!("Codex reset credits API 呼叫失敗: {error}")),
+    };
+
+    let body: serde_json::Value = response
+        .into_json()
+        .map_err(|error| format!("failed to parse Codex reset credits response: {error}"))?;
+    let reset_credits = parse_reset_credits_response(&body);
+
+    if reset_credits.credits.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(reset_credits))
 }
 
 fn count_monthly_tokens_from_jsonl(codex_root: &str) -> (u64, u64) {
@@ -284,6 +389,13 @@ impl QuotaAdapter for CodexAdapter {
 
         let (input_tokens, output_tokens) = count_monthly_tokens_from_jsonl(&settings.codex_root);
         let period_label = chrono::Utc::now().format("本月（%Y-%m）").to_string();
+        let reset_credits = match fetch_reset_credits(&creds) {
+            Ok(reset_credits) => reset_credits,
+            Err(error) => {
+                eprintln!("[quota][codex] reset credits fetch failed: {error}");
+                None
+            }
+        };
 
         QuotaSnapshot {
             provider: CODEX_PROVIDER.to_string(),
@@ -302,6 +414,7 @@ impl QuotaAdapter for CodexAdapter {
                 period_label,
             }),
             extra_credits: None,
+            reset_credits,
         }
     }
 }
@@ -385,6 +498,89 @@ mod tests {
 
         assert_eq!(window.window_key, "codex_window");
         assert_eq!(window.label, "30d");
+    }
+
+    #[test]
+    fn parse_reset_credits_response_supports_epoch_timestamps() {
+        let parsed = parse_reset_credits_response(&json!({
+            "available_count": 2,
+            "credits": [
+                {
+                    "granted_at": 1_720_000_000,
+                    "expires_at": 1_720_086_400,
+                    "status": "active"
+                }
+            ]
+        }));
+
+        assert_eq!(parsed.available_count, 2);
+        assert_eq!(parsed.credits.len(), 1);
+        assert_eq!(parsed.credits[0].status, "active");
+        assert_eq!(parsed.credits[0].granted_at.as_deref(), Some("2024-07-03T09:46:40Z"));
+        assert_eq!(parsed.credits[0].expires_at.as_deref(), Some("2024-07-04T09:46:40Z"));
+    }
+
+    #[test]
+    fn parse_reset_credits_response_supports_iso_timestamps() {
+        let parsed = parse_reset_credits_response(&json!({
+            "available_count": 1,
+            "credits": [
+                {
+                    "granted_at": "2026-07-14T08:00:00Z",
+                    "expires_at": "2026-07-21T23:59:00+08:00",
+                    "status": "active"
+                }
+            ]
+        }));
+
+        assert_eq!(parsed.available_count, 1);
+        assert_eq!(parsed.credits[0].granted_at.as_deref(), Some("2026-07-14T08:00:00Z"));
+        assert_eq!(parsed.credits[0].expires_at.as_deref(), Some("2026-07-21T15:59:00Z"));
+    }
+
+    #[test]
+    fn parse_reset_credits_response_is_lenient_for_missing_fields() {
+        let parsed = parse_reset_credits_response(&json!({
+            "credits": [
+                { "status": "expired" },
+                { "expires_at": 1_720_086_400 }
+            ]
+        }));
+
+        assert_eq!(parsed.available_count, 0);
+        assert_eq!(parsed.credits.len(), 2);
+        assert_eq!(parsed.credits[0].status, "expired");
+        assert_eq!(parsed.credits[0].granted_at, None);
+        assert_eq!(parsed.credits[1].status, "");
+        assert_eq!(parsed.credits[1].expires_at.as_deref(), Some("2024-07-04T09:46:40Z"));
+    }
+
+    #[test]
+    fn parse_reset_credits_response_handles_empty_list() {
+        let parsed = parse_reset_credits_response(&json!({
+            "available_count": 0,
+            "credits": []
+        }));
+
+        assert_eq!(parsed.available_count, 0);
+        assert!(parsed.credits.is_empty());
+    }
+
+    #[test]
+    fn quota_snapshot_deserializes_without_reset_credits_field() {
+        let snapshot = serde_json::from_value::<QuotaSnapshot>(json!({
+            "provider": "codex",
+            "status": "ok",
+            "source": "remote_api",
+            "fetchedAt": "2026-07-14T08:00:00Z",
+            "errorMessage": null,
+            "windows": [],
+            "localTokens": null,
+            "extraCredits": null
+        }))
+        .expect("snapshot should deserialize");
+
+        assert_eq!(snapshot.reset_credits, None);
     }
 
     #[test]

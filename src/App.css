@@ -6106,6 +6106,50 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   flex-shrink: 0;
 }
 
+.global-status-bar-quota-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.global-status-bar-quota-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.global-status-bar-quota-trigger:hover,
+.global-status-bar-quota-trigger--active {
+  background: color-mix(in srgb, var(--color-action-primary-subtle-bg) 70%, transparent);
+}
+
+.global-status-bar-quota-popup {
+  position: fixed;
+  right: 12px;
+  bottom: 36px;
+  width: min(520px, calc(100vw - 24px));
+  max-height: min(82vh, 880px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-modal);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-float);
+  z-index: 900;
+  animation: quota-popup-enter var(--motion-fast) var(--motion-ease);
+}
+
 .global-status-bar-quota-chip {
   display: inline-flex;
   align-items: center;
@@ -6191,14 +6235,29 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .qo-root {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  height: 100%;
   background: var(--quota-panel-bg);
-  border-radius: 16px;
+  border-radius: var(--radius-card);
   overflow: hidden;
+}
+
+.qo-panels {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.qo-panels--stack {
+  gap: 1px;
+  background: var(--quota-divider);
 }
 
 /* ── tabs ── */
 .qo-tabs {
   display: flex;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--quota-divider);
   padding: 0 4px;
   gap: 2px;
@@ -6234,6 +6293,11 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   background: var(--quota-tab-active-bg);
 }
 
+.qo-tab--all.qo-tab--active {
+  border-bottom-color: var(--color-action-primary);
+  color: var(--color-action-primary);
+}
+
 .qo-tab--active.qo-tab--claude  { border-bottom-color: var(--quota-accent-claude);  color: var(--quota-accent-claude); }
 .qo-tab--active.qo-tab--copilot { border-bottom-color: var(--quota-accent-copilot); color: var(--quota-accent-copilot); }
 .qo-tab--active.qo-tab--opencode{ border-bottom-color: var(--quota-accent-opencode);color: var(--quota-accent-opencode); }
@@ -6254,6 +6318,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   display: flex;
   flex-direction: column;
   gap: 0;
+  background: var(--quota-panel-bg);
 }
 
 .qo-panel-header {
@@ -6378,6 +6443,86 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   border-top: 1px solid var(--quota-divider);
 }
 
+.qo-reset-credits {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--quota-divider);
+  display: grid;
+  gap: 12px;
+}
+
+.qo-reset-credits-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qo-reset-credits-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--quota-pct-text);
+}
+
+.qo-reset-credits-count {
+  font-size: 12px;
+  color: var(--quota-reset-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.qo-reset-credits-list {
+  display: grid;
+  gap: 10px;
+}
+
+.qo-reset-credit-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.qo-reset-credit-row--expired {
+  opacity: 0.58;
+}
+
+.qo-reset-credit-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--color-surface-accent);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: capitalize;
+}
+
+.qo-reset-credit-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.qo-reset-credit-countdown {
+  font-size: 12px;
+  color: var(--quota-pct-text);
+  white-space: nowrap;
+}
+
+.qo-reset-credit-datetime {
+  font-size: 11px;
+  color: var(--quota-reset-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .qo-local-row {
   display: flex;
   justify-content: space-between;
@@ -6437,9 +6582,14 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   color: var(--quota-bar-danger);
 }
 
+.qo-hint--muted {
+  color: var(--quota-reset-text);
+}
+
 /* ── footer ── */
 .qo-footer {
   display: flex;
+  flex-shrink: 0;
   justify-content: flex-end;
   padding: 8px 20px 14px;
   border-top: 1px solid var(--quota-divider);
@@ -6465,6 +6615,17 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .qo-refresh-btn:hover {
   background: var(--quota-tab-hover-bg);
   color: var(--color-text-primary);
+}
+
+@keyframes quota-popup-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── window bar colour overrides per window key ── */
