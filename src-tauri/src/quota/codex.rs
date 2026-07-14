@@ -6,6 +6,13 @@ use super::QuotaAdapter;
 
 pub(crate) struct CodexAdapter;
 
+const HOUR_SECONDS: i64 = 60 * 60;
+const DAY_SECONDS: i64 = 24 * HOUR_SECONDS;
+const FIVE_HOUR_MIN_SECONDS: i64 = HOUR_SECONDS;
+const FIVE_HOUR_MAX_SECONDS: i64 = DAY_SECONDS;
+const SEVEN_DAY_MIN_SECONDS: i64 = 2 * DAY_SECONDS;
+const SEVEN_DAY_MAX_SECONDS: i64 = 14 * DAY_SECONDS;
+
 fn current_timestamp() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -34,6 +41,29 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         local_tokens: None,
         extra_credits: None,
     }
+}
+
+fn format_window_duration(window_seconds: i64) -> String {
+    if window_seconds >= DAY_SECONDS {
+        format!("{}d", (window_seconds + (DAY_SECONDS / 2)) / DAY_SECONDS)
+    } else {
+        format!("{}h", (window_seconds + (HOUR_SECONDS / 2)) / HOUR_SECONDS)
+    }
+}
+
+fn classify_window(window_seconds: i64) -> (String, String) {
+    if (FIVE_HOUR_MIN_SECONDS..FIVE_HOUR_MAX_SECONDS).contains(&window_seconds) {
+        return ("five_hour".to_string(), "5h".to_string());
+    }
+
+    if (SEVEN_DAY_MIN_SECONDS..SEVEN_DAY_MAX_SECONDS).contains(&window_seconds) {
+        return ("seven_day".to_string(), "7d".to_string());
+    }
+
+    (
+        "codex_window".to_string(),
+        format_window_duration(window_seconds),
+    )
 }
 
 struct CodexCredentials {
@@ -95,8 +125,22 @@ fn read_codex_credentials(codex_root: &str) -> Result<CodexCredentials, String> 
     Err("no access_token found in auth.json".to_string())
 }
 
-fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<QuotaWindow> {
+fn resolve_window_seconds(obj: &serde_json::Value, now_timestamp: i64) -> Option<i64> {
+    obj.get("limit_window_seconds")
+        .and_then(|v| v.as_i64())
+        .or_else(|| obj.get("reset_after_seconds").and_then(|v| v.as_i64()))
+        .or_else(|| {
+            obj.get("reset_at")
+                .and_then(|v| v.as_i64())
+                .map(|reset_at| reset_at - now_timestamp)
+        })
+        .filter(|seconds| *seconds > 0)
+}
+
+fn parse_window_with_now(obj: &serde_json::Value, now_timestamp: i64) -> Option<QuotaWindow> {
     let used_percent = obj.get("used_percent").and_then(|v| v.as_f64())?;
+    let window_seconds = resolve_window_seconds(obj, now_timestamp)?;
+    let (window_key, label) = classify_window(window_seconds);
     let resets_at = obj
         .get("reset_at")
         .and_then(|v| v.as_i64())
@@ -104,12 +148,16 @@ fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<Quota
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
     Some(QuotaWindow {
-        window_key: key.to_string(),
-        label: label.to_string(),
+        window_key,
+        label,
         utilization: used_percent / 100.0,
         resets_at,
         group: None,
     })
+}
+
+fn parse_window(obj: &serde_json::Value) -> Option<QuotaWindow> {
+    parse_window_with_now(obj, chrono::Utc::now().timestamp())
 }
 
 fn count_monthly_tokens_from_jsonl(codex_root: &str) -> (u64, u64) {
@@ -226,15 +274,11 @@ impl QuotaAdapter for CodexAdapter {
 
         let mut windows = Vec::new();
         if let Some(rate_limit) = body.get("rate_limit") {
-            if let Some(primary) = rate_limit.get("primary_window") {
-                if let Some(window) = parse_window("primary", "5h", primary) {
-                    windows.push(window);
-                }
+            if let Some(window) = rate_limit.get("primary_window").and_then(parse_window) {
+                windows.push(window);
             }
-            if let Some(secondary) = rate_limit.get("secondary_window") {
-                if let Some(window) = parse_window("secondary", "7d", secondary) {
-                    windows.push(window);
-                }
+            if let Some(window) = rate_limit.get("secondary_window").and_then(parse_window) {
+                windows.push(window);
             }
         }
 
@@ -265,6 +309,83 @@ impl QuotaAdapter for CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn classify_window_maps_known_and_dynamic_windows() {
+        assert_eq!(
+            classify_window(18_000),
+            ("five_hour".to_string(), "5h".to_string())
+        );
+        assert_eq!(
+            classify_window(604_800),
+            ("seven_day".to_string(), "7d".to_string())
+        );
+        assert_eq!(
+            classify_window(2_592_000),
+            ("codex_window".to_string(), "30d".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_window_honors_tolerance_boundaries() {
+        assert_eq!(
+            classify_window(FIVE_HOUR_MIN_SECONDS),
+            ("five_hour".to_string(), "5h".to_string())
+        );
+        assert_eq!(
+            classify_window(FIVE_HOUR_MAX_SECONDS - 1),
+            ("five_hour".to_string(), "5h".to_string())
+        );
+        assert_eq!(
+            classify_window(FIVE_HOUR_MIN_SECONDS - 1),
+            ("codex_window".to_string(), "1h".to_string())
+        );
+        assert_eq!(
+            classify_window(SEVEN_DAY_MIN_SECONDS),
+            ("seven_day".to_string(), "7d".to_string())
+        );
+        assert_eq!(
+            classify_window(SEVEN_DAY_MAX_SECONDS - 1),
+            ("seven_day".to_string(), "7d".to_string())
+        );
+        assert_eq!(
+            classify_window(SEVEN_DAY_MAX_SECONDS),
+            ("codex_window".to_string(), "14d".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_window_uses_reset_after_seconds_when_limit_window_missing() {
+        let window = parse_window_with_now(
+            &json!({
+                "used_percent": 50.0,
+                "reset_after_seconds": 604800,
+                "reset_at": 1_800_000_000,
+            }),
+            1_700_000_000,
+        )
+        .expect("window should parse");
+
+        assert_eq!(window.window_key, "seven_day");
+        assert_eq!(window.label, "7d");
+    }
+
+    #[test]
+    fn parse_window_uses_reset_at_when_other_duration_fields_missing() {
+        let now_timestamp = 1_700_000_000;
+        let window = parse_window_with_now(
+            &json!({
+                "used_percent": 25.0,
+                "reset_at": now_timestamp + (30 * DAY_SECONDS),
+            }),
+            now_timestamp,
+        )
+        .expect("window should parse");
+
+        assert_eq!(window.window_key, "codex_window");
+        assert_eq!(window.label, "30d");
+    }
 
     #[test]
     fn codex_adapter_returns_no_auth_when_credentials_missing() {
