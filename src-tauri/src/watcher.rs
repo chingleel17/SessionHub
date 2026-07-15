@@ -429,13 +429,17 @@ pub(crate) fn create_provider_bridge_watcher(
                                 }
                                 let db_state = h.state::<crate::db::DbState>();
                                 let quota_cache = h.state::<crate::types::QuotaCache>();
+                                // OpenCode 可作為其他供應商的 gateway。其 bridge 事件無法指出
+                                // 實際使用的是哪個上游帳號，因此改為刷新所有已啟用 quota。
+                                let refresh_provider = (provider_key != crate::types::OPENCODE_PROVIDER)
+                                    .then_some(provider_key.as_str());
                                 crate::commands::quota::refresh_quota_internal(
                                     &db_state,
                                     &quota_cache,
                                     &settings,
-                                    Some(&provider_key),
+                                    refresh_provider,
                                 );
-                                let _ = h.emit("quota-snapshots-updated", ());
+                                crate::emit_quota_snapshots_updated(&h);
                             });
                         }
                     }

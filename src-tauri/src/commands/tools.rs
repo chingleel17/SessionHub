@@ -4,7 +4,7 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 use crate::openspec_scan::{
     read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
@@ -43,6 +43,22 @@ pub(crate) fn focus_terminal_window_internal(title_hint: &str) -> Result<(), Str
         let _ = title_hint;
         Err("Terminal focus is only supported on Windows".to_string())
     }
+}
+
+pub(crate) fn show_main_window_internal(
+    app: &tauri::AppHandle,
+    view: Option<&str>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    if let Some(view) = view {
+        let _ = app.emit("navigate-main-view", view.to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn open_in_tool_internal(
@@ -137,6 +153,11 @@ pub fn check_jq_available() -> bool {
 #[tauri::command]
 pub fn focus_terminal_window(title_hint: String) -> Result<(), String> {
     focus_terminal_window_internal(&title_hint)
+}
+
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle, view: Option<String>) -> Result<(), String> {
+    show_main_window_internal(&app, view.as_deref())
 }
 
 #[tauri::command]

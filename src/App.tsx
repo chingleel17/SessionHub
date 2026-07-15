@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
@@ -50,10 +51,163 @@ import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog"
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
 import { ProjectView } from "./components/ProjectView";
+import { QuotaOverlay } from "./components/QuotaOverlay";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { SyncConflictDialog } from "./components/SyncConflictDialog";
+import { TrayQuotaPanel } from "./components/TrayQuotaPanel";
 import { StatusBar } from "./components/StatusBar";
+
+const EMBEDDED_VIEW = new URLSearchParams(window.location.search).get("view");
+
+if (EMBEDDED_VIEW) {
+  document.documentElement.classList.add("embedded-quota-view");
+}
+
+function EmbeddedQuotaOverlayApp() {
+  const queryClient = useQueryClient();
+  const [overlayRevision, setOverlayRevision] = useState(0);
+  const settingsQuery = useQuery({
+    queryKey: ["embedded_settings", "quota_overlay"],
+    queryFn: () => invoke<AppSettings>("get_settings"),
+    // Overlay 是獨立動態 webview；輪詢本機設定避免建立時機造成事件遺漏。
+    refetchInterval: 1_000,
+  });
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["embedded_quota_snapshots", "quota_overlay"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
+    refetchInterval: 15_000,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setup = async () => {
+      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
+        if (mounted) {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
+          void queryClient.refetchQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
+        }
+      });
+      const unlistenSettings = await listen<AppSettings>("quota-overlay-settings-changed", (event) => {
+        if (mounted) {
+          queryClient.setQueryData(["embedded_settings", "quota_overlay"], event.payload);
+          // 重新讀取持久化設定，並重新掛載透明 overlay 以確保樣式立即套用。
+          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+          void queryClient.refetchQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+          setOverlayRevision((revision) => revision + 1);
+        }
+      });
+      const unlistenLock = await listen<boolean>("quota-overlay-locked-changed", (event) => {
+        if (mounted) {
+          queryClient.setQueryData<AppSettings>(["embedded_settings", "quota_overlay"], (current) =>
+            current ? { ...current, quotaOverlayLocked: event.payload } : current,
+          );
+        }
+      });
+
+      return () => {
+        unlistenSnapshots();
+        unlistenSettings();
+        unlistenLock();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => {
+      cleanup = dispose;
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [queryClient]);
+
+  const settings = settingsQuery.data;
+
+  return (
+    <QuotaOverlay
+      key={overlayRevision}
+      snapshots={quotaSnapshotQuery.data ?? []}
+      enabledProviders={settings?.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"]}
+      selectedProviders={settings?.quotaOverlayProviders ?? []}
+      opacity={settings?.quotaOverlayOpacity ?? 0.85}
+      locked={settings?.quotaOverlayLocked ?? true}
+      theme={settings?.quotaOverlayTheme ?? "dark"}
+      styleMode={settings?.quotaOverlayStyle ?? "full"}
+      onLockToggle={() => {
+        if (!settings) return;
+        void invoke("save_settings", {
+          settings: { ...settings, quotaOverlayLocked: !settings.quotaOverlayLocked },
+        }).then(() => {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+        });
+      }}
+    />
+  );
+}
+
+function EmbeddedTrayPanelApp() {
+  const queryClient = useQueryClient();
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["embedded_quota_snapshots", "tray_panel"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setup = async () => {
+      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
+        if (mounted) {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
+        }
+      });
+
+      return () => {
+        unlistenSnapshots();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => {
+      cleanup = dispose;
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [queryClient]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        void getCurrentWindow().hide();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  return (
+    <TrayQuotaPanel
+      snapshots={quotaSnapshotQuery.data ?? []}
+      onRefresh={() => {
+        void invoke<QuotaSnapshot[]>("refresh_quota", { provider: null }).then(() => {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
+        });
+      }}
+      onOpenSettings={() => {
+        void invoke("show_main_window", { view: "settings" }).then(() => getCurrentWindow().close());
+      }}
+    />
+  );
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -384,13 +538,22 @@ function App() {
     claudeRoot: "",
     antigravityRoot: "",
     hookScriptsPath: "",
-      claudeQuotaResetDay: 1,
-      claudeMonthlyLimitTokens: null,
-      claudeMonthlyLimitUsd: null,
-      enableQuotaMonitoring: true,
-      quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
-      allowCreateProjectConfigDir: false,
-    });
+    claudeQuotaResetDay: 1,
+    claudeMonthlyLimitTokens: null,
+    claudeMonthlyLimitUsd: null,
+    enableQuotaMonitoring: true,
+    quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
+    allowCreateProjectConfigDir: false,
+    trayQuotaMode: "icon_only",
+    trayQuotaPrimaryProvider: null,
+    trayQuotaPanelEnabled: true,
+    quotaOverlayEnabled: false,
+    quotaOverlayLocked: true,
+    quotaOverlayOpacity: 0.85,
+    quotaOverlayProviders: [],
+    quotaOverlayTheme: "dark",
+    quotaOverlayStyle: "full",
+  });
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -501,6 +664,15 @@ function App() {
         quotaEnabledProviders:
           settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
         allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
+        trayQuotaMode: settingsQuery.data.trayQuotaMode ?? "icon_only",
+        trayQuotaPrimaryProvider: settingsQuery.data.trayQuotaPrimaryProvider ?? null,
+        trayQuotaPanelEnabled: settingsQuery.data.trayQuotaPanelEnabled ?? true,
+        quotaOverlayEnabled: settingsQuery.data.quotaOverlayEnabled ?? false,
+        quotaOverlayLocked: settingsQuery.data.quotaOverlayLocked ?? true,
+        quotaOverlayOpacity: settingsQuery.data.quotaOverlayOpacity ?? 0.85,
+        quotaOverlayProviders: settingsQuery.data.quotaOverlayProviders ?? [],
+        quotaOverlayTheme: settingsQuery.data.quotaOverlayTheme ?? "dark",
+        quotaOverlayStyle: settingsQuery.data.quotaOverlayStyle ?? "full",
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
@@ -858,6 +1030,23 @@ function App() {
     allowCreateProjectConfigDir:
       overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
     agentsSourceRoot: (overrides.agentsSourceRoot ?? settingsForm.agentsSourceRoot ?? "").trim(),
+    trayQuotaMode: overrides.trayQuotaMode ?? settingsForm.trayQuotaMode ?? "icon_only",
+    trayQuotaPrimaryProvider:
+      overrides.trayQuotaPrimaryProvider ?? settingsForm.trayQuotaPrimaryProvider ?? null,
+    trayQuotaPanelEnabled:
+      overrides.trayQuotaPanelEnabled ?? settingsForm.trayQuotaPanelEnabled ?? true,
+    quotaOverlayEnabled:
+      overrides.quotaOverlayEnabled ?? settingsForm.quotaOverlayEnabled ?? false,
+    quotaOverlayLocked:
+      overrides.quotaOverlayLocked ?? settingsForm.quotaOverlayLocked ?? true,
+    quotaOverlayOpacity:
+      overrides.quotaOverlayOpacity ?? settingsForm.quotaOverlayOpacity ?? 0.85,
+    quotaOverlayProviders:
+      overrides.quotaOverlayProviders ?? settingsForm.quotaOverlayProviders ?? [],
+    quotaOverlayTheme:
+      overrides.quotaOverlayTheme ?? settingsForm.quotaOverlayTheme ?? "dark",
+    quotaOverlayStyle:
+      overrides.quotaOverlayStyle ?? settingsForm.quotaOverlayStyle ?? "full",
   });
 
   const persistSettingsSilently = async (next: AppSettings) => {
@@ -1187,6 +1376,11 @@ function App() {
         void queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
       });
 
+      const unlistenNavigateMainView = await listen<string>("navigate-main-view", (event) => {
+        if (!mounted) return;
+        setActiveView(event.payload);
+      });
+
       return () => {
         unlistenCopilot();
         unlistenOpencode();
@@ -1199,6 +1393,7 @@ function App() {
         unlistenPlan();
         unlistenProjectFiles();
         unlistenQuotaSnapshots();
+        unlistenNavigateMainView();
       };
     };
 
@@ -2521,4 +2716,16 @@ function App() {
   );
 }
 
-export default App;
+function RoutedApp() {
+  if (EMBEDDED_VIEW === "quota-overlay") {
+    return <EmbeddedQuotaOverlayApp />;
+  }
+
+  if (EMBEDDED_VIEW === "tray-panel") {
+    return <EmbeddedTrayPanelApp />;
+  }
+
+  return <App />;
+}
+
+export default RoutedApp;

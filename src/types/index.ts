@@ -60,7 +60,20 @@ export type AppSettings = {
     quotaEnabledProviders?: string[];
     allowCreateProjectConfigDir?: boolean;
     agentsSourceRoot?: string;
+    trayQuotaMode?: TrayQuotaMode;
+    trayQuotaPrimaryProvider?: string | null;
+    trayQuotaPanelEnabled?: boolean;
+    quotaOverlayEnabled?: boolean;
+    quotaOverlayLocked?: boolean;
+    quotaOverlayOpacity?: number;
+    quotaOverlayProviders?: string[];
+    quotaOverlayTheme?: OverlayTheme;
+    quotaOverlayStyle?: OverlayStyle;
 };
+
+export type TrayQuotaMode = "icon_only" | "percentage" | "bar" | "hidden";
+export type OverlayTheme = "dark" | "light";
+export type OverlayStyle = "full" | "compact";
 
 export type AgentsScope =
     | { kind: "global" }

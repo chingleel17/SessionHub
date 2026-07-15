@@ -77,6 +77,15 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         quota_enabled_providers: default_enabled_providers_all(),
         allow_create_project_config_dir: false,
         agents_source_root: String::new(),
+        tray_quota_mode: crate::types::TrayQuotaMode::default(),
+        tray_quota_primary_provider: None,
+        tray_quota_panel_enabled: true,
+        quota_overlay_enabled: false,
+        quota_overlay_locked: true,
+        quota_overlay_opacity: 0.85,
+        quota_overlay_providers: Vec::new(),
+        quota_overlay_theme: crate::types::OverlayTheme::default(),
+        quota_overlay_style: crate::types::OverlayStyle::default(),
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

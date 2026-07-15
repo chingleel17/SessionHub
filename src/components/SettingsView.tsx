@@ -665,7 +665,8 @@ export function SettingsView({
             </label>
 
             {(settingsForm.enableQuotaMonitoring ?? true) ? (
-              <div className="settings-field">
+              <>
+                <div className="settings-field">
                 <label>{t("quota.monitoring.perProvider")}</label>
                 <div className="quota-provider-toggle-list">
                   {(["claude", "copilot", "codex", "opencode", "antigravity"] as const).map((provider) => {
@@ -690,6 +691,173 @@ export function SettingsView({
                   })}
                 </div>
               </div>
+
+              <div className="settings-section-divider" />
+
+              <div className="settings-field settings-field--stacked">
+                <label htmlFor="tray-quota-mode-select">{t("quota.settings.trayMode")}</label>
+                <select
+                  id="tray-quota-mode-select"
+                  className="settings-select"
+                  value={settingsForm.trayQuotaMode ?? "icon_only"}
+                  onChange={(event) =>
+                    onFormChange({
+                      ...settingsForm,
+                      trayQuotaMode: event.currentTarget.value as AppSettings["trayQuotaMode"],
+                    })
+                  }
+                >
+                  <option value="icon_only">{t("quota.settings.trayMode.iconOnly")}</option>
+                  <option value="percentage">{t("quota.settings.trayMode.percentage")}</option>
+                  <option value="bar">{t("quota.settings.trayMode.bar")}</option>
+                  <option value="hidden">{t("quota.settings.trayMode.hidden")}</option>
+                </select>
+              </div>
+
+              <div className="settings-field settings-field--stacked">
+                <label htmlFor="tray-quota-primary-provider-select">{t("quota.settings.primaryProvider")}</label>
+                <select
+                  id="tray-quota-primary-provider-select"
+                  className="settings-select"
+                  value={settingsForm.trayQuotaPrimaryProvider ?? ""}
+                  onChange={(event) =>
+                    onFormChange({
+                      ...settingsForm,
+                      trayQuotaPrimaryProvider: event.currentTarget.value || null,
+                    })
+                  }
+                >
+                  <option value="">{t("quota.settings.primaryProvider.auto")}</option>
+                  {(settingsForm.quotaEnabledProviders ?? []).map((provider) => (
+                    <option key={provider} value={provider}>
+                      {providerLabels[provider as keyof typeof providerLabels] ?? provider}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.trayQuotaPanelEnabled ?? true}
+                  onChange={(event) =>
+                    onFormChange({ ...settingsForm, trayQuotaPanelEnabled: event.currentTarget.checked })
+                  }
+                />
+                <span>{t("quota.settings.trayPanelEnabled")}</span>
+              </label>
+
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.quotaOverlayEnabled ?? false}
+                  onChange={(event) =>
+                    onFormChange({ ...settingsForm, quotaOverlayEnabled: event.currentTarget.checked })
+                  }
+                />
+                <span>
+                  {t("quota.settings.overlayEnabled")}
+                  <small className="settings-field-desc">{t("quota.settings.overlayEnabledDesc")}</small>
+                </span>
+              </label>
+
+              {(settingsForm.quotaOverlayEnabled ?? false) ? (
+                <>
+                  <label className="checkbox-group">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.quotaOverlayLocked ?? true}
+                      onChange={(event) =>
+                        onFormChange({ ...settingsForm, quotaOverlayLocked: event.currentTarget.checked })
+                      }
+                    />
+                    <span>{t("quota.settings.overlayLocked")}</span>
+                  </label>
+
+                  <div className="settings-field settings-field--stacked">
+                    <label htmlFor="quota-overlay-opacity-range">{t("quota.settings.overlayOpacity")}</label>
+                    <div className="settings-range-row">
+                      <input
+                        id="quota-overlay-opacity-range"
+                        type="range"
+                        min="0.3"
+                        max="1"
+                        step="0.05"
+                        value={settingsForm.quotaOverlayOpacity ?? 0.85}
+                        onChange={(event) =>
+                          onFormChange({
+                            ...settingsForm,
+                            quotaOverlayOpacity: Number(event.currentTarget.value),
+                          })
+                        }
+                      />
+                      <span className="settings-range-value">{Math.round((settingsForm.quotaOverlayOpacity ?? 0.85) * 100)}%</span>
+                    </div>
+                  </div>
+
+                  <div className="settings-field settings-field--stacked">
+                    <label htmlFor="quota-overlay-theme-select">{t("quota.settings.overlayTheme")}</label>
+                    <select
+                      id="quota-overlay-theme-select"
+                      className="settings-select"
+                      value={settingsForm.quotaOverlayTheme ?? "dark"}
+                      onChange={(event) =>
+                        onFormChange({
+                          ...settingsForm,
+                          quotaOverlayTheme: event.currentTarget.value as AppSettings["quotaOverlayTheme"],
+                        })
+                      }
+                    >
+                      <option value="dark">{t("quota.settings.overlayTheme.dark")}</option>
+                      <option value="light">{t("quota.settings.overlayTheme.light")}</option>
+                    </select>
+                  </div>
+
+                  <div className="settings-field settings-field--stacked">
+                    <label htmlFor="quota-overlay-style-select">{t("quota.settings.overlayStyle")}</label>
+                    <select
+                      id="quota-overlay-style-select"
+                      className="settings-select"
+                      value={settingsForm.quotaOverlayStyle ?? "full"}
+                      onChange={(event) =>
+                        onFormChange({
+                          ...settingsForm,
+                          quotaOverlayStyle: event.currentTarget.value as AppSettings["quotaOverlayStyle"],
+                        })
+                      }
+                    >
+                      <option value="full">{t("quota.settings.overlayStyle.full")}</option>
+                      <option value="compact">{t("quota.settings.overlayStyle.compact")}</option>
+                    </select>
+                  </div>
+
+                  <div className="settings-field settings-field--stacked">
+                    <label>{t("quota.settings.overlayProviders")}</label>
+                    <div className="quota-provider-toggle-list">
+                      {(settingsForm.quotaEnabledProviders ?? []).map((provider) => {
+                        const checked = (settingsForm.quotaOverlayProviders ?? []).includes(provider);
+                        return (
+                          <label key={provider} className="checkbox-group checkbox-group--inline">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => {
+                                const current = settingsForm.quotaOverlayProviders ?? [];
+                                const next = event.currentTarget.checked
+                                  ? [...current, provider]
+                                  : current.filter((item) => item !== provider);
+                                onFormChange({ ...settingsForm, quotaOverlayProviders: next });
+                              }}
+                            />
+                            <span>{providerLabels[provider as keyof typeof providerLabels] ?? provider}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              </>
             ) : null}
           </div>
         </article>

@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::quota::cache::prune_disabled_provider_quota;
 use crate::settings::{
@@ -42,6 +42,7 @@ pub fn get_settings() -> Result<AppSettings, String> {
 
 #[tauri::command]
 pub fn save_settings(
+    app: tauri::AppHandle,
     db_state: State<'_, DbState>,
     quota_cache: State<'_, QuotaCache>,
     settings: AppSettings,
@@ -49,11 +50,23 @@ pub fn save_settings(
     save_settings_internal(&settings)?;
 
     // Prune quota cache & DB for providers the user just disabled
-    let conn = db_state
-        .conn
-        .lock()
-        .map_err(|_| "failed to lock db".to_string())?;
-    let _ = prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
+    {
+        let conn = db_state
+            .conn
+            .lock()
+            .map_err(|_| "failed to lock db".to_string())?;
+        let _ =
+            prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
+    }
+
+    // tray / overlay 設定即時生效：重繪系統匣圖示、依開關建立/關閉 overlay 並套用鎖定與透明度
+    crate::tray_icon::update_tray_from_cache(&app, &settings);
+    crate::sync_overlay_visibility(&app, &settings);
+    if let Some(overlay) = app.get_webview_window(crate::QUOTA_OVERLAY_LABEL) {
+        crate::apply_overlay_locked(&overlay, settings.quota_overlay_locked);
+        crate::emit_overlay_settings_changed(&app, &settings);
+    }
+
     Ok(())
 }
 

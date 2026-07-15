@@ -12,6 +12,7 @@ mod sessions;
 mod settings;
 mod sisyphus;
 mod stats;
+mod tray_icon;
 mod types;
 mod watcher;
 
@@ -23,6 +24,217 @@ pub(crate) use settings::*;
 pub(crate) use types::*;
 pub(crate) use watcher::*;
 
+/// overlay 視窗 label
+pub(crate) const QUOTA_OVERLAY_LABEL: &str = "quota-overlay";
+/// mini panel 視窗 label
+pub(crate) const TRAY_PANEL_LABEL: &str = "tray-panel";
+
+/// 將設定變更定向通知 overlay webview，避免動態建立視窗遺漏 AppHandle 廣播。
+pub(crate) fn emit_overlay_settings_changed(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+) {
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("quota-overlay-settings-changed", settings);
+    }
+}
+
+/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過快照更新。
+pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
+    let _ = app.emit("quota-snapshots-updated", ());
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("quota-snapshots-updated", ());
+    }
+}
+
+/// 建立（或顯示）常駐 quota overlay 視窗。
+///
+/// 必須在 Rust 端以 `WebviewWindowBuilder` 建立，`tauri.conf.json` 的 `focus: false`
+/// 在 Windows 不生效（tauri#11566 / #7519）。
+pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSettings) {
+    if let Some(existing) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        // 尺寸由前端依內容量測後自行同步（QuotaOverlay 的 ResizeObserver），這裡不強制固定尺寸
+        let _ = existing.show();
+        apply_overlay_locked(&existing, settings.quota_overlay_locked);
+        emit_overlay_settings_changed(app, settings);
+        return;
+    }
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        QUOTA_OVERLAY_LABEL,
+        tauri::WebviewUrl::App("index.html?view=quota-overlay".into()),
+    )
+    .title("SessionHub Quota Overlay")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .resizable(false)
+    .visible(false)
+    .inner_size(320.0, 360.0);
+
+    let window = match builder.build() {
+        Ok(w) => w,
+        Err(err) => {
+            eprintln!("[tray-quota] 建立 overlay 失敗: {err}");
+            return;
+        }
+    };
+
+    // 還原上次位置（若有），並套用多螢幕邊界驗證
+    use tauri_plugin_window_state::{StateFlags, WindowExt};
+    // 舊版 overlay 曾儲存過過小的尺寸，僅還原位置以免內容再次被裁切。
+    let _ = window.restore_state(StateFlags::POSITION);
+
+    // Windows transparent 白底 workaround（tauri#4881）：微調 size 觸發重繪後再顯示
+    if let Ok(size) = window.inner_size() {
+        let _ = window.set_size(tauri::PhysicalSize::new(
+            size.width.saturating_add(1),
+            size.height,
+        ));
+        let _ = window.set_size(size);
+    }
+
+    apply_overlay_locked(&window, settings.quota_overlay_locked);
+    emit_overlay_settings_changed(app, settings);
+    let _ = window.show();
+}
+
+/// 依鎖定狀態設定滑鼠穿透（鎖定 = 穿透）
+pub(crate) fn apply_overlay_locked(window: &tauri::WebviewWindow, locked: bool) {
+    let _ = window.set_ignore_cursor_events(locked);
+}
+
+/// 關閉 overlay 視窗（若存在）
+pub(crate) fn close_quota_overlay(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        // 關閉前先把目前位置寫入 window-state 檔，
+        // 確保「隱藏後再開啟」（未重啟 app）也能還原到相同位置
+        use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+        let _ = app.save_window_state(StateFlags::POSITION);
+        let _ = window.close();
+    }
+}
+
+/// 依 `quota_overlay_enabled` 建立或關閉 overlay，並套用鎖定狀態。
+pub(crate) fn sync_overlay_visibility(app: &tauri::AppHandle, settings: &AppSettings) {
+    if settings.quota_overlay_enabled {
+        create_quota_overlay(app, settings);
+    } else {
+        close_quota_overlay(app);
+    }
+}
+
+/// 切換 tray mini panel 的顯示狀態（左鍵點擊 tray 時呼叫）。
+/// panel 不存在則建立於系統匣附近；已可見則隱藏；隱藏中則顯示並置前。
+pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, f64)>) {
+    if let Some(window) = app.get_webview_window(TRAY_PANEL_LABEL) {
+        let visible = window.is_visible().unwrap_or(false);
+        if visible {
+            let _ = window.hide();
+        } else {
+            position_panel_near_tray(app, &window, tray_rect);
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        return;
+    }
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        TRAY_PANEL_LABEL,
+        tauri::WebviewUrl::App("index.html?view=tray-panel".into()),
+    )
+    .title("SessionHub Quota")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .inner_size(320.0, 480.0)
+    .visible(false);
+
+    let window = match builder.build() {
+        Ok(w) => w,
+        Err(err) => {
+            eprintln!("[tray-quota] 建立 mini panel 失敗: {err}");
+            return;
+        }
+    };
+
+    // 定位到系統匣附近（右下角，taskbar 上方）
+    position_panel_near_tray(app, &window, tray_rect);
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// 將 panel 定位到系統匣附近；取不到 tray 座標時退回螢幕右下角。
+fn position_panel_near_tray(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    tray_rect: Option<(f64, f64)>,
+) {
+    let panel_w = 320.0_f64;
+    let panel_h = 480.0_f64;
+    let margin = 12.0_f64;
+
+    // 使用 tray 所在螢幕的實體座標與原點，支援副螢幕不在 (0, 0) 的情況。
+    let monitor = tray_rect.and_then(|(tray_x, tray_y)| {
+        app.available_monitors().ok().and_then(|monitors| {
+            monitors.into_iter().find(|monitor| {
+                let position = monitor.position();
+                let size = monitor.size();
+                let right = position.x as f64 + size.width as f64;
+                let bottom = position.y as f64 + size.height as f64;
+                tray_x >= position.x as f64
+                    && tray_x <= right
+                    && tray_y >= position.y as f64
+                    && tray_y <= bottom
+            })
+        })
+    }).or_else(|| window.current_monitor().ok().flatten());
+
+    let (screen_x, screen_y, screen_w, screen_h, scale) = monitor
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            (
+                position.x as f64,
+                position.y as f64,
+                size.width as f64,
+                size.height as f64,
+                monitor.scale_factor(),
+            )
+        })
+        .unwrap_or((0.0, 0.0, 1920.0, 1080.0, 1.0));
+
+    let panel_w_phys = panel_w * scale;
+    let panel_h_phys = panel_h * scale;
+    let margin_phys = margin * scale;
+    // 預留 taskbar 高度（估 48 邏輯像素）
+    let taskbar_phys = 48.0 * scale;
+
+    let (x, y) = match tray_rect {
+        Some((tray_x, tray_y)) => {
+            let x = (tray_x - panel_w_phys / 2.0)
+                .min(screen_x + screen_w - panel_w_phys - margin_phys)
+                .max(screen_x + margin_phys);
+            let y = (tray_y - panel_h_phys - margin_phys).max(screen_y + margin_phys);
+            (x, y)
+        }
+        None => (
+            screen_x + screen_w - panel_w_phys - margin_phys,
+            screen_y + screen_h - panel_h_phys - taskbar_phys - margin_phys,
+        ),
+    };
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -33,6 +245,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
             ensure_logs_dir();
@@ -96,6 +309,15 @@ pub fn run() {
                         quota_enabled_providers: Vec::new(),
                         allow_create_project_config_dir: false,
                         agents_source_root: String::new(),
+                        tray_quota_mode: TrayQuotaMode::default(),
+                        tray_quota_primary_provider: None,
+                        tray_quota_panel_enabled: true,
+                        quota_overlay_enabled: false,
+                        quota_overlay_locked: true,
+                        quota_overlay_opacity: 0.85,
+                        quota_overlay_providers: Vec::new(),
+                        quota_overlay_theme: OverlayTheme::default(),
+                        quota_overlay_style: OverlayStyle::default(),
                     });
                     if settings.enable_quota_monitoring {
                         commands::quota::refresh_quota_internal(
@@ -104,7 +326,8 @@ pub fn run() {
                             &settings,
                             None,
                         );
-                        let _ = app_handle.emit("quota-snapshots-updated", ());
+                        emit_quota_snapshots_updated(&app_handle);
+                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
                     }
                 });
             }
@@ -139,7 +362,8 @@ pub fn run() {
                             &settings,
                             None,
                         );
-                        let _ = app_handle.emit("quota-snapshots-updated", ());
+                        emit_quota_snapshots_updated(&app_handle);
+                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
                     }
                 });
             }
@@ -147,7 +371,8 @@ pub fn run() {
             // Build system tray icon with menu
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok();
-            let mut tray_builder = tauri::tray::TrayIconBuilder::new();
+            let mut tray_builder =
+                tauri::tray::TrayIconBuilder::with_id(crate::tray_icon::TRAY_ICON_ID);
             if let Some(icon) = tray_icon {
                 tray_builder = tray_builder.icon(icon);
             }
@@ -155,11 +380,23 @@ pub fn run() {
                 if let tauri::tray::TrayIconEvent::Click {
                     button: tauri::tray::MouseButton::Left,
                     button_state: tauri::tray::MouseButtonState::Up,
+                    rect,
                     ..
                 } = event
                 {
                     let app = tray.app_handle();
-                    if let Some(window) = app.get_webview_window("main") {
+                    let panel_enabled = load_settings_internal()
+                        .map(|s| s.tray_quota_panel_enabled)
+                        .unwrap_or(true);
+                    if panel_enabled {
+                        // 點擊系統匣圖示彈出 mini panel（rect.position 為 physical/logical enum）
+                        let tray_pos = match rect.position {
+                            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                            tauri::Position::Logical(p) => (p.x, p.y),
+                        };
+                        toggle_tray_panel(app, Some(tray_pos));
+                    } else if let Some(window) = app.get_webview_window("main") {
+                        // panel 停用時回復原本開啟主視窗行為
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
@@ -169,11 +406,20 @@ pub fn run() {
             let show_menu_item = tauri::menu::MenuItemBuilder::new("顯示視窗")
                 .id("show_window")
                 .build(app)?;
+            let overlay_toggle_item = tauri::menu::MenuItemBuilder::new("顯示/隱藏 Quota Overlay")
+                .id("toggle_overlay")
+                .build(app)?;
+            let overlay_lock_item = tauri::menu::MenuItemBuilder::new("編輯 / 鎖定 Overlay 位置")
+                .id("toggle_overlay_lock")
+                .build(app)?;
             let quit_menu_item = tauri::menu::MenuItemBuilder::new("退出 SessionHub")
                 .id("quit")
                 .build(app)?;
             let menu = tauri::menu::MenuBuilder::new(app)
                 .item(&show_menu_item)
+                .separator()
+                .item(&overlay_toggle_item)
+                .item(&overlay_lock_item)
                 .separator()
                 .item(&quit_menu_item)
                 .build()?;
@@ -188,6 +434,28 @@ pub fn run() {
                             let _ = window.set_focus();
                         }
                     }
+                    "toggle_overlay" => {
+                        // toggle quota_overlay_enabled 並持久化，再建立/關閉視窗
+                        if let Ok(mut settings) = load_settings_internal() {
+                            settings.quota_overlay_enabled = !settings.quota_overlay_enabled;
+                            let _ = save_settings_internal(&settings);
+                            sync_overlay_visibility(app, &settings);
+                        }
+                    }
+                    "toggle_overlay_lock" => {
+                        // toggle 鎖定狀態，即時套用滑鼠穿透並通知前端切換編輯視覺
+                        if let Ok(mut settings) = load_settings_internal() {
+                            settings.quota_overlay_locked = !settings.quota_overlay_locked;
+                            let _ = save_settings_internal(&settings);
+                            if let Some(window) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+                                apply_overlay_locked(&window, settings.quota_overlay_locked);
+                            }
+                            let _ = app.emit(
+                                "quota-overlay-locked-changed",
+                                settings.quota_overlay_locked,
+                            );
+                        }
+                    }
                     "quit" => {
                         app.exit(0);
                     }
@@ -195,9 +463,26 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // 啟動時依設定初始化 tray icon 與 overlay
+            {
+                let app_handle = app.handle().clone();
+                let startup_settings = settings.clone();
+                crate::tray_icon::update_tray_from_cache(&app_handle, &startup_settings);
+                if startup_settings.quota_overlay_enabled {
+                    create_quota_overlay(&app_handle, &startup_settings);
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
+            // mini panel 失焦時自動隱藏（僅 panel，overlay 不受此影響）
+            if window.label() == TRAY_PANEL_LABEL {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let minimize = load_settings_internal()
                     .map(|s| s.minimize_to_tray)
@@ -246,6 +531,7 @@ pub fn run() {
             get_session_activity_statuses,
             open_in_tool,
             resume_session_in_terminal,
+            show_main_window,
             focus_terminal_window,
             read_openspec_file,
             write_openspec_file,

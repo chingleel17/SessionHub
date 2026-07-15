@@ -102,6 +102,43 @@ pub(crate) fn default_false() -> bool {
     false
 }
 
+pub(crate) fn default_quota_overlay_opacity() -> f64 {
+    0.85
+}
+
+pub(crate) fn default_quota_overlay_theme() -> OverlayTheme {
+    OverlayTheme::Dark
+}
+
+/// 系統匣圖示的 quota 顯示模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TrayQuotaMode {
+    #[default]
+    IconOnly,
+    Percentage,
+    Bar,
+    Hidden,
+}
+
+/// 桌面 quota overlay 的視覺主題
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+/// 桌面 quota overlay 的版型：完整（進度條列表）或精簡（圓環一列）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayStyle {
+    #[default]
+    Full,
+    Compact,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionActivityStatus {
@@ -203,6 +240,25 @@ pub(crate) struct AppSettings {
     pub(crate) allow_create_project_config_dir: bool,
     #[serde(default)]
     pub(crate) agents_source_root: String,
+    // ── Tray / Overlay quota widget 設定 ──
+    #[serde(default)]
+    pub(crate) tray_quota_mode: TrayQuotaMode,
+    #[serde(default)]
+    pub(crate) tray_quota_primary_provider: Option<String>,
+    #[serde(default = "default_true")]
+    pub(crate) tray_quota_panel_enabled: bool,
+    #[serde(default = "default_false")]
+    pub(crate) quota_overlay_enabled: bool,
+    #[serde(default = "default_true")]
+    pub(crate) quota_overlay_locked: bool,
+    #[serde(default = "default_quota_overlay_opacity")]
+    pub(crate) quota_overlay_opacity: f64,
+    #[serde(default)]
+    pub(crate) quota_overlay_providers: Vec<String>,
+    #[serde(default = "default_quota_overlay_theme")]
+    pub(crate) quota_overlay_theme: OverlayTheme,
+    #[serde(default)]
+    pub(crate) quota_overlay_style: OverlayStyle,
 }
 
 pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;

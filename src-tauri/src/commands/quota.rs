@@ -1,4 +1,4 @@
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::db::{
     billing_period_for, get_provider_quota_from_db, get_provider_quota_settings_from_db,
@@ -165,7 +165,7 @@ pub fn refresh_quota(
         let _ = write_snapshot_to_cache_and_db(&conn, &quota_cache, snapshot);
     }
 
-    let _ = app.emit("quota-snapshots-updated", ());
+    crate::emit_quota_snapshots_updated(&app);
 
     // 回傳值以快取為底，但疊加本次遇到的 rate_limited 狀態，讓前端能提示使用者
     let mut result = read_snapshots_from_cache(&quota_cache)?;
