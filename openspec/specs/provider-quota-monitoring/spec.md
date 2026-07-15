@@ -15,13 +15,14 @@ error_message: Option<String>  — 查詢失敗時的錯誤描述
 windows:       Option<Vec<QuotaWindow>>  — rolling window 用量（claude / copilot 適用）
 local_tokens:  Option<LocalTokenUsage>   — 本地掃描的 token 累計（opencode / codex 適用）
 extra_credits: Option<ExtraCredits>      — overage / 超額用量（claude extra_usage 適用）
+reset_credits: Option<ResetCredits>      — 手動重置額度（codex 適用）
 ```
 
 `QuotaWindow` 欄位：
 
 ```
-window_key:   String  — "five_hour" | "seven_day" | "seven_day_sonnet" | "seven_day_opus" | "ai_credits"
-label:        String  — 顯示用名稱（"5h" / "7d" / "7d Sonnet" / "7d Opus" / "AI Credits"）
+window_key:   String  — "five_hour" | "seven_day" | "seven_day_sonnet" | "seven_day_opus" | "seven_day_fable" | "ai_credits" | 一般化的 "seven_day_<model>"（依 API 提供的 scoped model 動態產生）
+label:        String  — 顯示用名稱（"5h" / "7d" / "7d Sonnet" / "7d Opus" / "AI Credits" / 動態 scoped model 名稱，例如 "Fable"）
 utilization:  f64     — 使用百分比（0.0–100.0）
 resets_at:    Option<String>  — ISO 8601 reset 時間
 ```
@@ -43,6 +44,21 @@ used_credits:  f64
 utilization:   Option<f64>   — 百分比；null 表示無法計算
 ```
 
+`ResetCredits` 欄位：
+
+```
+available_count: u32                     — 可用重置次數
+credits:         Vec<ResetCreditEntry>   — 各筆額度明細
+```
+
+`ResetCreditEntry` 欄位：
+
+```
+granted_at: Option<String>  — ISO 8601 獲得時間
+expires_at: Option<String>  — ISO 8601 到期時間
+status:     String          — API 原始狀態字串（如 "active"）
+```
+
 #### Scenario: 成功取得 quota snapshot
 
 - **WHEN** 後端 quota manager 成功向某個 provider adapter 取得資料
@@ -60,6 +76,12 @@ utilization:   Option<f64>   — 百分比；null 表示無法計算
 - **WHEN** auth token 讀取失敗（檔案不存在、格式錯誤、token 過期）
 - **THEN** 系統回傳 `status: "no_auth"` 的 snapshot
 - **AND** `error_message` 說明需要什麼 auth 來源（例如「需要 gh CLI 登入」）
+
+#### Scenario: 舊快照缺少 reset_credits 欄位
+
+- **WHEN** 從 SQLite 載入本欄位新增前序列化的 snapshot JSON
+- **THEN** 反序列化成功，`reset_credits` 為 null
+- **AND** 不產生錯誤或阻斷載入
 
 ### Requirement: quota 顯示範圍跟隨 enabledProviders 設定
 
@@ -83,6 +105,38 @@ utilization:   Option<f64>   — 百分比；null 表示無法計算
 
 - **WHEN** `.credentials.json` 不存在或 token 讀取失敗
 - **THEN** 回傳 `status: "no_auth"`，`error_message: "Claude OAuth token 不可讀，請確認 Claude Code 已登入"`
+
+### Requirement: Claude adapter 解析 limits 陣列中的 scoped-model 每週視窗
+
+Claude quota adapter SHALL 在解析頂層時間視窗後，額外掃描 usage API 回應的 `limits` 陣列，為每個 `group == "weekly"` 且 `scope.model.display_name` 非空的項目產生一個 `QuotaWindow`：`window_key` 為 `seven_day_<display_name 小寫>`、`label` 為該 `display_name`、`utilization` 為 `percent / 100`、`resets_at` 為該項目自身的 `resets_at`。此解析 SHALL 為資料驅動，不硬編特定模型名稱；若解析出的 `window_key` 與已產生的頂層視窗重複，SHALL 略過以避免重複計入。
+
+`QuotaWindow.window_key` 的合法值 SHALL 擴充為包含 `seven_day_fable` 及一般化的 `seven_day_<model>`（依 API 提供的 scoped model 動態產生）。
+
+#### Scenario: 解析 Fable scoped 週視窗
+
+- **WHEN** usage API 的 `limits` 含一項 `group: "weekly"`、`percent: 100`、`scope.model.display_name: "Fable"`、`resets_at: "2026-07-14T16:00:00Z"`
+- **THEN** snapshot 的 `windows` 含一個 `window_key: "seven_day_fable"`、`label: "Fable"`、`utilization: 1.0`、`resets_at` 為該項目自身值的視窗
+
+#### Scenario: 不同 scoped 模型自動產生視窗
+
+- **WHEN** `limits` 含某個 `scope.model.display_name` 為 SessionHub 未預先對映的模型
+- **THEN** 系統仍為其產生 `seven_day_<model 小寫>` 視窗
+- **AND** 前端在無本地化對映時退回顯示該模型的 `display_name`
+
+#### Scenario: scoped reset 時間獨立於週視窗
+
+- **WHEN** 某 scoped 週視窗的 `resets_at` 與 `weekly_all`（seven_day）不同
+- **THEN** 該 scoped 視窗顯示自己的 `resets_at`，不套用週視窗的 reset 時間
+
+#### Scenario: 與頂層視窗去重
+
+- **WHEN** 某 scoped model 解析出的 `window_key` 已由頂層視窗解析產生
+- **THEN** 系統略過該 `limits` 項目，`windows` 中不出現重複 `window_key`
+
+#### Scenario: 無 scoped 週視窗
+
+- **WHEN** `limits` 缺席，或其中沒有任何 `scope.model.display_name` 非空的每週項目
+- **THEN** `windows` 僅含既有頂層視窗，不新增 scoped 視窗
 
 #### Scenario: Copilot adapter - GitHub billing API
 
@@ -134,6 +188,42 @@ utilization:   Option<f64>   — 百分比；null 表示無法計算
 - **WHEN** `rate_limit` 缺席，或 `primary_window` 與 `secondary_window` 皆為 `null`
 - **THEN** `windows` 欄位為 null（前端顯示無 rate limit 資料）
 - **AND** 仍可回傳本月 `local_tokens`（若掃描到用量）
+
+### Requirement: Codex adapter 查詢手動重置額度
+
+Codex quota adapter SHALL 在成功取得 usage 資料後，以相同憑證（access_token 與選填的 account_id）呼叫 `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`，將回應解析為 `reset_credits` 欄位（`available_count` 與 `credits[]` 各筆的 granted_at / expires_at / status），時間戳統一轉為 ISO 8601 字串。此查詢 SHALL 為 best-effort：任何失敗不得改變 snapshot 的 `status` 與既有欄位。
+
+#### Scenario: 成功取得重置額度
+
+- **WHEN** reset-credits API 回傳 200 且內容可解析
+- **THEN** snapshot 的 `reset_credits.available_count` 為 API 的可用次數
+- **AND** `reset_credits.credits` 逐筆包含 granted_at / expires_at（ISO 8601）與 status
+
+#### Scenario: reset-credits 查詢失敗不影響主 snapshot
+
+- **WHEN** usage API 成功但 reset-credits API 回傳錯誤（4xx / 5xx / 網路失敗 / 解析失敗）
+- **THEN** snapshot 維持 `status: "ok"`，windows 與 local_tokens 照常填入
+- **AND** `reset_credits` 為 null，不寫入 `error_message`
+
+#### Scenario: 帳號無重置額度功能
+
+- **WHEN** reset-credits API 回傳空的 credits 清單或表示無此功能（如 404）
+- **THEN** `reset_credits` 為 null 或 `available_count: 0` 且 `credits` 為空
+- **AND** 前端據此不渲染重置額度區塊
+
+### Requirement: Dashboard Codex 面板顯示重置額度
+
+Dashboard 的 QuotaOverview Codex 面板 SHALL 在 snapshot 含 `reset_credits` 時顯示重置額度區塊：可用次數、各筆額度的狀態與到期倒數（含絕對時間）；已過期條目以低對比樣式呈現。無 `reset_credits` 時不渲染該區塊。
+
+#### Scenario: 顯示可用重置額度
+
+- **WHEN** Codex snapshot 的 `reset_credits.available_count` 為 2 且含兩筆 active 額度
+- **THEN** Codex 面板顯示「可用 2 次」與兩筆額度各自的狀態與到期倒數（例如「6 天 23 小時後到期 · 07/21 下午11:59」）
+
+#### Scenario: 無重置額度資料
+
+- **WHEN** Codex snapshot 的 `reset_credits` 為 null
+- **THEN** Codex 面板不顯示重置額度區塊，其餘內容照常
 
 ### Requirement: quota monitoring 以內建 adapter 為主，保留 Rust trait 擴充點
 
