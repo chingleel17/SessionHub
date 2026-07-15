@@ -144,6 +144,8 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.integrations.actions.edit": "Edit directly",
   "settings.integrations.actions.copy": "Copy",
   "settings.integrations.actions.uninstall": "Uninstall integration",
+  "settings.integrations.actions.expand": "Expand",
+  "settings.integrations.actions.collapse": "Collapse",
   "settings.actions.save": "Save settings",
   "settings.actions.detectTerminal": "Auto-detect terminal",
   "settings.actions.detectEditor": "Detect VSCode",

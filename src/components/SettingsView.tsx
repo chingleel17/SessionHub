@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
 import type {
@@ -33,6 +34,7 @@ function getProviderLabel(
   providerOpencodeLabel: string,
   providerCodexLabel: string,
   providerClaudeLabel: string,
+  providerAntigravityLabel: string,
 ): string {
   switch (provider) {
     case "copilot":
@@ -43,6 +45,8 @@ function getProviderLabel(
       return providerCodexLabel;
     case "claude":
       return providerClaudeLabel;
+    case "antigravity":
+      return providerAntigravityLabel;
     default:
       return provider;
   }
@@ -138,6 +142,10 @@ export function SettingsView({
 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const { theme, setTheme } = useTheme();
+  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
+  const toggleProviderExpanded = (provider: string, currentlyExpanded: boolean) => {
+    setExpandedProviders((prev) => ({ ...prev, [provider]: !currentlyExpanded }));
+  };
   const providerIntegrations = sortProviderIntegrations(settingsForm.providerIntegrations ?? []);
   const providerLabels = {
     copilot: t("settings.fields.providerCopilot"),
@@ -442,6 +450,8 @@ export function SettingsView({
         </div>
       </article>
 
+      <div className="settings-layout-column">
+
       <article className="info-card">
         <div className="section-heading">
           <h3>{t("settings.integrations.title")}</h3>
@@ -476,6 +486,7 @@ export function SettingsView({
                 providerLabels.opencode,
                 providerLabels.codex,
                 providerLabels.claude,
+                providerLabels.antigravity,
               );
               const providerBusy = pendingProviderAction?.startsWith(`${integration.provider}:`);
               const primaryAction = getProviderPrimaryAction(integration.status);
@@ -485,15 +496,24 @@ export function SettingsView({
                 t("settings.integrations.actions.update"),
               );
               const targetPath = getProviderTargetPath(integration);
+              const isExpanded = expandedProviders[integration.provider] ?? Boolean(integration.lastError);
+              const summaryTime = integration.lastEventAt
+                ? formatDateTime(integration.lastEventAt, locale)
+                : t("settings.integrations.values.noEvent");
 
               return (
                 <article
                   key={integration.provider}
                   className={`provider-integration-card ${
                     integration.lastError ? "provider-integration-card--error" : ""
-                  }`}
+                  } ${isExpanded ? "provider-integration-card--expanded" : "provider-integration-card--collapsed"}`}
                 >
-                  <div className="provider-integration-header">
+                  <div
+                    className="provider-integration-header"
+                    onClick={() => toggleProviderExpanded(integration.provider, isExpanded)}
+                    aria-expanded={isExpanded}
+                    title={t(isExpanded ? "settings.integrations.actions.collapse" : "settings.integrations.actions.expand")}
+                  >
                     <div className="provider-integration-badges">
                       <span className={`provider-tag provider-tag--${integration.provider}`}>
                         {providerLabel}
@@ -508,129 +528,146 @@ export function SettingsView({
                           v{integration.installedVersion}
                         </span>
                       ) : null}
+                      {!isExpanded ? (
+                        <span className="provider-integration-summary-time">{summaryTime}</span>
+                      ) : null}
                     </div>
 
-                    <div className="provider-integration-actions">
-                      {primaryAction && primaryActionLabel ? (
+                    {isExpanded ? (
+                      <div
+                        className="provider-integration-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {primaryAction && primaryActionLabel ? (
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={Boolean(providerBusy)}
+                            onClick={() => onProviderAction(integration.provider, primaryAction)}
+                          >
+                            {primaryActionLabel}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          className="primary-button"
+                          className="ghost-button"
                           disabled={Boolean(providerBusy)}
-                          onClick={() => onProviderAction(integration.provider, primaryAction)}
+                          onClick={() => onProviderAction(integration.provider, "recheck")}
                         >
-                          {primaryActionLabel}
+                          {t("settings.integrations.actions.recheck")}
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        disabled={Boolean(providerBusy)}
-                        onClick={() => onProviderAction(integration.provider, "recheck")}
-                      >
-                        {t("settings.integrations.actions.recheck")}
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        disabled={!targetPath || Boolean(providerBusy)}
-                        onClick={() => onOpenProviderPath(integration)}
-                        title={t("settings.integrations.actions.open")}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                          <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        disabled={!targetPath || Boolean(providerBusy)}
-                        onClick={() => onEditProviderPath(integration)}
-                        title={t("settings.integrations.actions.edit")}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                          <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z"/>
-                        </svg>
-                      </button>
-                      {integration.status === "installed" ? (
                         <button
                           type="button"
-                          className="icon-button icon-button--danger"
-                          disabled={Boolean(providerBusy)}
-                          onClick={() => onProviderAction(integration.provider, "uninstall")}
-                          title={t("settings.integrations.actions.uninstall")}
+                          className="icon-button"
+                          disabled={!targetPath || Boolean(providerBusy)}
+                          onClick={() => onOpenProviderPath(integration)}
+                          title={t("settings.integrations.actions.open")}
                         >
                           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.576l-.66-6.6a.75.75 0 1 1 1.492-.149ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
+                            <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/>
                           </svg>
                         </button>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="provider-integration-grid">
-                    {(
-                      [
-                        {
-                          label: t(
-                            integration.provider === "claude"
-                              ? "settings.integrations.fields.hookPath"
-                              : "settings.integrations.fields.configPath",
-                          ),
-                          value: integration.configPath?.trim() || null,
-                        },
-                        {
-                          label: t("settings.integrations.fields.bridgePath"),
-                          value: integration.bridgePath?.trim() || null,
-                        },
-                      ] as { label: string; value: string | null }[]
-                    ).map(({ label, value }) => (
-                      <div key={label} className="provider-integration-meta">
-                        <details>
-                          <summary className="provider-path-summary">
-                            <span className="provider-path-label">{label}</span>
-                            <button
-                              type="button"
-                              className="provider-path-copy"
-                              disabled={!value}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                if (value) navigator.clipboard.writeText(value);
-                              }}
-                            >
-                              {t("settings.integrations.actions.copy")}
-                            </button>
-                          </summary>
-                          <code title={value ?? undefined}>
-                            {value ?? t("settings.integrations.values.unavailable")}
-                          </code>
-                        </details>
-                      </div>
-                    ))}
-
-                    <div className="provider-integration-meta">
-                      <span>{t("settings.integrations.fields.lastEventAt")}</span>
-                      <p>
-                        {integration.lastEventAt
-                          ? formatDateTime(integration.lastEventAt, locale)
-                          : t("settings.integrations.values.noEvent")}
-                      </p>
-                    </div>
-
-                    {integration.installedVersion != null ? (
-                      <div className="provider-integration-meta">
-                        <span>{t("settings.integrations.fields.version")}</span>
-                        <p>v{integration.installedVersion}</p>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          disabled={!targetPath || Boolean(providerBusy)}
+                          onClick={() => onEditProviderPath(integration)}
+                          title={t("settings.integrations.actions.edit")}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z"/>
+                          </svg>
+                        </button>
+                        {integration.status === "installed" ? (
+                          <button
+                            type="button"
+                            className="icon-button icon-button--danger"
+                            disabled={Boolean(providerBusy)}
+                            onClick={() => onProviderAction(integration.provider, "uninstall")}
+                            title={t("settings.integrations.actions.uninstall")}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                              <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.576l-.66-6.6a.75.75 0 1 1 1.492-.149ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
+                            </svg>
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
+
+                    <svg
+                      className="provider-integration-chevron"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="currentColor"
+                    >
+                      <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+                    </svg>
                   </div>
 
-                  {integration.lastError ? (
-                    <div className="provider-integration-error">
-                      <span>{t("settings.integrations.fields.lastError")}</span>
-                      <p>{integration.lastError}</p>
-                    </div>
-                  ) : null}
+                  {isExpanded ? (
+                    <>
+                      <div className="provider-integration-grid">
+                        {(
+                          [
+                            {
+                              label: t(
+                                integration.provider === "claude"
+                                  ? "settings.integrations.fields.hookPath"
+                                  : "settings.integrations.fields.configPath",
+                              ),
+                              value: integration.configPath?.trim() || null,
+                            },
+                            {
+                              label: t("settings.integrations.fields.bridgePath"),
+                              value: integration.bridgePath?.trim() || null,
+                            },
+                          ] as { label: string; value: string | null }[]
+                        ).map(({ label, value }) => (
+                          <div key={label} className="provider-integration-meta">
+                            <details>
+                              <summary className="provider-path-summary">
+                                <span className="provider-path-label">{label}</span>
+                                <button
+                                  type="button"
+                                  className="provider-path-copy"
+                                  disabled={!value}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    if (value) navigator.clipboard.writeText(value);
+                                  }}
+                                >
+                                  {t("settings.integrations.actions.copy")}
+                                </button>
+                              </summary>
+                              <code title={value ?? undefined}>
+                                {value ?? t("settings.integrations.values.unavailable")}
+                              </code>
+                            </details>
+                          </div>
+                        ))}
 
+                        <div className="provider-integration-meta">
+                          <span>{t("settings.integrations.fields.lastEventAt")}</span>
+                          <p>{summaryTime}</p>
+                        </div>
+
+                        {integration.installedVersion != null ? (
+                          <div className="provider-integration-meta">
+                            <span>{t("settings.integrations.fields.version")}</span>
+                            <p>v{integration.installedVersion}</p>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {integration.lastError ? (
+                        <div className="provider-integration-error">
+                          <span>{t("settings.integrations.fields.lastError")}</span>
+                          <p>{integration.lastError}</p>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
                 </article>
               );
             })}
@@ -862,6 +899,8 @@ export function SettingsView({
           </div>
         </article>
       ) : null}
+
+      </div>
     </section>
   );
 }

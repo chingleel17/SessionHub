@@ -141,6 +141,8 @@ export const zhTwMessages = {
   "settings.integrations.actions.edit": "直接編輯",
   "settings.integrations.actions.copy": "複製",
   "settings.integrations.actions.uninstall": "移除整合",
+  "settings.integrations.actions.expand": "展開",
+  "settings.integrations.actions.collapse": "收起",
   "settings.actions.save": "儲存設定",
   "settings.actions.detectTerminal": "自動偵測終端",
   "settings.actions.detectEditor": "偵測 VSCode",

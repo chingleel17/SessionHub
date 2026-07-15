@@ -785,6 +785,13 @@ textarea {
   grid-column: 2;
 }
 
+.settings-layout-column {
+  display: grid;
+  gap: 24px;
+  align-content: start;
+  min-width: 0;
+}
+
 /* .settings-layout > :only-child {
   grid-column: 1 / -1;
 } */
@@ -911,6 +918,7 @@ textarea {
 .field-group {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .field-with-action {
@@ -945,8 +953,9 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
   flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .checkbox-group-label input {
@@ -1463,6 +1472,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
   gap: 18px;
   align-items: start;
   grid-template-columns: 1fr;
+  min-width: 0;
 }
 
 .settings-actions,
@@ -1508,6 +1518,11 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: var(--color-surface-panel);
 }
 
+.provider-integration-card--collapsed {
+  gap: 0;
+  padding: 12px 18px;
+}
+
 .provider-integration-card--error {
   border-color: var(--color-error-border);
   background: var(--color-error-surface);
@@ -1542,9 +1557,11 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .provider-integration-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
   align-items: flex-start;
   gap: 12px 16px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
 }
 
 .provider-integration-badges,
@@ -1561,6 +1578,25 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .provider-integration-actions > button {
   flex: 0 0 auto;
+}
+
+.provider-integration-summary-time {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.provider-integration-chevron {
+  grid-column: -2;
+  grid-row: 1;
+  flex-shrink: 0;
+  align-self: center;
+  justify-self: end;
+  color: var(--color-text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.provider-integration-card--expanded .provider-integration-chevron {
+  transform: rotate(90deg);
 }
 
 .provider-integration-grid {
@@ -1644,9 +1680,12 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 @media (max-width: 1180px) {
-  .settings-layout,
-  .provider-integration-header {
+  .settings-layout {
     grid-template-columns: 1fr;
+  }
+
+  .provider-integration-header {
+    grid-template-columns: 1fr 14px;
   }
 
   .settings-layout > :first-child,
@@ -1658,6 +1697,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
   .provider-integration-actions {
     justify-content: flex-start;
+    grid-column: 1 / -1;
   }
 }
 

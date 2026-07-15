@@ -97,12 +97,12 @@
 ## 6. 驗證
 
 - [x] 6.1 執行 `cd src-tauri && cargo check` 確認無編譯錯誤；執行 `bun run tsc --noEmit` 確認前端型別正確
-- [ ] 6.2 手動驗證 tray：
+- [x] 6.2 手動驗證 tray：
   - 系統匣圖示在 `enable_quota_monitoring: true` 時隨 quota 快照更新而變色/顯示數字
   - 點擊 tray icon 彈出 mini panel，再次點擊或點擊 panel 外側則關閉
   - Settings 切換 `tray_quota_mode`，圖示即時更新
   - `tray_quota_panel_enabled: false` 時點擊 tray icon 改為開啟主視窗
-- [ ] 6.3 手動驗證 overlay：
+- [x] 6.3 手動驗證 overlay：
   - 啟用後 overlay 常駐置頂，切換其他視窗（含最大化）不被遮蓋、不搶焦點（在其他 app 打字時 overlay 出現不中斷輸入）
   - 鎖定模式下點擊 overlay 區域，滑鼠事件穿透到底下視窗
   - 編輯模式可拖曳，重啟 app 後位置保留；拔除副螢幕後 overlay 不會消失在畫面外
