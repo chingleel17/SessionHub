@@ -103,7 +103,7 @@ pub(crate) fn default_false() -> bool {
 }
 
 pub(crate) fn default_quota_overlay_opacity() -> f64 {
-    0.85
+    0.3
 }
 
 pub(crate) fn default_quota_overlay_theme() -> OverlayTheme {
@@ -134,8 +134,8 @@ pub(crate) enum OverlayTheme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OverlayStyle {
-    #[default]
     Full,
+    #[default]
     Compact,
 }
 

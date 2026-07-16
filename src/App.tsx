@@ -133,10 +133,10 @@ function EmbeddedQuotaOverlayApp() {
       snapshots={quotaSnapshotQuery.data ?? []}
       enabledProviders={settings?.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"]}
       selectedProviders={settings?.quotaOverlayProviders ?? []}
-      opacity={settings?.quotaOverlayOpacity ?? 0.85}
+      opacity={settings?.quotaOverlayOpacity ?? 0.3}
       locked={settings?.quotaOverlayLocked ?? true}
       theme={settings?.quotaOverlayTheme ?? "dark"}
-      styleMode={settings?.quotaOverlayStyle ?? "full"}
+      styleMode={settings?.quotaOverlayStyle ?? "compact"}
       onLockToggle={() => {
         if (!settings) return;
         void invoke("save_settings", {
@@ -550,10 +550,10 @@ function App() {
     trayQuotaPanelEnabled: true,
     quotaOverlayEnabled: false,
     quotaOverlayLocked: true,
-    quotaOverlayOpacity: 0.85,
+    quotaOverlayOpacity: 0.3,
     quotaOverlayProviders: [],
     quotaOverlayTheme: "dark",
-    quotaOverlayStyle: "full",
+    quotaOverlayStyle: "compact",
   });
 
   const settingsQuery = useQuery({
@@ -671,10 +671,10 @@ function App() {
         trayQuotaPanelEnabled: settingsQuery.data.trayQuotaPanelEnabled ?? true,
         quotaOverlayEnabled: settingsQuery.data.quotaOverlayEnabled ?? false,
         quotaOverlayLocked: settingsQuery.data.quotaOverlayLocked ?? true,
-        quotaOverlayOpacity: settingsQuery.data.quotaOverlayOpacity ?? 0.85,
+        quotaOverlayOpacity: settingsQuery.data.quotaOverlayOpacity ?? 0.3,
         quotaOverlayProviders: settingsQuery.data.quotaOverlayProviders ?? [],
         quotaOverlayTheme: settingsQuery.data.quotaOverlayTheme ?? "dark",
-        quotaOverlayStyle: settingsQuery.data.quotaOverlayStyle ?? "full",
+        quotaOverlayStyle: settingsQuery.data.quotaOverlayStyle ?? "compact",
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
@@ -1042,13 +1042,13 @@ function App() {
     quotaOverlayLocked:
       overrides.quotaOverlayLocked ?? settingsForm.quotaOverlayLocked ?? true,
     quotaOverlayOpacity:
-      overrides.quotaOverlayOpacity ?? settingsForm.quotaOverlayOpacity ?? 0.85,
+      overrides.quotaOverlayOpacity ?? settingsForm.quotaOverlayOpacity ?? 0.3,
     quotaOverlayProviders:
       overrides.quotaOverlayProviders ?? settingsForm.quotaOverlayProviders ?? [],
     quotaOverlayTheme:
       overrides.quotaOverlayTheme ?? settingsForm.quotaOverlayTheme ?? "dark",
     quotaOverlayStyle:
-      overrides.quotaOverlayStyle ?? settingsForm.quotaOverlayStyle ?? "full",
+      overrides.quotaOverlayStyle ?? settingsForm.quotaOverlayStyle ?? "compact",
   });
 
   const persistSettingsSilently = async (next: AppSettings) => {

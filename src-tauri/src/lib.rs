@@ -47,6 +47,35 @@ pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
     }
 }
 
+/// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。
+fn has_saved_window_state(app: &tauri::AppHandle, label: &str) -> bool {
+    let Ok(app_data_dir) = app.path().app_data_dir() else {
+        return false;
+    };
+    let state_path = app_data_dir.join(".window-state.json");
+    let Ok(contents) = std::fs::read_to_string(state_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    value.get(label).is_some()
+}
+
+/// 將視窗定位到主螢幕右下角（保留少量邊距）。
+fn position_window_bottom_right(window: &tauri::WebviewWindow) {
+    const MARGIN: i32 = 16;
+    let (Ok(monitor), Ok(size)) = (window.current_monitor(), window.outer_size()) else {
+        return;
+    };
+    let Some(monitor) = monitor else { return };
+    let screen_pos = monitor.position();
+    let screen_size = monitor.size();
+    let x = screen_pos.x + screen_size.width as i32 - size.width as i32 - MARGIN;
+    let y = screen_pos.y + screen_size.height as i32 - size.height as i32 - MARGIN;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x.max(screen_pos.x), y.max(screen_pos.y)));
+}
+
 /// 建立（或顯示）常駐 quota overlay 視窗。
 ///
 /// 必須在 Rust 端以 `WebviewWindowBuilder` 建立，`tauri.conf.json` 的 `focus: false`
@@ -89,7 +118,12 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     // 還原上次位置（若有），並套用多螢幕邊界驗證
     use tauri_plugin_window_state::{StateFlags, WindowExt};
     // 舊版 overlay 曾儲存過過小的尺寸，僅還原位置以免內容再次被裁切。
-    let _ = window.restore_state(StateFlags::POSITION);
+    if has_saved_window_state(app, QUOTA_OVERLAY_LABEL) {
+        let _ = window.restore_state(StateFlags::POSITION);
+    } else {
+        // 首次啟用時尚無已存位置，預設定位到主螢幕右下角
+        position_window_bottom_right(&window);
+    }
 
     // Windows transparent 白底 workaround（tauri#4881）：微調 size 觸發重繪後再顯示
     if let Ok(size) = window.inner_size() {
@@ -329,7 +363,7 @@ pub fn run() {
                         tray_quota_panel_enabled: true,
                         quota_overlay_enabled: false,
                         quota_overlay_locked: true,
-                        quota_overlay_opacity: 0.85,
+                        quota_overlay_opacity: crate::types::default_quota_overlay_opacity(),
                         quota_overlay_providers: Vec::new(),
                         quota_overlay_theme: OverlayTheme::default(),
                         quota_overlay_style: OverlayStyle::default(),

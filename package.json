@@ -1,7 +1,7 @@
 {
   "name": "session-hub",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -24,8 +24,7 @@
     "marked": "^15.0.12",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "^7.6.2",
-    "react-window": "^1.8.10"
+    "react-router-dom": "^7.6.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

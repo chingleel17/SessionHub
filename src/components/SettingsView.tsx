@@ -804,7 +804,7 @@ export function SettingsView({
                         min="0.3"
                         max="1"
                         step="0.05"
-                        value={settingsForm.quotaOverlayOpacity ?? 0.85}
+                        value={settingsForm.quotaOverlayOpacity ?? 0.3}
                         onChange={(event) =>
                           onFormChange({
                             ...settingsForm,
@@ -812,7 +812,7 @@ export function SettingsView({
                           })
                         }
                       />
-                      <span className="settings-range-value">{Math.round((settingsForm.quotaOverlayOpacity ?? 0.85) * 100)}%</span>
+                      <span className="settings-range-value">{Math.round((settingsForm.quotaOverlayOpacity ?? 0.3) * 100)}%</span>
                     </div>
                   </div>
 
@@ -839,7 +839,7 @@ export function SettingsView({
                     <Select
                       id="quota-overlay-style-select"
                       className="settings-select"
-                      value={settingsForm.quotaOverlayStyle ?? "full"}
+                      value={settingsForm.quotaOverlayStyle ?? "compact"}
                       onChange={(event) =>
                         onFormChange({
                           ...settingsForm,

@@ -255,7 +255,7 @@ impl AppSettings {
             tray_quota_panel_enabled: true,
             quota_overlay_enabled: false,
             quota_overlay_locked: true,
-            quota_overlay_opacity: 0.85,
+            quota_overlay_opacity: crate::types::default_quota_overlay_opacity(),
             quota_overlay_providers: Vec::new(),
             quota_overlay_theme: crate::types::OverlayTheme::default(),
             quota_overlay_style: crate::types::OverlayStyle::default(),
