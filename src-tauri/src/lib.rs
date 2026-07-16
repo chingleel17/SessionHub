@@ -238,6 +238,13 @@ fn position_panel_near_tray(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(WatcherState::default())
         .manage(std::sync::Arc::new(ScanCache::default()))
         .manage(DbState::new().expect("failed to init metadata db"))
