@@ -40,3 +40,6 @@ src/
 - 不得 hardcode 中文文字在 JSX — 必須用 `t("key")`
 - 不得新增全域狀態管理庫（已有 React Query，避免引入 Redux/Zustand）
 - 不得在頂層 Tab 顯示 Plan 編輯器 — Plan 必須是 ProjectView 子 Tab
+- 操作與導覽 icon 經 `components/Icons.tsx` 集中匯出；不得在業務元件定義一般操作的 inline SVG 或用 Emoji 作為唯一識別。
+- 優先使用 `components/ui/` 的 Button、IconButton、Select 與 DropdownMenu，並維持既有 theme token。
+- 前端變更完成前執行 `bun run lint` 與 `bun run build`。

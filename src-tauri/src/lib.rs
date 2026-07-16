@@ -55,6 +55,8 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     if let Some(existing) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
         // 尺寸由前端依內容量測後自行同步（QuotaOverlay 的 ResizeObserver），這裡不強制固定尺寸
         let _ = existing.show();
+        // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+        let _ = existing.set_skip_taskbar(true);
         apply_overlay_locked(&existing, settings.quota_overlay_locked);
         emit_overlay_settings_changed(app, settings);
         return;
@@ -101,6 +103,8 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     apply_overlay_locked(&window, settings.quota_overlay_locked);
     emit_overlay_settings_changed(app, settings);
     let _ = window.show();
+    // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+    let _ = window.set_skip_taskbar(true);
 }
 
 /// 依鎖定狀態設定滑鼠穿透（鎖定 = 穿透）
@@ -138,6 +142,8 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, 
         } else {
             position_panel_near_tray(app, &window, tray_rect);
             let _ = window.show();
+            // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+            let _ = window.set_skip_taskbar(true);
             let _ = window.set_focus();
         }
         return;
@@ -169,6 +175,8 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, 
     // 定位到系統匣附近（右下角，taskbar 上方）
     position_panel_near_tray(app, &window, tray_rect);
     let _ = window.show();
+    // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+    let _ = window.set_skip_taskbar(true);
     let _ = window.set_focus();
 }
 

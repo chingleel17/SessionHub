@@ -117,12 +117,14 @@ pub(crate) struct SkillsScanResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+#[serde(tag = "status", rename_all = "kebab-case")]
 pub(crate) enum AgentsRootLinkStatus {
     Linked,
     NotLinked,
-    Conflict,
     Missing,
+    #[serde(rename_all = "camelCase")]
+    Partial { unmatched_items: Vec<String> },
+    UnlinkedPhysical,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -418,11 +420,19 @@ fn check_agents_root_link_against(
 ) -> Result<AgentsRootLinkStatus, String> {
     let symlink_meta = match fs::symlink_metadata(agents_root) {
         Ok(metadata) => metadata,
-        Err(_) => return Ok(AgentsRootLinkStatus::Missing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AgentsRootLinkStatus::Missing);
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect agents root {}: {error}",
+                agents_root.display()
+            ));
+        }
     };
 
     if !symlink_meta.file_type().is_symlink() {
-        return Ok(AgentsRootLinkStatus::Conflict);
+        return check_physical_agents_root_link(agents_root, source_root);
     }
 
     let link_target = fs::read_link(agents_root)
@@ -445,8 +455,70 @@ fn check_agents_root_link_against(
     }
 }
 
-/// 建立 `~/.agents` → 全域自訂正本位置的目錄 symlink。`~/.agents` 已是實體目錄時回報衝突，
-/// 不覆蓋、不搬移，交由使用者手動合併後重試。
+fn check_physical_agents_root_link(
+    agents_root: &Path,
+    source_root: &Path,
+) -> Result<AgentsRootLinkStatus, String> {
+    if !symlink_meta_is_dir(agents_root) {
+        return Ok(AgentsRootLinkStatus::UnlinkedPhysical);
+    }
+
+    let source_entries = fs::read_dir(source_root).map_err(|error| {
+        format!(
+            "failed to list custom agents source {}: {error}",
+            source_root.display()
+        )
+    })?;
+    let resolved_source = source_root.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve custom agents source {}: {error}",
+            source_root.display()
+        )
+    })?;
+    let mut unmatched_items = Vec::new();
+    let mut matched_count = 0;
+
+    for entry in source_entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect custom agents source {}: {error}",
+                source_root.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let source_item = resolved_source.join(&name);
+        let agents_item = agents_root.join(&name);
+        let is_matching_link = fs::symlink_metadata(&agents_item)
+            .ok()
+            .filter(|metadata| metadata.file_type().is_symlink())
+            .and_then(|_| fs::read_link(&agents_item).ok())
+            .and_then(|target| canonicalize_link_target(&agents_item, &target).ok())
+            .is_some_and(|target| target == source_item);
+
+        if is_matching_link {
+            matched_count += 1;
+        } else {
+            unmatched_items.push(name.to_string_lossy().to_string());
+        }
+    }
+
+    if matched_count == 0 {
+        Ok(AgentsRootLinkStatus::UnlinkedPhysical)
+    } else if unmatched_items.is_empty() {
+        Ok(AgentsRootLinkStatus::Linked)
+    } else {
+        unmatched_items.sort();
+        Ok(AgentsRootLinkStatus::Partial { unmatched_items })
+    }
+}
+
+fn symlink_meta_is_dir(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
+/// 僅在 `~/.agents` 不存在時建立指向全域自訂正本位置的目錄 symlink。
 pub(crate) fn link_agents_root_internal() -> Result<AgentsRootLinkStatus, String> {
     let settings = load_agents_settings()?;
     let source_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
@@ -459,14 +531,20 @@ fn link_agents_root_to(
     source_root: &Path,
 ) -> Result<AgentsRootLinkStatus, String> {
     let status = check_agents_root_link_against(agents_root, source_root)?;
-    if status == AgentsRootLinkStatus::Linked {
-        return Ok(status);
-    }
-    if status == AgentsRootLinkStatus::Conflict {
-        return Err("~/.agents already contains physical files".to_string());
-    }
-    if status == AgentsRootLinkStatus::NotLinked {
-        return Err("~/.agents symlink points to a different source".to_string());
+    if status != AgentsRootLinkStatus::Missing {
+        return Err(match status {
+            AgentsRootLinkStatus::Linked => "~/.agents is already linked to the custom source".to_string(),
+            AgentsRootLinkStatus::Partial { .. } => {
+                "~/.agents contains partial links; it will not be overwritten".to_string()
+            }
+            AgentsRootLinkStatus::UnlinkedPhysical => {
+                "~/.agents contains physical content; it will not be overwritten".to_string()
+            }
+            AgentsRootLinkStatus::NotLinked => {
+                "~/.agents symlink points to a different source".to_string()
+            }
+            AgentsRootLinkStatus::Missing => unreachable!(),
+        });
     }
 
     if !source_root.exists() {
@@ -1790,6 +1868,11 @@ mod tests {
         fs::write(path, content).expect("write file");
     }
 
+    #[cfg(target_os = "windows")]
+    fn create_file_symlink(source_path: &Path, target_path: &Path) {
+        std::os::windows::fs::symlink_file(source_path, target_path).expect("create file symlink");
+    }
+
     #[test]
     fn scan_agents_md_respects_ignore_and_depth_limits() {
         let _guard = lock_test();
@@ -2168,32 +2251,92 @@ mod tests {
                 AgentsRootLinkStatus::Linked
             );
 
-            // 已連結時再次呼叫應冪等，不報錯。
-            let status_again = link_agents_root_to(&agents_root, &source_root).expect("link again");
-            assert_eq!(status_again, AgentsRootLinkStatus::Linked);
+            let result = link_agents_root_to(&agents_root, &source_root);
+            assert!(result.is_err());
         }
 
         fs::remove_dir_all(&root).expect("cleanup root");
     }
 
     #[test]
-    fn agents_root_link_conflict_does_not_overwrite() {
+    fn agents_root_link_physical_directory_statuses_and_create_protection() {
         let _guard = lock_test();
-        let root = unique_test_dir("agents-root-link-conflict");
+        let root = unique_test_dir("agents-root-link-physical");
         let agents_root = root.join(".agents");
         let source_root = root.join("custom-agents");
-        fs::create_dir_all(&source_root).expect("create source");
+        fs::create_dir_all(source_root.join("instructions")).expect("create source instructions");
+        fs::create_dir_all(source_root.join("skills")).expect("create source skills");
+        write_file(&source_root.join("AGENTS.md"), "source instructions");
         fs::create_dir_all(&agents_root).expect("create physical agents root");
         write_file(&agents_root.join("marker.txt"), "existing content");
 
         assert_eq!(
             check_agents_root_link_against(&agents_root, &source_root).expect("check"),
-            AgentsRootLinkStatus::Conflict
+            AgentsRootLinkStatus::UnlinkedPhysical
         );
 
         let result = link_agents_root_to(&agents_root, &source_root);
         assert!(result.is_err());
         assert!(agents_root.join("marker.txt").is_file());
+
+        #[cfg(target_os = "windows")]
+        {
+            create_directory_symlink(
+                &source_root.join("instructions"),
+                &agents_root.join("instructions"),
+            )
+            .expect("link instructions");
+            assert_eq!(
+                check_agents_root_link_against(&agents_root, &source_root).expect("check partial"),
+                AgentsRootLinkStatus::Partial {
+                    unmatched_items: vec!["AGENTS.md".to_string(), "skills".to_string()],
+                }
+            );
+            assert!(link_agents_root_to(&agents_root, &source_root).is_err());
+
+            create_directory_symlink(
+                &source_root.join("skills"),
+                &agents_root.join("skills"),
+            )
+            .expect("link skills");
+            create_file_symlink(&source_root.join("AGENTS.md"), &agents_root.join("AGENTS.md"));
+            assert_eq!(
+                check_agents_root_link_against(&agents_root, &source_root).expect("check linked"),
+                AgentsRootLinkStatus::Linked
+            );
+
+            fs::remove_dir(&agents_root.join("skills")).expect("remove skills link");
+            fs::create_dir_all(agents_root.join("skills")).expect("create physical skills copy");
+            assert_eq!(
+                check_agents_root_link_against(&agents_root, &source_root).expect("check copied item"),
+                AgentsRootLinkStatus::Partial {
+                    unmatched_items: vec!["skills".to_string()],
+                }
+            );
+        }
+
+        fs::remove_dir_all(&root).expect("cleanup root");
+    }
+
+    #[test]
+    fn agents_root_link_rejects_symlink_to_different_source() {
+        let _guard = lock_test();
+        let root = unique_test_dir("agents-root-link-not-linked");
+        let agents_root = root.join(".agents");
+        let source_root = root.join("custom-agents");
+        let other_source = root.join("other-agents");
+        fs::create_dir_all(&source_root).expect("create source");
+        fs::create_dir_all(&other_source).expect("create other source");
+
+        #[cfg(target_os = "windows")]
+        {
+            create_directory_symlink(&other_source, &agents_root).expect("create other source link");
+            assert_eq!(
+                check_agents_root_link_against(&agents_root, &source_root).expect("check"),
+                AgentsRootLinkStatus::NotLinked
+            );
+            assert!(link_agents_root_to(&agents_root, &source_root).is_err());
+        }
 
         fs::remove_dir_all(&root).expect("cleanup root");
     }

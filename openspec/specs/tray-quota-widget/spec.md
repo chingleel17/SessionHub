@@ -29,6 +29,7 @@
 
 - **WHEN** `quota_overlay_enabled: true`（啟動時或設定變更時）
 - **THEN** 系統在 Rust 端以 `WebviewWindowBuilder` 建立 overlay 視窗：transparent、無框、無陰影、always-on-top、skip-taskbar、`focused(false)`
+- **AND** 每次 `show()` 之後必須重新呼叫 `set_skip_taskbar(true)`——Windows 上 show 會重置 taskbar 樣式（tauri#10422），僅在 builder 設定 skip-taskbar 不足以避免 overlay 出現在工作列與 Alt+Tab
 - **AND** overlay 疊於所有一般視窗（含最大化與 borderless fullscreen 視窗）之上
 - **AND** overlay 出現與更新不奪取其他應用的鍵盤焦點
 - **AND** 使用者切換、最大化其他視窗時 overlay 保持可見（失焦不隱藏）
@@ -83,6 +84,7 @@
 
 - **WHEN** `tray_quota_panel_enabled: true` 且使用者左鍵點擊 tray 圖示
 - **THEN** 於系統匣上方彈出 320px 寬無框、不透明面板，顯示所有 enabled provider 的 quota 詳情（bar、百分比、reset 倒數、錯誤狀態、local tokens）與刷新 icon 按鈕
+- **AND** panel 建立時設定 skip-taskbar，且每次 `show()` 之後重新呼叫 `set_skip_taskbar(true)`（同 overlay，對應 tauri#10422 Windows 樣式重置問題）
 - **AND** panel 以 tray 所在螢幕的座標與 DPI 定位，不可在多螢幕環境超出可視範圍
 - **AND** panel 失焦（blur）、再次點擊 tray 圖示或按 Esc 時隱藏
 - **AND** panel 的自動隱藏邏輯不影響 overlay widget

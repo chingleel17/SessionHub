@@ -4,6 +4,8 @@ import type { McpProviderConfig, McpScope, McpServerEntry } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ExternalLinkIcon, FolderIcon, RefreshIcon } from "./Icons";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { Button } from "./ui/Button";
+import { IconButton } from "./ui/IconButton";
 
 const MCP_PROVIDER_IDS = ["claude", "codex", "opencode", "copilot"] as const;
 
@@ -306,30 +308,28 @@ function McpHeaderActions({
   const { t } = useI18n();
   return (
     <div className="settings-actions agents-toolbar-actions">
-      <button
-        type="button"
-        className="ghost-button agents-icon-button"
+      <IconButton
+        label={t("agents.action.openExternal")}
+        className="agents-icon-button"
         disabled={!configPath}
         onClick={() => configPath && onOpenExternal(configPath)}
-        title={t("agents.action.openExternal")}
       >
         <ExternalLinkIcon size={15} />
-      </button>
-      <button
-        type="button"
-        className="ghost-button agents-icon-button"
+      </IconButton>
+      <IconButton
+        label={t("agents.action.reveal")}
+        className="agents-icon-button"
         disabled={!configPath}
         onClick={() => configPath && onRevealPath(configPath)}
-        title={t("agents.action.reveal")}
       >
         <FolderIcon size={15} />
-      </button>
-      <button type="button" className="ghost-button agents-icon-button" onClick={onRefresh} title={t("app.actions.refresh")}>
+      </IconButton>
+      <IconButton label={t("app.actions.refresh")} className="agents-icon-button" onClick={onRefresh}>
         <RefreshIcon size={15} />
-      </button>
-      <button type="button" className="primary-button" onClick={onAdd}>
+      </IconButton>
+      <Button variant="primary" onClick={onAdd}>
         {t("mcp.action.add")}
-      </button>
+      </Button>
     </div>
   );
 }

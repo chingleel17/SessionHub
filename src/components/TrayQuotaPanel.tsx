@@ -1,6 +1,8 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { RefreshIcon, SettingsIcon } from "./Icons";
+import { IconButton } from "./ui/IconButton";
 
 type TrayQuotaPanelProps = {
   snapshots: QuotaSnapshot[];
@@ -109,12 +111,9 @@ export function TrayQuotaPanel({ snapshots, onRefresh, onOpenSettings }: TrayQuo
             <h1 className="tray-panel-title">SessionHub Quota</h1>
             <p className="tray-panel-subtitle">{t("quota.monitoring.overview")}</p>
           </div>
-          <button type="button" className="tray-panel-icon-button" onClick={onOpenSettings} title={t("settings.title")}>
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6.8 1.5h2.4l.4 1.7a5.15 5.15 0 0 1 1.2.7l1.7-.5 1.2 2.1-1.3 1.2c.1.4.1.8.1 1.3s0 .9-.1 1.3l1.3 1.2-1.2 2.1-1.7-.5c-.4.3-.8.5-1.2.7l-.4 1.7H6.8l-.4-1.7a5.16 5.16 0 0 1-1.2-.7l-1.7.5-1.2-2.1 1.3-1.2A5.83 5.83 0 0 1 3.5 8c0-.5 0-.9.1-1.3L2.3 5.5l1.2-2.1 1.7.5c.4-.3.8-.5 1.2-.7z" />
-              <circle cx="8" cy="8" r="2.2" />
-            </svg>
-          </button>
+          <IconButton label={t("settings.title")} className="tray-panel-icon-button" onClick={onOpenSettings}>
+            <SettingsIcon size={14} />
+          </IconButton>
         </header>
 
         <div className="tray-panel-content">
@@ -160,12 +159,9 @@ export function TrayQuotaPanel({ snapshots, onRefresh, onOpenSettings }: TrayQuo
         </div>
 
         <footer className="tray-panel-footer">
-          <button type="button" className="tray-panel-refresh" onClick={onRefresh} title={t("quota.monitoring.manualRefresh")}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-              <path d="M13.3 6.1A5.5 5.5 0 1 0 13.5 9" />
-              <path d="M13.3 2.7v3.4H9.9" />
-            </svg>
-          </button>
+          <IconButton label={t("quota.monitoring.manualRefresh")} className="tray-panel-refresh" onClick={onRefresh}>
+            <RefreshIcon size={16} />
+          </IconButton>
           <span className="tray-panel-last-updated">
             {latestFetchedAt ? t("quota.updated", { age: formatAge(latestFetchedAt, locale) }) : t("quota.monitoring.noData")}
           </span>

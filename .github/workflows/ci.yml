@@ -34,7 +34,10 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # ── Checks ──────────────────────────────────────────────────────────────
+       # ── Checks ──────────────────────────────────────────────────────────────
+      - name: Frontend lint
+        run: bun run lint
+
       - name: TypeScript type-check & frontend build
         run: bun run build
 

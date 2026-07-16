@@ -39,6 +39,7 @@ import {
   SearchIcon,
   SyncIcon,
 } from "./Icons";
+import { IconButton } from "./ui/IconButton";
 
 type AgentsTab = "agents-md" | "skills" | "commands" | "mcp";
 
@@ -272,18 +273,18 @@ export function AgentsConfigView(props: Props) {
 
     const mdActions = (
       <div className="settings-actions agents-toolbar-actions">
-        <button type="button" className="ghost-button agents-icon-button" onClick={() => void data.onRefreshAgentsMd()} title={t("app.actions.refresh")}>
+        <IconButton label={t("app.actions.refresh")} className="agents-icon-button" onClick={() => void data.onRefreshAgentsMd()}>
           <RefreshIcon size={15} />
-        </button>
-        <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onOpenExternal(groupSelectedNode.filePath)} title={t("agents.action.openExternal")}>
+        </IconButton>
+        <IconButton label={t("agents.action.openExternal")} className="agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onOpenExternal(groupSelectedNode.filePath)}>
           <ExternalLinkIcon size={15} />
-        </button>
-        <button type="button" className="ghost-button agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onRevealPath(groupSelectedNode.filePath)} title={t("agents.action.reveal")}>
+        </IconButton>
+        <IconButton label={t("agents.action.reveal")} className="agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onRevealPath(groupSelectedNode.filePath)}>
           <FolderIcon size={15} />
-        </button>
-        <button type="button" className="ghost-button agents-icon-button" disabled={!selectedMdEntry} onClick={() => selectedMdEntry && void handlePreview(data, buildAgentsMdSyncRequest(selectedMdEntry, true))} title={t("agents.action.syncThisDir")}>
+        </IconButton>
+        <IconButton label={t("agents.action.syncThisDir")} className="agents-icon-button" disabled={!selectedMdEntry} onClick={() => selectedMdEntry && void handlePreview(data, buildAgentsMdSyncRequest(selectedMdEntry, true))}>
           <SyncIcon size={15} />
-        </button>
+        </IconButton>
       </div>
     );
 
@@ -467,19 +468,31 @@ export function AgentsConfigView(props: Props) {
           {actionButtons}
         </div>
 
-        {tab === "skills" && data.agentsRootLinkStatus && data.agentsRootLinkStatus !== "linked" ? (
-          <div className={`agents-root-link-banner agents-root-link-banner--${data.agentsRootLinkStatus}`}>
-            {data.agentsRootLinkStatus === "conflict" ? (
+        {tab === "skills" && data.agentsRootLinkStatus && data.agentsRootLinkStatus.status !== "linked" ? (
+          <div className={`agents-root-link-banner agents-root-link-banner--${data.agentsRootLinkStatus.status}`}>
+            {data.agentsRootLinkStatus.status === "partial" ? (
               <>
-                <strong>{t("agents.rootLink.conflict.title")}</strong>
-                <span>{t("agents.rootLink.conflict.description")}</span>
+                <div>
+                  <strong>{t("agents.rootLink.partial.title")}</strong>
+                  <span>{t("agents.rootLink.partial.description")}</span>
+                  <span>{data.agentsRootLinkStatus.unmatchedItems.join(", ")}</span>
+                </div>
+              </>
+            ) : data.agentsRootLinkStatus.status === "unlinked-physical" ? (
+              <>
+                <div>
+                  <strong>{t("agents.rootLink.unlinkedPhysical.title")}</strong>
+                  <span>{t("agents.rootLink.unlinkedPhysical.description")}</span>
+                </div>
               </>
             ) : (
               <>
                 <strong>{t("agents.rootLink.notLinked.title")}</strong>
-                <button type="button" className="ghost-button" onClick={() => void data.onCreateAgentsRootLink?.()}>
-                  {t("agents.rootLink.notLinked.action")}
-                </button>
+                {data.agentsRootLinkStatus.status === "missing" ? (
+                  <button type="button" className="ghost-button" onClick={() => void data.onCreateAgentsRootLink?.()}>
+                    {t("agents.rootLink.notLinked.action")}
+                  </button>
+                ) : null}
               </>
             )}
           </div>

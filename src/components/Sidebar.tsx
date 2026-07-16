@@ -2,7 +2,7 @@ import { useState } from "react";
 import packageJson from "../../package.json";
 import { useI18n } from "../i18n/I18nProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
-import { AgentsIcon, PinIcon } from "./Icons";
+import { AgentsIcon, CloseIcon, DashboardIcon, PanelLeftIcon, PinIcon, RefreshIcon, SettingsIcon } from "./Icons";
 
 type Props = {
   activeView: string;
@@ -138,28 +138,17 @@ export function Sidebar({
         <div className="sidebar-brand-copy">
           <h1 className="topbar-title">{t("app.title")}</h1>
         </div>
-        <button
-          type="button"
-          className="sidebar-collapse-button"
-          onClick={onCollapseToggle}
-          aria-label={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-          title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
-        >
-          {isSidebarCollapsed ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="9" y1="3" x2="9" y2="21" />
-              <polyline points="12 9 15 12 12 15" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="9" y1="3" x2="9" y2="21" />
-              <polyline points="15 9 12 12 15 15" />
-            </svg>
-          )}
-        </button>
       </div>
+
+      <button
+        type="button"
+        className="sidebar-collapse-button"
+        onClick={onCollapseToggle}
+        aria-label={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+        title={isSidebarCollapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+      >
+        <PanelLeftIcon size={18} />
+      </button>
 
       <nav className="sidebar-menu">
         <button
@@ -167,7 +156,7 @@ export function Sidebar({
           className={`sidebar-link ${activeView === "dashboard" ? "active" : ""}`}
           onClick={() => onNavigate("dashboard")}
         >
-          <span className="sidebar-link-icon">◫</span>
+          <span className="sidebar-link-icon"><DashboardIcon size={18} /></span>
           <span>{t("sidebar.menu.dashboard")}</span>
         </button>
 
@@ -254,7 +243,7 @@ export function Sidebar({
                       aria-label={`${t("sidebar.closeProject")} ${group.title}`}
                       onClick={(e) => { e.stopPropagation(); onCloseProject(group.key); }}
                     >
-                      ×
+                      <CloseIcon size={14} />
                     </button>
                   </div>
                 ) : (
@@ -283,7 +272,7 @@ export function Sidebar({
                       aria-label={`${t("sidebar.closeProject")} ${group.title}`}
                       onClick={(e) => { e.stopPropagation(); onCloseProject(group.key); }}
                     >
-                      ×
+                      <CloseIcon size={14} />
                     </button>
                   </div>
                 );
@@ -310,15 +299,7 @@ export function Sidebar({
               title={t("sidebar.menu.settings")}
               onClick={onConfigurePath}
             >
-              ⚙
-            </button>
-            <button
-              type="button"
-              className="sidebar-icon-button"
-              title={t("app.actions.refresh")}
-              onClick={onRefresh}
-            >
-              ↺
+              <SettingsIcon size={16} />
             </button>
           </div>
         ) : null}
@@ -338,20 +319,14 @@ export function Sidebar({
               className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
               onClick={onConfigurePath}
             >
-              <span className="sidebar-link-icon">⚙</span>
+              <span className="sidebar-link-icon"><SettingsIcon size={16} /></span>
               <span>{t("sidebar.menu.settings")}</span>
             </button>
           </>
         ) : null}
 
         <div className="sidebar-version">
-          {isSidebarCollapsed ? (
-            <strong title={`v${packageJson.version}`}>
-              v{packageJson.version.split(".").slice(0, 2).join(".")}
-            </strong>
-          ) : (
-            <strong>v{packageJson.version}</strong>
-          )}
+          <strong>v{packageJson.version}</strong>
         </div>
 
         <div className="sidebar-realtime-row">
@@ -362,16 +337,14 @@ export function Sidebar({
               {lastRealtimeSyncAt ? ` · ${lastRealtimeSyncAt}` : ""}
             </span>
           </div>
-          {!isSidebarCollapsed ? (
-            <button
-              type="button"
-              className="sidebar-icon-button"
-              title={t("app.actions.refresh")}
-              onClick={onRefresh}
-            >
-              ↺
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="sidebar-icon-button"
+            title={t("app.actions.refresh")}
+            onClick={onRefresh}
+          >
+            <RefreshIcon size={16} />
+          </button>
         </div>
       </footer>
     </aside>

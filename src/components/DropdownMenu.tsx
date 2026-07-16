@@ -56,6 +56,18 @@ export function DropdownMenu({ trigger, children, className }: DropdownMenuProps
 
   useEffect(() => {
     if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      btnRef.current?.focus();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     const close = () => setOpen(false);
     document.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
@@ -75,6 +87,7 @@ export function DropdownMenu({ trigger, children, className }: DropdownMenuProps
           ref={menuRef}
           data-dropdown-menu="true"
           className={`dropdown-menu${className ? ` ${className}` : ""}`}
+          role="menu"
           style={{
             position: "fixed",
             top: pos?.top ?? -9999,

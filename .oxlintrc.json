@@ -1,0 +1,4 @@
+{
+  "ignorePatterns": ["dist", "src-tauri/target"],
+  "plugins": ["react"]
+}

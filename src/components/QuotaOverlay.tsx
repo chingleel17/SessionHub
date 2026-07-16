@@ -7,6 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useI18n } from "../i18n/I18nProvider";
 import type { OverlayStyle, QuotaSnapshot } from "../types";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { LockIcon, MoveIcon } from "./Icons";
+import { IconButton } from "./ui/IconButton";
 
 type QuotaOverlayProps = {
   snapshots: QuotaSnapshot[];
@@ -199,18 +201,11 @@ export function QuotaOverlay({
         {!locked ? (
           <div className="quota-overlay-edit-controls">
             <span className="quota-overlay-move-icon" aria-label={t("quota.overlay.editMode")} title={t("quota.overlay.editMode")}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                <path d="M8 1.5v13M1.5 8h13" />
-                <path d="m5.5 4.5 2.5-3 2.5 3M5.5 11.5l2.5 3 2.5-3M4.5 5.5l-3 2.5 3 2.5M11.5 5.5l3 2.5-3 2.5" />
-              </svg>
+              <MoveIcon size={14} />
             </span>
-            <button type="button" className="quota-overlay-lock-button quota-overlay-no-drag" onClick={onLockToggle} title={t("quota.overlay.lock")}>
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                <rect x="3.5" y="7" width="9" height="6.5" rx="1.25" />
-                <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
-                <path d="M8 9.5v1.75" />
-              </svg>
-            </button>
+            <IconButton label={t("quota.overlay.lock")} className="quota-overlay-lock-button quota-overlay-no-drag" onClick={onLockToggle}>
+              <LockIcon size={15} />
+            </IconButton>
           </div>
         ) : null}
 

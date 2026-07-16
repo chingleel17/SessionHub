@@ -19,6 +19,7 @@
 
 ```bash
 bun install
+bun run lint
 bun run build
 cd src-tauri
 cargo test
@@ -31,13 +32,16 @@ cargo test
 - 不使用 `unwrap()` 處理 production error path。
 - 前後端新增欄位時同步更新型別與序列化名稱。
 - 使用既有 i18n，不在 JSX 直接硬編寫使用者介面文字。
+- 一般操作與導覽圖示使用 `src/components/Icons.tsx` 集中的 Lucide 映射；圖表、quota ring 與品牌資產才可保留專用 SVG。
+- 優先使用 `src/components/ui/` 的 Button、IconButton、Select 與 `DropdownMenu`。無可見文字的操作必須使用 i18n accessible name。
+- `bun run lint` 是必要的前端品質門檻，lint error 不得合併。
 
 ## Pull Request
 
 1. 從 `main` 建立分支，命名為 `feature/...`、`fix/...` 或 `docs/...`。
 2. 保持變更聚焦，避免把無關重構混入功能或修正。
 3. 更新必要的測試、文件、CHANGELOG 或截圖。
-4. 執行 `bun run build`、`cargo fmt -- --check`、`cargo clippy --all-targets --all-features` 與 `cargo test`。
+4. 執行 `bun run lint`、`bun run build`、`cargo fmt -- --check`、`cargo clippy --all-targets --all-features` 與 `cargo test`。
 5. 填寫 Pull Request 模板，說明測試結果與可能的破壞性變更。
 
-CI 的前端建置、Rust 測試、依賴漏洞檢查與祕密掃描為必要門檻；fmt 與 Clippy 目前以報告方式執行，避免既有警告阻擋所有貢獻。至少一位維護者審查後，才會合併至 `main`。GitHub Copilot review 可作為輔助，不能取代人工審查。
+CI 的前端 lint、前端建置、Rust 測試、依賴漏洞檢查與祕密掃描為必要門檻；fmt 與 Clippy 目前以報告方式執行，避免既有警告阻擋所有貢獻。至少一位維護者審查後，才會合併至 `main`。GitHub Copilot review 可作為輔助，不能取代人工審查。

@@ -1,5 +1,7 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { SessionInfo } from "../types";
+import { SaveIcon } from "./Icons";
+import { Button } from "./ui/Button";
 
 type Props = {
   session: SessionInfo;
@@ -53,20 +55,16 @@ export function PlanEditor({
       </div>
 
       <div className="settings-actions">
-        <button type="button" className="primary-button" onClick={onSave}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-            <polyline points="17 21 17 13 7 13 7 21"/>
-            <polyline points="7 3 7 8 15 8"/>
-          </svg>
+        <Button variant="primary" onClick={onSave}>
+          <SaveIcon size={15} />
           {t("plan.actions.save")}
-        </button>
-        <button type="button" className="ghost-button" onClick={() => onOpenExternal(session)}>
+        </Button>
+        <Button variant="secondary" onClick={() => onOpenExternal(session)}>
           {t("plan.actions.openExternal")}
-        </button>
-        <button type="button" className="ghost-button" onClick={onClose}>
+        </Button>
+        <Button variant="secondary" onClick={onClose}>
           {t("plan.actions.close")}
-        </button>
+        </Button>
       </div>
     </article>
   );

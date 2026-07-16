@@ -92,7 +92,12 @@ export type SyncDirection = "source-to-target" | "target-to-source";
 
 export type SyncMode = "copy" | "link";
 
-export type AgentsRootLinkStatus = "linked" | "not-linked" | "conflict" | "missing";
+export type AgentsRootLinkStatus =
+    | { status: "linked" }
+    | { status: "partial"; unmatchedItems: string[] }
+    | { status: "unlinked-physical" }
+    | { status: "not-linked" }
+    | { status: "missing" };
 
 export type FileFingerprint = {
     path: string;

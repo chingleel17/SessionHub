@@ -14,11 +14,14 @@ import {
   DeleteIcon,
   EditNotesIcon,
   EditTagsIcon,
+  FocusIcon,
   PlanIcon,
   StatsIcon,
   TerminalIcon,
   UnarchiveIcon,
 } from "./Icons";
+import { IconButton } from "./ui/IconButton";
+import { ProviderIcon } from "./ProviderIcon";
 import { SessionStatsBadge } from "./SessionStatsBadge";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 
@@ -93,6 +96,7 @@ export function SessionCard({
 
         <div className="session-chip-row">
           <span className={`provider-tag provider-tag--${session.provider}`}>
+            <ProviderIcon provider={session.provider} label={getProviderLabel(session.provider)} />
             {getProviderLabel(session.provider)}
           </span>
           {session.isArchived ? (
@@ -160,110 +164,91 @@ export function SessionCard({
       ) : null}
 
       <div className="session-actions">
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
-          aria-label={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+        <IconButton
+          label={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+          className="session-action-button"
           onClick={() => onResumeSession(session)}
         >
           <TerminalIcon size={16} />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.focusTerminal")}
-          aria-label={t("session.actions.focusTerminal")}
+        </IconButton>
+        <IconButton
+          label={t("session.actions.focusTerminal")}
+          className="session-action-button"
           onClick={() => onFocusTerminal(session)}
         >
-          ⊙
-        </button>
+          <FocusIcon size={16} />
+        </IconButton>
 
         {supportsCommandCopy ? (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.copyCommand")}
-            aria-label={t("session.actions.copyCommand")}
+          <IconButton
+            label={t("session.actions.copyCommand")}
+            className="session-action-button"
             onClick={() => onCopyCommand(session)}
           >
             <CopyIcon size={16} />
-          </button>
+          </IconButton>
         ) : null}
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editNotes")}
-          aria-label={t("session.actions.editNotes")}
+        <IconButton
+          label={t("session.actions.editNotes")}
+          className="session-action-button"
           onClick={() => onEditNotes(session)}
         >
           <EditNotesIcon size={16} />
-        </button>
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editTags")}
-          aria-label={t("session.actions.editTags")}
+        <IconButton
+          label={t("session.actions.editTags")}
+          className="session-action-button"
           onClick={() => onEditTags(session)}
         >
           <EditTagsIcon size={16} />
-        </button>
+        </IconButton>
 
         {supportsPlanEditing ? (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.editPlan")}
-            aria-label={t("session.actions.editPlan")}
+          <IconButton
+            label={t("session.actions.editPlan")}
+            className="session-action-button"
             onClick={() => onOpenPlan(session)}
           >
             <PlanIcon size={16} />
-          </button>
+          </IconButton>
         ) : null}
 
         {session.isArchived ? (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.unarchive")}
-            aria-label={t("session.actions.unarchive")}
+          <IconButton
+            label={t("session.actions.unarchive")}
+            className="session-action-button"
             onClick={() => onUnarchive(session)}
           >
             <UnarchiveIcon size={16} />
-          </button>
+          </IconButton>
         ) : (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.archive")}
-            aria-label={t("session.actions.archive")}
+          <IconButton
+            label={t("session.actions.archive")}
+            className="session-action-button"
             onClick={() => onArchive(session)}
           >
             <ArchiveIcon size={16} />
-          </button>
+          </IconButton>
         )}
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("stats.detail.title")}
-          aria-label={t("stats.detail.title")}
+        <IconButton
+          label={t("stats.detail.title")}
+          className="session-action-button"
           onClick={() => setShowStats((value) => !value)}
         >
           <StatsIcon size={16} />
-        </button>
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button icon-button--danger"
-          title={t("session.actions.delete")}
-          aria-label={t("session.actions.delete")}
+        <IconButton
+          label={t("session.actions.delete")}
+          className="session-action-button"
           onClick={() => onDelete(session)}
+          danger
         >
           <DeleteIcon size={16} />
-        </button>
+        </IconButton>
       </div>
 
       <SessionStatsBadge

@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { ConfirmDialogState } from "../types";
+import { Button } from "./ui/Button";
 
 type Props = {
   dialog: ConfirmDialogState;
@@ -15,19 +16,18 @@ export function ConfirmDialog({ dialog, onCancel }: Props) {
         <h3>{dialog.title}</h3>
         <p>{dialog.message}</p>
         <div className="dialog-actions">
-          <button type="button" className="ghost-button" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             {t("dialog.cancel")}
-          </button>
-          <button
-            type="button"
-            className={dialog.tone === "danger" ? "danger-button" : "dialog-confirm-button"}
+          </Button>
+          <Button
+            variant={dialog.tone === "danger" ? "danger" : "primary"}
             onClick={() => {
               dialog.onConfirm();
               onCancel();
             }}
           >
             {dialog.actionLabel}
-          </button>
+          </Button>
         </div>
       </article>
     </div>

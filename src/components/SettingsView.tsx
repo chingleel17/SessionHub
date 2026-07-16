@@ -7,7 +7,10 @@ import type {
   ProviderIntegrationStatus,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
-import { MoonIcon, SunIcon } from "./Icons";
+import { ChevronRightIcon, DeleteIcon, EditNotesIcon, FolderIcon, MoonIcon, RefreshIcon, SunIcon } from "./Icons";
+import { Button } from "./ui/Button";
+import { IconButton } from "./ui/IconButton";
+import { Select } from "./ui/Select";
 
 type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
@@ -201,16 +204,13 @@ export function SettingsView({
                     <span>{t(labelKey)}</span>
                   </label>
                   <span className="checkbox-group-path" title={path}>{path}</span>
-                  <button
-                    type="button"
+                  <IconButton
+                    label={t("settings.actions.browseDirectory")}
                     className="checkbox-group-edit"
                     onClick={() => onBrowseDirectory(field)}
-                    title={t("settings.actions.browseDirectory")}
                   >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z" />
-                    </svg>
-                  </button>
+                    <EditNotesIcon size={12} />
+                  </IconButton>
                 </div>
               ))}
             </div>
@@ -323,7 +323,7 @@ export function SettingsView({
               {t("settings.fields.defaultLauncher")}
               <small className="settings-field-desc">{t("settings.fields.defaultLauncherDesc")}</small>
             </label>
-            <select
+            <Select
               id="default-launcher-select"
               className="settings-select"
               value={settingsForm.defaultLauncher ?? "terminal"}
@@ -337,14 +337,14 @@ export function SettingsView({
               <option value="gemini">Gemini</option>
               <option value="vscode">VS Code</option>
               <option value="explorer">Explorer</option>
-            </select>
+            </Select>
           </div>
 
           <div className="settings-field">
             <label htmlFor="analytics-refresh-interval-select">
               {t("settings.fields.analyticsRefreshInterval")}
             </label>
-            <select
+            <Select
               id="analytics-refresh-interval-select"
               className="settings-select"
               value={settingsForm.analyticsRefreshInterval ?? 30}
@@ -357,12 +357,12 @@ export function SettingsView({
             >
               <option value="10">{t("settings.fields.analyticsRefreshInterval.10")}</option>
               <option value="30">{t("settings.fields.analyticsRefreshInterval.30")}</option>
-            </select>
+            </Select>
           </div>
 
           <div className="settings-field">
             <label htmlFor="language-select">{t("sidebar.language.label")}</label>
-            <select
+            <Select
               id="language-select"
               className="settings-select"
               value={locale}
@@ -370,7 +370,7 @@ export function SettingsView({
             >
               <option value="zh-TW">{t("sidebar.language.zhTW")}</option>
               <option value="en-US">{t("sidebar.language.enUS")}</option>
-            </select>
+            </Select>
           </div>
 
           <div className="settings-section-divider" />
@@ -437,15 +437,15 @@ export function SettingsView({
           </div>
 
           <div className="settings-actions">
-            <button type="button" className="primary-button" onClick={onSave}>
+            <Button variant="primary" onClick={onSave}>
               {t("settings.actions.save")}
-            </button>
-            <button type="button" className="ghost-button" onClick={onDetectTerminal}>
+            </Button>
+            <Button variant="secondary" onClick={onDetectTerminal}>
               {t("settings.actions.detectTerminal")}
-            </button>
-            <button type="button" className="ghost-button" onClick={onDetectVscode}>
+            </Button>
+            <Button variant="secondary" onClick={onDetectVscode}>
               {t("settings.actions.detectEditor")}
-            </button>
+            </Button>
           </div>
         </div>
       </article>
@@ -556,53 +556,37 @@ export function SettingsView({
                         >
                           {t("settings.integrations.actions.recheck")}
                         </button>
-                        <button
-                          type="button"
-                          className="icon-button"
+                          <IconButton
+                            label={t("settings.integrations.actions.open")}
+                            className="icon-button"
                           disabled={!targetPath || Boolean(providerBusy)}
                           onClick={() => onOpenProviderPath(integration)}
-                          title={t("settings.integrations.actions.open")}
-                        >
-                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/>
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          className="icon-button"
+                          >
+                            <FolderIcon size={14} />
+                          </IconButton>
+                          <IconButton
+                            label={t("settings.integrations.actions.edit")}
+                            className="icon-button"
                           disabled={!targetPath || Boolean(providerBusy)}
                           onClick={() => onEditProviderPath(integration)}
-                          title={t("settings.integrations.actions.edit")}
-                        >
-                          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                            <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086zM11.189 6.25 9.75 4.81l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064z"/>
-                          </svg>
-                        </button>
+                          >
+                            <EditNotesIcon size={14} />
+                          </IconButton>
                         {integration.status === "installed" ? (
-                          <button
-                            type="button"
-                            className="icon-button icon-button--danger"
+                          <IconButton
+                            label={t("settings.integrations.actions.uninstall")}
+                            className="icon-button"
+                            danger
                             disabled={Boolean(providerBusy)}
                             onClick={() => onProviderAction(integration.provider, "uninstall")}
-                            title={t("settings.integrations.actions.uninstall")}
                           >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                              <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.576l-.66-6.6a.75.75 0 1 1 1.492-.149ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
-                            </svg>
-                          </button>
+                            <DeleteIcon size={14} />
+                          </IconButton>
                         ) : null}
                       </div>
                     ) : null}
 
-                    <svg
-                      className="provider-integration-chevron"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 16 16"
-                      fill="currentColor"
-                    >
-                      <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-                    </svg>
+                    <ChevronRightIcon className="provider-integration-chevron" size={14} />
                   </div>
 
                   {isExpanded ? (
@@ -680,9 +664,9 @@ export function SettingsView({
           <div className="section-heading">
             <h3>{t("quota.monitoring.title")}</h3>
             {(settingsForm.enableQuotaMonitoring ?? true) ? (
-              <button type="button" className="ghost-button" onClick={() => onRefreshQuota?.()}>
-                {t("quota.monitoring.manualRefresh")}
-              </button>
+              <IconButton label={t("quota.monitoring.manualRefresh")} onClick={() => onRefreshQuota?.()}>
+                <RefreshIcon />
+              </IconButton>
             ) : null}
           </div>
 
@@ -733,7 +717,7 @@ export function SettingsView({
 
               <div className="settings-field settings-field--stacked">
                 <label htmlFor="tray-quota-mode-select">{t("quota.settings.trayMode")}</label>
-                <select
+                <Select
                   id="tray-quota-mode-select"
                   className="settings-select"
                   value={settingsForm.trayQuotaMode ?? "icon_only"}
@@ -748,12 +732,12 @@ export function SettingsView({
                   <option value="percentage">{t("quota.settings.trayMode.percentage")}</option>
                   <option value="bar">{t("quota.settings.trayMode.bar")}</option>
                   <option value="hidden">{t("quota.settings.trayMode.hidden")}</option>
-                </select>
+                </Select>
               </div>
 
               <div className="settings-field settings-field--stacked">
                 <label htmlFor="tray-quota-primary-provider-select">{t("quota.settings.primaryProvider")}</label>
-                <select
+                <Select
                   id="tray-quota-primary-provider-select"
                   className="settings-select"
                   value={settingsForm.trayQuotaPrimaryProvider ?? ""}
@@ -770,7 +754,7 @@ export function SettingsView({
                       {providerLabels[provider as keyof typeof providerLabels] ?? provider}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               <label className="checkbox-group">
@@ -834,7 +818,7 @@ export function SettingsView({
 
                   <div className="settings-field settings-field--stacked">
                     <label htmlFor="quota-overlay-theme-select">{t("quota.settings.overlayTheme")}</label>
-                    <select
+                    <Select
                       id="quota-overlay-theme-select"
                       className="settings-select"
                       value={settingsForm.quotaOverlayTheme ?? "dark"}
@@ -847,12 +831,12 @@ export function SettingsView({
                     >
                       <option value="dark">{t("quota.settings.overlayTheme.dark")}</option>
                       <option value="light">{t("quota.settings.overlayTheme.light")}</option>
-                    </select>
+                    </Select>
                   </div>
 
                   <div className="settings-field settings-field--stacked">
                     <label htmlFor="quota-overlay-style-select">{t("quota.settings.overlayStyle")}</label>
-                    <select
+                    <Select
                       id="quota-overlay-style-select"
                       className="settings-select"
                       value={settingsForm.quotaOverlayStyle ?? "full"}
@@ -865,7 +849,7 @@ export function SettingsView({
                     >
                       <option value="full">{t("quota.settings.overlayStyle.full")}</option>
                       <option value="compact">{t("quota.settings.overlayStyle.compact")}</option>
-                    </select>
+                    </Select>
                   </div>
 
                   <div className="settings-field settings-field--stacked">

@@ -24,6 +24,7 @@
 
   /* ── 品牌主色 ── */
   --color-action-primary: #2563eb;
+  --color-action-primary-hover: #1d4ed8;
   --color-action-primary-text: #ffffff;
 
   --color-badge-bg: #e8f0ff;
@@ -63,6 +64,7 @@
   --color-realtime-dot: #9aa2b0;
   --color-status-success: #31b46e;
   --color-status-error: #e15353;
+  --color-status-error-hover: #c93737;
 
   --color-error-border: #f0b5b5;
   --color-error-surface: #fff7f7;

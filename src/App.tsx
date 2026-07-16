@@ -544,6 +544,7 @@ function App() {
     enableQuotaMonitoring: true,
     quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
     allowCreateProjectConfigDir: false,
+    agentsSourceRoot: "",
     trayQuotaMode: "icon_only",
     trayQuotaPrimaryProvider: null,
     trayQuotaPanelEnabled: true,
@@ -664,6 +665,7 @@ function App() {
         quotaEnabledProviders:
           settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
         allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
+        agentsSourceRoot: settingsQuery.data.agentsSourceRoot ?? "",
         trayQuotaMode: settingsQuery.data.trayQuotaMode ?? "icon_only",
         trayQuotaPrimaryProvider: settingsQuery.data.trayQuotaPrimaryProvider ?? null,
         trayQuotaPanelEnabled: settingsQuery.data.trayQuotaPanelEnabled ?? true,
