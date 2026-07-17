@@ -1,5 +1,5 @@
 # SessionHub 發布腳本
-# 用法: .\scripts\release.ps1 -Version 0.1.7
+# 用法: .\scripts\release.ps1 -Version 0.1.8
 #
 # 流程:
 #   1. 檢查工作區乾淨、位於 main 分支

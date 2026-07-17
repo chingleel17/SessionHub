@@ -5,7 +5,7 @@
 <p>
   <a href="https://github.com/chingleel17/SessionHub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/chingleel17/SessionHub/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
   <a href="https://github.com/chingleel17/SessionHub/releases"><img src="https://img.shields.io/github/v/release/chingleel17/SessionHub?style=for-the-badge&color=7c3aed" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/version-0.1.6-2563eb?style=for-the-badge" alt="Version 0.1.6">
+  <img src="https://img.shields.io/badge/version-0.1.8-2563eb?style=for-the-badge" alt="Version 0.1.8">
   <img src="https://img.shields.io/badge/platform-Windows-475569?style=for-the-badge" alt="Platform Windows">
   <img src="https://img.shields.io/badge/license-MIT-16a34a?style=for-the-badge" alt="MIT License">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20%2B%20React%2019%20%2B%20Rust-f97316?style=for-the-badge" alt="Tauri 2, React 19, Rust">

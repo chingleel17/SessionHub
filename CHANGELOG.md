@@ -13,6 +13,15 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-17
+
+### 調整
+
+- 重製 Session 統計面板：以摘要列、模型明細與工具呼叫三區呈現；模型明細顯示輸入／輸出 Token 與可用成本，多模型提供合計列，工具呼叫預設顯示前五項並可展開
+- Analytics 分頁移至 Agents 後方，控制列改為水平排列，快速日期範圍擴充為近一週、本週、近一個月與本月，並改善趨勢圖與圖例按鈕互動
+- 側欄收折改為共用 DOM 與平滑過渡，修正收折過程中的圖示漂移、即時狀態綠點消失、釘選項目與已開啟項目的對齊問題
+- 更新按鈕、下拉選單與 checkbox 的 hover／active 回饋，並改善 provider 標籤與 quota overlay 的視覺呈現
+
 ## [0.1.7] - 2026-07-16
 
 ### 調整
@@ -40,5 +49,7 @@
 - 多語系介面（繁體中文／English）
 - Minimal UI 設計系統：統一 design token、玻璃浮層、Linear 式分頁、自訂 scrollbar、`prefers-reduced-motion` 支援
 
-[Unreleased]: https://github.com/chingleel17/SessionHub/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/chingleel17/SessionHub/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/chingleel17/SessionHub/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/chingleel17/SessionHub/releases/tag/v0.1.7
 [0.1.6]: https://github.com/chingleel17/SessionHub/releases/tag/v0.1.6

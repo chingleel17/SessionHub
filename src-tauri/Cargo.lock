@@ -3871,7 +3871,7 @@ dependencies = [
 
 [[package]]
 name = "session-hub"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "chrono",
  "image",
