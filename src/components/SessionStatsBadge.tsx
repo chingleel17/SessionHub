@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { SessionInfo, SessionStats, SessionTodo } from "../types";
+import { formatDuration } from "../utils/formatDuration";
 
 type Props = {
   session: SessionInfo;
@@ -14,13 +15,6 @@ function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return String(value);
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes}m`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return m === 0 ? `${h}h` : `${h}h${m}m`;
 }
 
 function getTodoStatusLabel(

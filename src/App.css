@@ -101,6 +101,8 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--color-action-pri
   input[type="checkbox"],
   .app-shell,
   .sidebar-brand-copy,
+  .sidebar-icon-button,
+  .sidebar-realtime-label,
   .sidebar-link > span:not(.sidebar-link-icon) { transition: none; }
   .ui-button:active:not(:disabled),
   .ui-icon-button:active:not(:disabled),
@@ -153,8 +155,10 @@ textarea {
   transition: grid-template-columns var(--motion-base) var(--motion-ease);
 }
 
+/* 收折寬度 80px：側欄 padding 14px + 品牌 icon 52px + 14px，
+   使既有 icon 軸（中心 x=40px）在收折後天然置中，切換時無水平位移 */
 .app-shell.sidebar-collapsed {
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 80px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -228,7 +232,7 @@ textarea {
   align-self: center;
   position: absolute;
   top: 88px;
-  left: 28px;
+  left: 24px; /* 中心 x=40，對齊側欄 icon 軸 */
   z-index: 1;
   border-radius: var(--radius-button);
   background: var(--color-surface-panel);
@@ -248,7 +252,9 @@ textarea {
   align-items: center;
   gap: 12px;
   min-height: 44px;
-  padding: 0 14px;
+  /* margin-left 2 + padding 12 維持 icon 軸 x=40，並讓收折時 52px 內容寬有 1px 餘裕不被右邊框裁切 */
+  margin-left: 2px;
+  padding: 0 12px;
   border: 1px solid transparent;
   border-radius: 14px;
   background: transparent;
@@ -298,14 +304,11 @@ textarea {
   gap: 8px;
 }
 
-.sidebar-section-list--collapsed {
-  justify-items: center;
-}
-
 .sidebar-link-icon {
   display: inline-grid;
   place-items: center;
   width: 24px;
+  flex-shrink: 0;
   color: var(--color-badge-text);
   font-weight: 700;
 }
@@ -642,28 +645,6 @@ textarea {
   color: var(--color-text-primary);
 }
 
-.sidebar-open-icon-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.sidebar-open-item-close--collapsed {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  font-size: 10px;
-  opacity: 0;
-  background: var(--color-surface-panel);
-  border: 1px solid var(--color-border-subtle);
-}
-
-.sidebar-open-icon-wrap:hover .sidebar-open-item-close--collapsed {
-  opacity: 1;
-}
-
 /* 已開啟專案區段標題列：分隔線 + 右側按鈕 */
 .sidebar-open-section-header {
   display: flex;
@@ -740,15 +721,6 @@ textarea {
   border-radius: 6px;
 }
 
-/* Pin icon 在釘選項目左側 */
-.sidebar-pin-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
-  flex-shrink: 0;
-  width: 20px;
-}
 
 /* ─── Tabbar (removed, kept for sub-tab compatibility) ─────────────────────── */
 
@@ -2207,10 +2179,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .stats-panel {
   margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 14px;
-  background: var(--color-surface-input);
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .session-todos-panel {
@@ -2302,38 +2271,43 @@ html.embedded-quota-view .quota-overlay-no-drag {
   color: var(--color-status-error);
 }
 
-.stats-panel-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.stats-panel-col {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--color-surface-panel);
-  border: 1px solid var(--color-border-subtle);
-}
-
-.stats-panel-metric {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.stats-panel-label {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .stats-panel-section {
   display: grid;
-  gap: 6px;
+  gap: 10px;
+  padding: 16px 0;
+}
+
+.stats-panel-section + .stats-panel-section {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.stats-panel-summary {
+  gap: 12px;
+}
+
+.stats-panel-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+
+.stats-panel-stat {
+  display: grid;
+  gap: 2px;
+  min-width: 58px;
+}
+
+.stats-panel-stat strong {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.stats-panel-stat span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .stats-panel-text {
@@ -2395,11 +2369,9 @@ html.embedded-quota-view .quota-overlay-no-drag {
   }
 }
 
-.stats-tool-breakdown-scroll {
+.stats-tool-breakdown {
   display: grid;
   gap: 8px;
-  max-height: 160px;
-  overflow-y: auto;
 }
 
 .stats-tool-row {
@@ -2411,10 +2383,60 @@ html.embedded-quota-view .quota-overlay-no-drag {
   border-top: 1px solid var(--color-border-subtle);
 }
 
-@media (max-width: 520px) {
-  .stats-panel-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.stats-model-table-wrap {
+  overflow-x: auto;
+}
+
+.stats-model-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.stats-model-table th,
+.stats-model-table td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stats-model-table th:first-child,
+.stats-model-table td:first-child {
+  max-width: 240px;
+  overflow: hidden;
+  padding-right: 16px;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.stats-model-table thead th {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.stats-model-table tfoot th,
+.stats-model-table tfoot td {
+  border-bottom: 0;
+  font-weight: 600;
+}
+
+.stats-panel-expand {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-action-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: color var(--motion-fast) var(--motion-ease);
+}
+
+.stats-panel-expand:hover {
+  color: var(--color-text-primary);
 }
 
 .project-stats-banner {
@@ -2726,17 +2748,9 @@ html.embedded-quota-view .quota-overlay-no-drag {
   gap: 8px;
 }
 
-.sidebar-collapsed .sidebar {
-  padding-inline: 12px;
-}
-
-.sidebar-collapsed .sidebar-brand {
-  justify-content: center;
-}
-
+/* 收折 = 同一套版面、同一條 icon 軸，只淡出文字內容；所有元素不產生水平位移 */
 .sidebar-collapsed .sidebar-brand-copy,
 .sidebar-collapsed .sidebar-panel,
-.sidebar-collapsed .sidebar-footer-button,
 .sidebar-collapsed .sidebar-realtime-label {
   opacity: 0;
 }
@@ -2748,14 +2762,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
   pointer-events: none;
 }
 
-.sidebar-collapsed .sidebar-version {
-  text-align: center;
-  font-size: 0.7rem;
-}
-
 .sidebar-collapsed .sidebar-menu {
-  order: 2;
-  align-items: center;
   padding-right: 0;
   scrollbar-width: none;
 }
@@ -2765,23 +2772,34 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 .sidebar-collapsed .sidebar-link {
-  justify-content: center;
   gap: 0;
+}
+
+/* 已開啟項目的關閉鈕改為右上角浮動小圓鈕（hover 顯示） */
+.sidebar-collapsed .sidebar-open-item {
+  position: relative;
+}
+
+.sidebar-collapsed .sidebar-open-item-close {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  font-size: 10px;
+  background: var(--color-surface-panel);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* 全部關閉按鈕收折時淡出，只留分隔線 */
+.sidebar-collapsed .sidebar-open-section-clear {
+  width: 0;
   padding: 0;
-  width: 40px;
-  height: 40px;
-  min-height: unset;
-  border-radius: 12px;
-}
-
-.sidebar-collapsed .sidebar-link-icon {
-  width: 24px;
-}
-
-.sidebar-collapsed .sidebar-footer {
-  width: 100%;
-  justify-items: center;
-  align-items: center;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 @media (max-width: 900px) {
@@ -2848,13 +2866,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
 /* ========================
    Sidebar quick-action bar
    ======================== */
-
-.sidebar-quick-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 
 /* Theme toggle switch */
 .theme-toggle-row {
@@ -2937,7 +2948,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), width var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
 }
 
 .sidebar-icon-button:hover,
@@ -3008,19 +3019,26 @@ html.embedded-quota-view .quota-overlay-no-drag {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  /* padding-left 21px 讓狀態點中心落在 x=40 的側欄 icon 軸上（14 + 21 + 5） */
+  padding: 8px 12px 8px 21px;
   border-radius: 12px;
   background: var(--color-surface-sidebar-muted);
   color: var(--color-text-secondary);
   font-size: 12px;
 }
 
+.sidebar-realtime .realtime-dot {
+  flex-shrink: 0;
+}
+
 .sidebar-realtime-label {
   flex: 1;
   min-width: 0;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: max-width var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
 }
 
 .sidebar-realtime-row {
@@ -3034,21 +3052,19 @@ html.embedded-quota-view .quota-overlay-no-drag {
   min-width: 0;
 }
 
-.sidebar-collapsed .sidebar-quick-actions {
-  width: 40px;
-  flex-direction: column;
-  align-items: center;
+/* 收折時文字與刷新鈕淡出收攏，綠點留在原位不移動 */
+.sidebar-collapsed .sidebar-realtime-label {
+  max-width: 0;
 }
 
-.sidebar-collapsed .sidebar-realtime {
-  justify-content: center;
-  padding: 8px;
-}
-
-.sidebar-collapsed .sidebar-realtime-row {
-  width: 40px;
-  flex-direction: column;
-  align-items: center;
+.sidebar-collapsed .sidebar-realtime-row .sidebar-icon-button {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 /* ========================
@@ -3187,12 +3203,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   flex-shrink: 0;
 }
 
-/* Pinned project initial letter icon in expanded sidebar */
+/* 專案首字母 icon（釘選與已開啟項目共用，寬度對齊 sidebar-link-icon 的 24px icon 軸） */
 .sidebar-pinned-initial {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  width: 24px;
   height: 20px;
   border-radius: 6px;
   background: var(--color-surface-accent);
@@ -3200,6 +3217,18 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+/* 釘選項目在首字母 icon 右上角的 pin 小徽章 */
+.sidebar-pin-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 999px;
+  background: var(--color-surface-sidebar);
+  color: var(--color-text-secondary);
 }
 
 .sidebar-group-label-wrap {
@@ -3540,10 +3569,10 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 .analytics-controls-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
 }
 
 .analytics-quick-actions {
@@ -3554,7 +3583,8 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .analytics-generate-action {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
+  margin-left: auto;
 }
 
 .trend-chart {
@@ -3586,8 +3616,8 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 .trend-chart-series--primary {
-  stroke: #6366f1;
-  fill: #6366f1;
+  stroke: var(--color-action-primary);
+  fill: var(--color-action-primary);
 }
 
 .trend-chart-series--secondary {
@@ -3610,17 +3640,30 @@ html.embedded-quota-view .quota-overlay-no-drag {
 .trend-chart-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
   background: transparent;
   color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
+}
+
+.trend-chart-toggle:hover {
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-text-primary);
 }
 
 .trend-chart-toggle--active {
-  background: var(--color-surface-panel);
+  background: var(--color-action-primary-subtle-bg);
+  border-color: var(--color-action-primary-subtle-border);
   color: var(--color-text-primary);
 }
 

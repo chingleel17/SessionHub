@@ -261,7 +261,7 @@ export function SessionCard({
       />
       {showStats ? (
         <>
-          {stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
+          {stats ? <SessionStatsPanel stats={stats} /> : null}
         </>
       ) : null}
     </article>

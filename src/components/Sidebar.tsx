@@ -154,6 +154,7 @@ export function Sidebar({
         <button
           type="button"
           className={`sidebar-link ${activeView === "dashboard" ? "active" : ""}`}
+          title={t("sidebar.menu.dashboard")}
           onClick={() => onNavigate("dashboard")}
         >
           <span className="sidebar-link-icon"><DashboardIcon size={18} /></span>
@@ -167,22 +168,12 @@ export function Sidebar({
             onDragLeave={handleDragLeavePinned}
             onDrop={handleDropOnPinned}
           >
-            {isSidebarCollapsed && <div className="sidebar-section-divider" aria-hidden="true" />}
+            <div className="sidebar-section-divider" aria-hidden="true" />
 
-            <div className={`sidebar-section-list ${isSidebarCollapsed ? "sidebar-section-list--collapsed" : ""}`}>
+            <div className="sidebar-section-list">
               {visiblePinnedGroups.map((group) => {
                 const initial = group.title.charAt(0).toUpperCase();
-                return isSidebarCollapsed ? (
-                  <button
-                    key={group.key}
-                    type="button"
-                    className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
-                    title={getGroupTooltip(group)}
-                    onClick={() => onOpenProject(group.key)}
-                  >
-                    {initial}
-                  </button>
-                ) : (
+                return (
                   <button
                     key={group.key}
                     type="button"
@@ -190,8 +181,11 @@ export function Sidebar({
                     title={getGroupTooltip(group)}
                     onClick={() => onOpenProject(group.key)}
                   >
-                    <span className="sidebar-link-icon sidebar-pin-icon">
-                      <PinIcon size={13} />
+                    <span className="sidebar-link-icon sidebar-pinned-initial">
+                      {initial}
+                      <span className="sidebar-pin-badge" aria-hidden="true">
+                        <PinIcon size={9} />
+                      </span>
                     </span>
                     {renderGroupLabel(group)}
                   </button>
@@ -203,50 +197,24 @@ export function Sidebar({
 
         {openGroups.length > 0 ? (
           <>
-            {/* 分隔線列：左側線條 + 右側全部關閉按鈕（collapsed 時只顯示分隔線） */}
-            {!isSidebarCollapsed ? (
-              <div className="sidebar-open-section-header">
-                <div className="sidebar-open-section-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  className="sidebar-open-section-clear"
-                  title={t("sidebar.clearOpen")}
-                  onClick={onClearOpenProjects}
-                >
-                  ↓ {t("sidebar.clearOpen")}
-                </button>
-              </div>
-            ) : (
-              visiblePinnedGroups.length > 0 ? (
-                <div className="sidebar-section-divider" aria-hidden="true" />
-              ) : null
-            )}
+            {/* 分隔線列：左側線條 + 右側全部關閉按鈕（collapsed 時按鈕淡出、只留分隔線） */}
+            <div className="sidebar-open-section-header">
+              <div className="sidebar-open-section-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="sidebar-open-section-clear"
+                title={t("sidebar.clearOpen")}
+                onClick={onClearOpenProjects}
+              >
+                ↓ {t("sidebar.clearOpen")}
+              </button>
+            </div>
 
-            <div className={`sidebar-section-list ${isSidebarCollapsed ? "sidebar-section-list--collapsed" : ""}`}>
+            <div className="sidebar-section-list">
               {openGroups.map((group) => {
                 const initial = group.title.charAt(0).toUpperCase();
                 const isBeingDraggedOver = dragOverKey === group.key;
-                return isSidebarCollapsed ? (
-                  <div key={group.key} className="sidebar-open-icon-wrap">
-                    <button
-                      type="button"
-                      className={`sidebar-icon-button ${activeView === group.key ? "active" : ""}`}
-                      title={getGroupTooltip(group)}
-                      onClick={() => onOpenProject(group.key)}
-                    >
-                      {initial}
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-open-item-close sidebar-open-item-close--collapsed"
-                      title={t("sidebar.closeProject")}
-                      aria-label={`${t("sidebar.closeProject")} ${group.title}`}
-                      onClick={(e) => { e.stopPropagation(); onCloseProject(group.key); }}
-                    >
-                      <CloseIcon size={14} />
-                    </button>
-                  </div>
-                ) : (
+                return (
                   <div
                     key={group.key}
                     className={`sidebar-open-item ${isBeingDraggedOver ? "sidebar-open-item--drag-over" : ""} ${dragKey === group.key ? "sidebar-open-item--dragging" : ""}`}
@@ -283,47 +251,24 @@ export function Sidebar({
       </nav>
 
       <footer className="sidebar-footer">
-        {isSidebarCollapsed ? (
-          <div className="sidebar-quick-actions">
-            <button
-              type="button"
-              className={`sidebar-icon-button ${activeView === "agents-global" ? "active" : ""}`}
-              title={t("agents.nav")}
-              onClick={() => onNavigate("agents-global")}
-            >
-              <AgentsIcon size={16} />
-            </button>
-            <button
-              type="button"
-              className={`sidebar-icon-button ${activeView === "settings" ? "active" : ""}`}
-              title={t("sidebar.menu.settings")}
-              onClick={onConfigurePath}
-            >
-              <SettingsIcon size={16} />
-            </button>
-          </div>
-        ) : null}
-
-        {!isSidebarCollapsed ? (
-          <>
-            <button
-              type="button"
-              className={`sidebar-link ${activeView === "agents-global" ? "active" : ""}`}
-              onClick={() => onNavigate("agents-global")}
-            >
-              <span className="sidebar-link-icon"><AgentsIcon size={16} /></span>
-              <span>{t("agents.nav")}</span>
-            </button>
-            <button
-              type="button"
-              className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
-              onClick={onConfigurePath}
-            >
-              <span className="sidebar-link-icon"><SettingsIcon size={16} /></span>
-              <span>{t("sidebar.menu.settings")}</span>
-            </button>
-          </>
-        ) : null}
+        <button
+          type="button"
+          className={`sidebar-link ${activeView === "agents-global" ? "active" : ""}`}
+          title={t("agents.nav")}
+          onClick={() => onNavigate("agents-global")}
+        >
+          <span className="sidebar-link-icon"><AgentsIcon size={16} /></span>
+          <span>{t("agents.nav")}</span>
+        </button>
+        <button
+          type="button"
+          className={`sidebar-link ${activeView === "settings" ? "active" : ""}`}
+          title={t("sidebar.menu.settings")}
+          onClick={onConfigurePath}
+        >
+          <span className="sidebar-link-icon"><SettingsIcon size={16} /></span>
+          <span>{t("sidebar.menu.settings")}</span>
+        </button>
 
         <div className="sidebar-version">
           <strong>v{packageJson.version}</strong>

@@ -19,6 +19,11 @@
 - **WHEN** 使用者將指標停留於共用 Select 或 checkbox
 - **THEN** 控制項顯示 hover 邊框或背景變化，非僅游標形狀改變
 
+#### Scenario: hover 趨勢圖圖例切換鈕
+
+- **WHEN** 使用者將指標停留於趨勢圖下方的數據線圖例切換鈕
+- **THEN** 切換鈕顯示 hover 背景變化（subtle 強調底），active（已選取）狀態以 subtle 底與邊框呈現，且按鈕內文字水平置中
+
 #### Scenario: 減少動態偏好
 
 - **WHEN** 作業系統啟用 reduce motion

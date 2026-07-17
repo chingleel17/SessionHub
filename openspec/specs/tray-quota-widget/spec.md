@@ -53,7 +53,7 @@
 - **THEN** overlay 以單列水平 chips 呈現：每個 provider 顯示縮寫 + 迷你圓環 + 最高 window 用量百分比（同狀態列 QuotaRing 視覺）
 - **AND** hover chip 顯示該 provider 各 window 明細 tooltip
 - **AND** 視窗寬度縮至內容寬（max-content），外觀為藥丸形圓角
-- **AND** `quota_overlay_style: full`（預設）維持進度條列表版型
+- **AND** `quota_overlay_style: full` 維持進度條列表版型（使用者可於設定切換）
 
 #### Scenario: 鎖定模式滑鼠穿透
 
@@ -69,6 +69,12 @@
 - **AND** 編輯模式使用原生 Windows drag region；鎖頭按鈕不屬於 drag region 且可正常操作
 - **AND** 位置由 window-state plugin 持久化，重啟後還原
 - **AND** 還原位置若超出目前可用螢幕範圍（如副螢幕已拔除），overlay 回到主螢幕可見位置
+
+#### Scenario: 首次啟用預設定位於螢幕右下角
+
+- **WHEN** overlay 首次建立（`tauri-plugin-window-state` 尚無該視窗 label 的已存位置紀錄）
+- **THEN** 系統將 overlay 定位於主螢幕右下角，保留 16px 邊距，不落在系統預設位置
+- **AND** 若視窗尺寸大於可用螢幕範圍，定位座標不小於螢幕左上角原點
 
 #### Scenario: 獨佔全螢幕限制
 
@@ -104,7 +110,7 @@
 - **THEN** tray 圖示立即依新模式重繪
 - **AND** overlay 依 `quota_overlay_enabled` 立即建立或關閉，依 `quota_overlay_opacity`、`quota_overlay_locked`、`quota_overlay_providers`、`quota_overlay_theme`、`quota_overlay_style` 立即更新，不需重啟 app
 - **AND** Windows transparent WebView 必要時透過尺寸微調重繪，不重新載入 WebView，避免快照資料或鎖定狀態短暫重置
-- **AND** 所有新增設定欄位缺席時以 serde default 回填（向後相容既有 settings 檔）
+- **AND** 所有新增設定欄位缺席時以 serde default 回填（向後相容既有 settings 檔）；`quota_overlay_opacity` 預設 `0.3`、`quota_overlay_style` 預設 `compact`
 
 ### Requirement: OpenCode Gateway 觸發上游 quota 更新
 

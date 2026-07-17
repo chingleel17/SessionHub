@@ -22,13 +22,21 @@ function formatDateInput(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
-function buildQuickRange(type: "7d" | "30d" | "month") {
+type QuickRangeType = "last7d" | "thisWeek" | "last30d" | "thisMonth";
+
+function buildQuickRange(type: QuickRangeType) {
   const now = new Date();
   const endDate = formatDateInput(now);
-  if (type === "month") {
+  if (type === "thisMonth") {
     return { startDate: formatDateInput(new Date(now.getFullYear(), now.getMonth(), 1)), endDate };
   }
-  const days = type === "7d" ? 6 : 29;
+  if (type === "thisWeek") {
+    // 週一為一週起始
+    const start = new Date(now);
+    start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    return { startDate: formatDateInput(start), endDate };
+  }
+  const days = type === "last7d" ? 6 : 29;
   const start = new Date(now);
   start.setDate(now.getDate() - days);
   return { startDate: formatDateInput(start), endDate };
@@ -42,7 +50,7 @@ function isSessionInRange(session: SessionInfo, startDate: string, endDate: stri
 
 export function ProjectAnalyticsTab({ sessions, sessionStats, onFetchAnalytics }: Props) {
   const { t } = useI18n();
-  const initialRange = useMemo(() => buildQuickRange("7d"), []);
+  const initialRange = useMemo(() => buildQuickRange("last7d"), []);
   const [startDate, setStartDate] = useState(initialRange.startDate);
   const [endDate, setEndDate] = useState(initialRange.endDate);
   const [groupBy, setGroupBy] = useState<AnalyticsGroupBy>("day");
@@ -50,7 +58,7 @@ export function ProjectAnalyticsTab({ sessions, sessionStats, onFetchAnalytics }
   const [hasFetched, setHasFetched] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleQuickRange = (type: "7d" | "30d" | "month") => {
+  const handleQuickRange = (type: QuickRangeType) => {
     const next = buildQuickRange(type);
     setStartDate(next.startDate);
     setEndDate(next.endDate);
@@ -93,13 +101,16 @@ export function ProjectAnalyticsTab({ sessions, sessionStats, onFetchAnalytics }
       <section className="toolbar-card analytics-controls-card">
         <div className="analytics-controls-grid">
           <div className="analytics-quick-actions">
-            <button type="button" className="ghost-button" onClick={() => handleQuickRange("7d")}>
-              7D
+            <button type="button" className="ghost-button" onClick={() => handleQuickRange("last7d")}>
+              {t("analytics.quickRange.last7d")}
             </button>
-            <button type="button" className="ghost-button" onClick={() => handleQuickRange("30d")}>
-              30D
+            <button type="button" className="ghost-button" onClick={() => handleQuickRange("thisWeek")}>
+              {t("analytics.quickRange.thisWeek")}
             </button>
-            <button type="button" className="ghost-button" onClick={() => handleQuickRange("month")}>
+            <button type="button" className="ghost-button" onClick={() => handleQuickRange("last30d")}>
+              {t("analytics.quickRange.last30d")}
+            </button>
+            <button type="button" className="ghost-button" onClick={() => handleQuickRange("thisMonth")}>
               {t("analytics.quickRange.month")}
             </button>
           </div>

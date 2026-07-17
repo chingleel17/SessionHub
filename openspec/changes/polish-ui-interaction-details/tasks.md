@@ -23,8 +23,22 @@
 - [x] 4.2 將收折按鈕從 `.sidebar-brand` 內移出為固定位置元素，展開與收折狀態下座標一致（不再位於品牌 icon 旁）
 - [x] 4.3 統一收折狀態下品牌 icon 與 `.sidebar-link` icon 的水平置中基準，消除切換時 icon 跳位
 - [x] 4.4 驗證 <900px 行動版側欄行為不退化
+- [x] 4.5 收折/展開改為共用單一 DOM：移除 `Sidebar.tsx` 收折分支（`sidebar-icon-button`、quick-actions），導覽/釘選/已開啟/footer 固定用 `sidebar-link`，收折僅由 CSS 淡出文字
+- [x] 4.6 收折寬度改 80px 對齊既有 icon 軸（中心 x=40）：移除置中規則、收折按鈕 `left: 24px`，消除收折過程「先往右再往左」的水平漂移
+- [x] 4.7 修正底部即時狀態綠點：`.realtime-dot` 加 `flex-shrink: 0`、pill `padding-left: 21px` 對齊 icon 軸、label 以 `max-width` 過渡收攏、刷新鈕收折時淡出，收折後綠點不再消失或位移
+- [x] 4.8 釘選項目兩態統一為首字母 icon + pin 徽章；已開啟項目關閉鈕收折時改右上角浮動小圓鈕；「全部關閉」收折時淡出僅留分隔線
+- [x] 4.9 Dashboard 與釘選區分隔線改為兩態皆顯示；`sidebar-link` 內距改 `margin-left: 2px + padding: 0 12px` 修正收折項目右緣被 1px 邊框裁切
 
-## 5. 品質驗證
+## 5. Analytics 頁互動細節
 
-- [x] 5.1 執行 `bun run lint` 與前端 build，確認無新增警告
-- [x] 5.2 手動走查：Dashboard、設定頁、專案頁於 dark/light 主題下的按鈕/選單/checkbox hover、側欄收折動畫與收折按鈕位置
+- [x] 5.1 `ProjectView.tsx`：將 Analytics sub-tab 移至 Agents 之後（順序 Sessions → Plans/Specs → Agents → Analytics）
+- [x] 5.2 `ProjectAnalyticsTab.tsx` + `App.css`：控制列由 grid 自動換欄改為 flex 水平排列，產生按鈕靠右對齊
+- [x] 5.3 快速區間擴充為「近一週 / 本週 / 近一個月 / 本月」四項（`buildQuickRange` 新增 `thisWeek`、以週一為週起始），並補 `analytics.quickRange.last7d / thisWeek / last30d` 至 zh-TW / en-US
+- [x] 5.4 `App.css`：趨勢圖 `.trend-chart-series--primary` 由硬編碼 `#6366f1` 改用 `var(--color-action-primary)`
+- [x] 5.5 `App.css`：`.trend-chart-toggle` 補 hover / active（subtle bg + subtle border）、`justify-content: center` 文字置中與 `--motion-fast` 過場
+
+## 6. 品質驗證
+
+- [x] 6.1 執行 `bun run lint` 與前端 build，確認無新增警告
+- [x] 6.2 手動走查：Dashboard、設定頁、專案頁於 dark/light 主題下的按鈕/選單/checkbox hover、側欄收折動畫與收折按鈕位置
+- [x] 6.3 手動走查：Analytics 頁 sub-tab 順序、控制列水平排列、四個快速區間、趨勢圖數據線配色與圖例切換鈕 hover（dark/light 雙主題）

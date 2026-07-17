@@ -46,6 +46,16 @@
 - 收折狀態下品牌 icon 與 `.sidebar-link` icon 使用相同的水平置中基準（同寬容器置中），消除切換時的位移。
 - 文字隱藏改以 `opacity + width/visibility` 過渡取代瞬間 `display: none`，或至少讓 icon 欄位寬度在兩狀態一致，避免 icon 跳位。
 
+### D4a. 收折/展開共用單一 DOM 與固定 icon 軸（實作後修正）
+
+首版實作在收折時由 React 換為另一套 DOM（40px 置中的 `sidebar-icon-button`、footer quick-actions），並以 `align-items: center` 置中——但 class 翻轉是瞬間的、側欄寬度動畫是漸進的，導致元素先跳到「還很寬的側欄」中央再隨寬度收回（水平漂移），底部即時狀態綠點也因 label 僅 `opacity: 0` 仍佔位、`.realtime-dot` 無 `flex-shrink: 0` 而被壓縮消失。修正為：
+
+- 兩種狀態共用同一套 DOM 與版面：導覽、釘選、已開啟項目、footer 均固定用 `sidebar-link`，收折只由 CSS 淡出文字，不換元件、不置中。
+- 收折寬度改為 80px（側欄 padding 14 + 品牌 icon 52 + 14），使既有 icon 軸（中心 x=40px）收折後天然置中，全程零水平位移；收折按鈕 `left: 24px`、即時狀態綠點以 `padding-left: 21px` 對齊同一軸線。
+- `sidebar-link` 內距改為 `margin-left: 2px + padding: 0 12px`（合計維持 icon 軸 x=40），讓收折時 52px 最小內容寬對側欄 1px 右邊框留有餘裕，避免右緣被 `overflow: hidden` 裁切。
+- 釘選項目兩態統一為「首字母 icon + 右上角 pin 小徽章」；已開啟項目的關閉鈕收折時改為右上角浮動小圓鈕（hover 顯示）；「全部關閉」按鈕收折時淡出僅留分隔線；Dashboard 與釘選區之間的分隔線兩態皆顯示。
+- 取捨：收折狀態下底部刷新鈕淡出不可用（Dashboard 仍有刷新入口），釘選項目展開時視覺由 pin icon 改為首字母。
+
 ## Risks / Trade-offs
 
 - [`ui-primitives` spec 尚未歸檔] `standardize-frontend-ui-foundation` 已完成但未 archive，`openspec/specs/ui-primitives` 尚不存在 → 本 change 的 delta 以 ADDED 補充新要求而非 MODIFIED 既有要求，避免歸檔順序造成衝突；建議先歸檔前一個 change。

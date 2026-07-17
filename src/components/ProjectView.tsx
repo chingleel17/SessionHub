@@ -430,17 +430,17 @@ export function ProjectView({
             </button>
             <button
               type="button"
-              className={`sub-tab-item ${normalizedSubTab === "analytics" ? "sub-tab-item--active" : ""}`}
-              onClick={() => setActiveSubTab("analytics")}
-            >
-              {t("project.subTab.analytics")}
-            </button>
-            <button
-              type="button"
               className={`sub-tab-item ${normalizedSubTab === "agents" ? "sub-tab-item--active" : ""}`}
               onClick={() => setActiveSubTab("agents")}
             >
               {t("project.subTab.agents")}
+            </button>
+            <button
+              type="button"
+              className={`sub-tab-item ${normalizedSubTab === "analytics" ? "sub-tab-item--active" : ""}`}
+              onClick={() => setActiveSubTab("analytics")}
+            >
+              {t("project.subTab.analytics")}
             </button>
             {openDetailKeys.map((detailKey) => {
               const detail = parseDetailTabKey(detailKey);
