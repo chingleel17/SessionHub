@@ -10,4 +10,4 @@
 
 - [x] 2.1 `cargo check --lib` 通過
 - [x] 2.2 `bun run build` 通過
-- [ ] 2.3 手動驗證：刪除 `.window-state.json` 中 overlay 紀錄後重新啟用 overlay，確認出現在螢幕右下角、精簡版型、透明度明顯偏高
+- [x] 2.3 手動驗證：刪除 `.window-state.json` 中 overlay 紀錄後重新啟用 overlay，確認出現在螢幕右下角、精簡版型、透明度明顯偏高
