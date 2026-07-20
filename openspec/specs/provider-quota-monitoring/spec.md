@@ -106,6 +106,12 @@ status:     String          — API 原始狀態字串（如 "active"）
 - **WHEN** `.credentials.json` 不存在或 token 讀取失敗
 - **THEN** 回傳 `status: "no_auth"`，`error_message: "Claude OAuth token 不可讀，請確認 Claude Code 已登入"`
 
+#### Scenario: Claude 視窗百分比正規化（含 <= 1% 邊界）
+
+- **WHEN** usage API 回傳的視窗百分比欄位（頂層 `utilization` / `used_percentage`、`limits[].percent`）為 0–100 範圍
+- **THEN** 系統一律將其除以 100 得到 `utilization`（0.0–1.0），不得以「值是否大於 1」啟發式判斷數值範圍
+- **AND** 當實際用量 <= 1%（如 `utilization: 1` 代表 1%）時，解析結果為 `0.01`，不得誤判為比例值而顯示 100%
+
 ### Requirement: Claude adapter 解析 limits 陣列中的 scoped-model 每週視窗
 
 Claude quota adapter SHALL 在解析頂層時間視窗後，額外掃描 usage API 回應的 `limits` 陣列，為每個 `group == "weekly"` 且 `scope.model.display_name` 非空的項目產生一個 `QuotaWindow`：`window_key` 為 `seven_day_<display_name 小寫>`、`label` 為該 `display_name`、`utilization` 為 `percent / 100`、`resets_at` 為該項目自身的 `resets_at`。此解析 SHALL 為資料驅動，不硬編特定模型名稱；若解析出的 `window_key` 與已產生的頂層視窗重複，SHALL 略過以避免重複計入。

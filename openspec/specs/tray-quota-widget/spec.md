@@ -50,7 +50,8 @@
 #### Scenario: 精簡版型（圓環一列）
 
 - **WHEN** `quota_overlay_style: compact`
-- **THEN** overlay 以單列水平 chips 呈現：每個 provider 顯示縮寫 + 迷你圓環 + 最高 window 用量百分比（同狀態列 QuotaRing 視覺）
+- **THEN** overlay 以單列水平 chips 呈現：每個 provider 顯示縮寫 + 迷你圓環 + 主要 window 用量百分比（同狀態列 QuotaRing 視覺）
+- **AND** 主要 window 取 `windows[0]`（adapter 回傳順序的第一個，如 Claude 的 5h），與狀態列、Quota Overview 的主要數值一致，不取所有 window 的最大值
 - **AND** hover chip 顯示該 provider 各 window 明細 tooltip
 - **AND** 視窗寬度縮至內容寬（max-content），外觀為藥丸形圓角
 - **AND** `quota_overlay_style: full` 維持進度條列表版型（使用者可於設定切換）
@@ -111,6 +112,14 @@
 - **AND** overlay 依 `quota_overlay_enabled` 立即建立或關閉，依 `quota_overlay_opacity`、`quota_overlay_locked`、`quota_overlay_providers`、`quota_overlay_theme`、`quota_overlay_style` 立即更新，不需重啟 app
 - **AND** Windows transparent WebView 必要時透過尺寸微調重繪，不重新載入 WebView，避免快照資料或鎖定狀態短暫重置
 - **AND** 所有新增設定欄位缺席時以 serde default 回填（向後相容既有 settings 檔）；`quota_overlay_opacity` 預設 `0.3`、`quota_overlay_style` 預設 `compact`
+
+#### Scenario: Provider 清單顯示順序與版面一致
+
+- **WHEN** Settings 顯示「個別平台監控」「Overlay 顯示的 provider」清單或「主要顯示 provider」下拉選單
+- **THEN** provider 一律依固定順序呈現：claude → copilot → codex → opencode → antigravity
+- **AND** 「Overlay 顯示的 provider」列出全部 provider；未啟用個別監控者以半透明 disabled 呈現，不可勾選
+- **AND** 「主要顯示 provider」下拉僅列出已啟用監控的 provider，順序同上
+- **AND** 兩個 checkbox 清單以等寬欄位（grid）排版，選項間距一致，不受標籤文字長度影響
 
 ### Requirement: OpenCode Gateway 觸發上游 quota 更新
 

@@ -95,11 +95,11 @@ function getVisibleRows(
     });
 }
 
-/** 取 snapshot 中最高的 window 用量，無資料回 null */
-function getMaxUtilization(snapshot: QuotaSnapshot): number | null {
+/** 取 snapshot 的主要 window 用量（windows[0]，與 StatusBar / QuotaOverview 一致），無資料回 null */
+function getPrimaryUtilization(snapshot: QuotaSnapshot): number | null {
   const windows = snapshot.windows ?? [];
   if (windows.length === 0) return null;
-  return Math.max(...windows.map((window) => window.utilization));
+  return windows[0].utilization;
 }
 
 /** 精簡模式的迷你圓環（與狀態列 QuotaRing 同款視覺） */
@@ -213,7 +213,7 @@ export function QuotaOverlay({
           <div className="quota-overlay-compact-list">
             {visibleSnapshots.map((snapshot) => {
               const abbr = PROVIDER_ABBR[snapshot.provider] ?? snapshot.provider.slice(0, 2).toUpperCase();
-              const maxUtilization = getMaxUtilization(snapshot);
+              const primaryUtilization = getPrimaryUtilization(snapshot);
               const hasData = snapshot.status === "ok" || snapshot.status === "rate_limited";
               const tooltip = [
                 PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider,
@@ -228,11 +228,11 @@ export function QuotaOverlay({
                   <span className="quota-overlay-chip-abbr" style={{ color: PROVIDER_COLOR[snapshot.provider] }}>
                     {abbr}
                   </span>
-                  {hasData && maxUtilization !== null ? (
+                  {hasData && primaryUtilization !== null ? (
                     <>
-                      <OverlayRing utilization={maxUtilization} />
-                      <span className="quota-overlay-chip-pct" style={{ color: toneColor(getBarTone(maxUtilization)) }}>
-                        {Math.round(maxUtilization * 100)}%
+                      <OverlayRing utilization={primaryUtilization} />
+                      <span className="quota-overlay-chip-pct" style={{ color: toneColor(getBarTone(primaryUtilization)) }}>
+                        {Math.round(primaryUtilization * 100)}%
                       </span>
                     </>
                   ) : (

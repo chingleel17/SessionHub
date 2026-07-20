@@ -215,7 +215,8 @@ fn parse_scoped_weekly_windows(
         let Some(percent) = item.get("percent").and_then(|v| v.as_f64()) else {
             continue;
         };
-        let utilization = if percent > 1.0 { percent / 100.0 } else { percent };
+        // API 的 percent 為 0–100 範圍，無條件除以 100（用量 <= 1% 時不可誤判為比例值）
+        let utilization = percent / 100.0;
         let resets_at = item
             .get("resets_at")
             .and_then(|v| v.as_str())
@@ -240,14 +241,8 @@ fn parse_window(key: &str, label: &str, obj: &serde_json::Value) -> Option<Quota
         .get("utilization")
         .or_else(|| obj.get("used_percentage"))
         .and_then(|v| v.as_f64())
-        .map(|pct| {
-            // Normalise 0–100 → 0.0–1.0
-            if pct > 1.0 {
-                pct / 100.0
-            } else {
-                pct
-            }
-        })
+        // API 回傳為 0–100 範圍，無條件除以 100（用量 <= 1% 時不可誤判為比例值）
+        .map(|pct| pct / 100.0)
         .or_else(|| {
             let used = obj.get("tokens")?.as_f64()?;
             let max = obj.get("max_tokens")?.as_f64()?;
@@ -469,6 +464,32 @@ mod tests {
         assert_eq!(windows[0].window_key, "seven_day_newmodel");
         assert_eq!(windows[0].label, "Newmodel");
         assert_eq!(windows[0].utilization, 0.5);
+    }
+
+    #[test]
+    fn parse_window_low_percent_not_mistaken_as_ratio() {
+        // 用量 <= 1% 時（如 utilization: 1 代表 1%），不可被誤判為 0–1 比例值而放大 100 倍
+        let obj = json!({ "utilization": 1.0, "resets_at": "2026-07-20T06:40:00Z" });
+        let w = parse_window("five_hour", "5h", &obj).expect("應能解析");
+        assert_eq!(w.utilization, 0.01);
+
+        let obj = json!({ "utilization": 0.5 });
+        let w = parse_window("five_hour", "5h", &obj).expect("應能解析");
+        assert_eq!(w.utilization, 0.005);
+    }
+
+    #[test]
+    fn parse_scoped_weekly_windows_low_percent_not_mistaken_as_ratio() {
+        let body = json!({
+            "limits": [
+                { "group": "weekly", "percent": 1, "resets_at": "2026-07-22T00:00:00Z",
+                  "scope": { "model": { "display_name": "Fable" } } }
+            ]
+        });
+
+        let windows = parse_scoped_weekly_windows(&body, &[]);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].utilization, 0.01);
     }
 
     #[test]

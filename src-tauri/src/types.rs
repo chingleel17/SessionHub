@@ -928,6 +928,8 @@ pub(crate) struct OpenCodeMessageTime2 {
 pub struct ToolAvailability {
     pub copilot: bool,
     pub opencode: bool,
+    pub claude: bool,
+    pub codex: bool,
     pub gemini: bool,
     pub vscode: bool,
 }

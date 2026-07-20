@@ -14,6 +14,9 @@ import { Select } from "./ui/Select";
 
 type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
+/** quota provider 的固定顯示順序，個別平台監控與 Overlay 清單共用 */
+const QUOTA_PROVIDER_ORDER = ["claude", "copilot", "codex", "opencode", "antigravity"] as const;
+
 type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
@@ -332,11 +335,13 @@ export function SettingsView({
               }
             >
               <option value="terminal">Terminal</option>
-              <option value="copilot">Copilot</option>
-              <option value="opencode">OpenCode</option>
-              <option value="gemini">Gemini</option>
               <option value="vscode">VS Code</option>
               <option value="explorer">Explorer</option>
+              <option value="opencode">OpenCode</option>
+              <option value="claude">Claude</option>
+              <option value="codex">Codex</option>
+              <option value="copilot">Copilot</option>
+              <option value="gemini">Gemini</option>
             </Select>
           </div>
 
@@ -690,7 +695,7 @@ export function SettingsView({
                 <div className="settings-field">
                 <label>{t("quota.monitoring.perProvider")}</label>
                 <div className="quota-provider-toggle-list">
-                  {(["claude", "copilot", "codex", "opencode", "antigravity"] as const).map((provider) => {
+                  {QUOTA_PROVIDER_ORDER.map((provider) => {
                     const enabledProviders =
                       settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"];
                     const checked = enabledProviders.includes(provider);
@@ -749,9 +754,11 @@ export function SettingsView({
                   }
                 >
                   <option value="">{t("quota.settings.primaryProvider.auto")}</option>
-                  {(settingsForm.quotaEnabledProviders ?? []).map((provider) => (
+                  {QUOTA_PROVIDER_ORDER.filter((provider) =>
+                    (settingsForm.quotaEnabledProviders ?? []).includes(provider),
+                  ).map((provider) => (
                     <option key={provider} value={provider}>
-                      {providerLabels[provider as keyof typeof providerLabels] ?? provider}
+                      {providerLabels[provider]}
                     </option>
                   ))}
                 </Select>
@@ -855,13 +862,18 @@ export function SettingsView({
                   <div className="settings-field settings-field--stacked">
                     <label>{t("quota.settings.overlayProviders")}</label>
                     <div className="quota-provider-toggle-list">
-                      {(settingsForm.quotaEnabledProviders ?? []).map((provider) => {
+                      {QUOTA_PROVIDER_ORDER.map((provider) => {
+                        const monitored = (settingsForm.quotaEnabledProviders ?? []).includes(provider);
                         const checked = (settingsForm.quotaOverlayProviders ?? []).includes(provider);
                         return (
-                          <label key={provider} className="checkbox-group checkbox-group--inline">
+                          <label
+                            key={provider}
+                            className={`checkbox-group checkbox-group--inline${monitored ? "" : " checkbox-group--disabled"}`}
+                          >
                             <input
                               type="checkbox"
                               checked={checked}
+                              disabled={!monitored}
                               onChange={(event) => {
                                 const current = settingsForm.quotaOverlayProviders ?? [];
                                 const next = event.currentTarget.checked
@@ -870,7 +882,7 @@ export function SettingsView({
                                 onFormChange({ ...settingsForm, quotaOverlayProviders: next });
                               }}
                             />
-                            <span>{providerLabels[provider as keyof typeof providerLabels] ?? provider}</span>
+                            <span>{providerLabels[provider]}</span>
                           </label>
                         );
                       })}

@@ -1050,10 +1050,15 @@ textarea {
 }
 
 .quota-provider-toggle-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px 20px;
   margin-top: 6px;
+}
+
+.checkbox-group--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 html.embedded-quota-view,

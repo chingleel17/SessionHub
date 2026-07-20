@@ -28,6 +28,8 @@ pub(crate) fn check_tool_availability_internal() -> ToolAvailability {
     ToolAvailability {
         copilot: which_exists("copilot"),
         opencode: which_exists("opencode"),
+        claude: which_exists("claude"),
+        codex: which_exists("codex"),
         gemini: which_exists("gemini"),
         vscode: which_exists("code"),
     }
@@ -79,6 +81,48 @@ pub(crate) fn open_in_tool_internal(
             cmd.creation_flags(CREATE_NEW_CONSOLE);
             cmd.spawn()
                 .map_err(|e| format!("failed to open opencode: {e}"))?;
+            Ok(())
+        }
+        "claude" => {
+            let term = terminal_path.unwrap_or("pwsh");
+            let term_stem = PathBuf::from(term)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            let mut cmd = Command::new(term);
+            cmd.current_dir(cwd);
+            if term_stem == "cmd" {
+                cmd.args(["/K", &format!("cd /d \"{}\" && claude", cwd)]);
+            } else {
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; claude", cwd)]);
+            }
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+            cmd.spawn()
+                .map_err(|e| format!("failed to open claude: {e}"))?;
+            Ok(())
+        }
+        "codex" => {
+            let term = terminal_path.unwrap_or("pwsh");
+            let term_stem = PathBuf::from(term)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            let mut cmd = Command::new(term);
+            cmd.current_dir(cwd);
+            if term_stem == "cmd" {
+                cmd.args(["/K", &format!("cd /d \"{}\" && codex", cwd)]);
+            } else {
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; codex", cwd)]);
+            }
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+            cmd.spawn()
+                .map_err(|e| format!("failed to open codex: {e}"))?;
             Ok(())
         }
         "copilot" => {

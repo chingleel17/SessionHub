@@ -256,6 +256,8 @@ export type SessionActivityStatus = {
 export type IdeLauncherType =
     | "terminal"
     | "opencode"
+    | "claude"
+    | "codex"
     | "copilot"
     | "vscode"
     | "gemini"
@@ -264,6 +266,8 @@ export type IdeLauncherType =
 export type ToolAvailability = {
     copilot: boolean;
     opencode: boolean;
+    claude: boolean;
+    codex: boolean;
     gemini: boolean;
     vscode: boolean;
 };

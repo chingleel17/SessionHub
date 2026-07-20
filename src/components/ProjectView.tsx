@@ -39,8 +39,10 @@ const PROJECT_LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: st
   { type: "terminal", label: "Terminal", icon: ">_" },
   { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
   { type: "explorer", label: "Explorer", icon: "📁" },
-  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
   { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
+  { type: "claude", label: "Claude", icon: "C", availKey: "claude" },
+  { type: "codex", label: "Codex", icon: "C", availKey: "codex" },
+  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
   { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
 ];
 
