@@ -4459,9 +4459,20 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: var(--color-surface-panel);
   font-family: var(--font-family-mono, monospace);
   white-space: nowrap;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.explorer-content-header-path {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.explorer-content-header-date {
   flex-shrink: 0;
+  color: var(--color-text-tertiary, var(--color-text-secondary));
 }
 
 .explorer-content-body {

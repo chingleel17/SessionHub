@@ -1,10 +1,10 @@
 ## 1. 後端 InterventionRegistry 與廣播
 
 - [ ] 1.1 在 `src-tauri/src/` 新增 `InterventionRegistry`（`Map<sessionId, { sessionId, projectName, toolLabel, since }>`），置於 AppState 並以 Mutex/RwLock 保護
-- [ ] 1.2 定位後端 activity 狀態計算產生 `waiting` / 離開 `waiting` 的路徑（bridge 分支 / `derive_activity_status` 下游），在該處呼叫 Registry 的 upsert / remove
+- [ ] 1.2 定位後端 activity 狀態計算產生 `waiting` / 離開 `waiting` 的路徑（`activity.rs` 的 bridge 分支 / `derive_activity_status` 下游），在該處呼叫 Registry 的 upsert / remove
 - [ ] 1.3 upsert 時填入最小化欄位：`projectName` 由 session `cwd` 尾段推導（取不到時 fallback sessionId 尾段/provider），`toolLabel` 僅工具類型字串，不寫入指令/路徑/resources
-- [ ] 1.4 Registry 變動時 emit app 級 `intervention-list-changed`，payload 為當前清單快照（`#[serde(rename_all = "camelCase")]`）
-- [ ] 1.5 提供初次快照機制：新增 command 供視窗查詢當前清單，或在 overlay/主視窗建立時補發一次事件
+- [ ] 1.4 Registry 變動時 emit app 級 `intervention-list-changed`，payload 為當前清單快照（`#[serde(rename_all = "camelCase")]`）；emit 沿用 `app_setup.rs` 既有 overlay emit 模式
+- [ ] 1.5 新增 `get_intervention_list` command 供視窗查詢當前清單（初次快照），前端以 `useQuery` 取初值 + 事件 `refetch`；不採「建立時補發事件」
 - [ ] 1.6 為 Registry 的 upsert/remove/快照序列化撰寫 Rust 單元測試
 
 ## 2. 前端主視窗調整
@@ -15,11 +15,11 @@
 
 ## 3. QuotaOverlay 提醒區
 
-- [ ] 3.1 `src/components/QuotaOverlay.tsx` 訂閱 `intervention-list-changed`，以 local state 保存清單，並在掛載時取得初次快照
-- [ ] 3.2 render「需授權」提醒區：標題含總數 (N)，每筆顯示 `專案名 · 工具類型`；清單為 0 筆或 `enableInterventionNotification` 為 `false` 時整區不 render（overlay 提醒與 Toast 共用此總開關）
+- [ ] 3.1 `src/app/EmbeddedQuotaOverlayApp.tsx` 訂閱 `intervention-list-changed` 並以 `useQuery` 拉 `get_intervention_list` 取初次快照（沿用該檔既有 `listen` + `useQuery` 慣例），清單以 props 傳給 `QuotaOverlay.tsx`；`QuotaOverlay` 不自行 `listen`
+- [ ] 3.2 `src/components/QuotaOverlay.tsx` 依 props render「需授權」提醒區：標題含總數 (N)，每筆顯示 `專案名 · 工具類型`；清單為 0 筆或 `enableInterventionNotification` 為 `false` 時整區不 render（overlay 提醒與 Toast 共用此總開關）
 - [ ] 3.3 compact 與 full 兩種 styleMode 各自版式，視覺遵循 sessionhub-minimal-ui 的 danger 色調 token 與去卡片原則
 - [ ] 3.4 提醒區設最大高度 + 內部 `overflow-y` 捲動，避免大量 waiting 撐爆
-- [ ] 3.5 卡片點擊 emit `intervention-focus-session`（帶 sessionId）
+- [ ] 3.5 卡片點擊 emit `intervention-focus-session`（帶 sessionId）；由 `QuotaOverlay` 透過 props 提供的 callback 或 `EmbeddedQuotaOverlayApp` 統一 emit
 - [ ] 3.6 新增對應 CSS class 於 `src/App.css` 與 `styles/themes/{dark,light}.css`
 
 ## 4. 自動延伸方向

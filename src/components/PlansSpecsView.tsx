@@ -425,6 +425,20 @@ export function PlansSpecsView({
     ];
   }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t, sortField, sortDir]);
 
+  // 依目前顯示的檔案反查所屬 change 的建立日期（僅 openspec change 的 artifact 有值）
+  const contentCreatedAt = useMemo<string | null>(() => {
+    if (contentFilePathType !== "openspec" || !contentFilePath || !openspecData) {
+      return null;
+    }
+    const normalized = contentFilePath.replace(/\\/g, "/");
+    const match = normalized.match(/^changes\/(?:archive\/)?([^/]+)\//);
+    if (!match) return null;
+    const changeName = match[1];
+    const isArchived = normalized.startsWith("changes/archive/");
+    const pool = isArchived ? openspecData.archivedChanges : openspecData.activeChanges;
+    return pool.find((c) => c.name === changeName)?.createdAt ?? null;
+  }, [contentFilePath, contentFilePathType, openspecData]);
+
   // 蒐集所有狀態群組（扁平），供 Cols 模式使用
   const allColsStatusGroups = useMemo<TreeNode[]>(() => {
     const groups: TreeNode[] = [];
@@ -826,6 +840,7 @@ export function PlansSpecsView({
         content={content}
         filePath={contentFilePath}
         filePathType={contentFilePathType}
+        createdAt={contentCreatedAt}
         isLoading={contentLoading}
         error={contentError}
         isTaskSaving={taskSaving}
