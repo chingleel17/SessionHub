@@ -1356,6 +1356,93 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: rgba(255, 255, 255, 0.42);
 }
 
+/* ── 介入提醒常駐區塊：quota chip/list 與提醒區的排列容器 ── */
+.quota-overlay-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 往上延伸：提醒區排到 chip 上方，維持 chip 螢幕位置不變（見 design.md 決策 3） */
+.quota-overlay-stack--extend-up {
+  flex-direction: column-reverse;
+}
+
+.quota-overlay-intervention {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--color-status-error) 28%, transparent);
+}
+
+.quota-overlay-stack--extend-up .quota-overlay-intervention {
+  padding-top: 0;
+  padding-bottom: 8px;
+  border-top: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-status-error) 28%, transparent);
+}
+
+.quota-overlay-intervention-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-status-error);
+}
+
+.quota-overlay-intervention-list {
+  display: grid;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.quota-overlay-intervention-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-button);
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+.quota-overlay-intervention-card:hover {
+  background: color-mix(in srgb, var(--color-status-error) 12%, transparent);
+}
+
+.quota-overlay-intervention-project {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-overlay-intervention-tool {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.quota-overlay-root--light .quota-overlay-intervention-tool {
+  color: var(--color-text-secondary);
+}
+
+/* compact：精簡列版式，標題與清單同排更緊湊 */
+.quota-overlay-intervention--compact {
+  min-width: 220px;
+}
+
+.quota-overlay-intervention--compact .quota-overlay-intervention-list {
+  max-height: 120px;
+}
+
 .tray-panel-window-root {
   width: 100%;
   height: 100%;

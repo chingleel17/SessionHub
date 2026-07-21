@@ -1078,6 +1078,17 @@ function App() {
     return () => { unlistenPromise.then((fn) => fn()); };
   }, [sessionsQuery.data, activityStatusMap, uncategorizedLabel]);
 
+  // overlay 提醒卡片點擊後聚焦主視窗並導航至對應 session（intervention-registry 常駐提醒）
+  useEffect(() => {
+    const unlistenPromise = listen<string>("intervention-focus-session", (event) => {
+      const session = sessionsQuery.data?.find((s) => s.id === event.payload);
+      if (!session) return;
+      const projectKey = getProjectKey(session, uncategorizedLabel);
+      void invoke("show_main_window", { view: projectKey });
+    });
+    return () => { unlistenPromise.then((fn) => fn()); };
+  }, [sessionsQuery.data, uncategorizedLabel]);
+
   const handleReadFileContent = async (filePath: string): Promise<string> => {
     return invoke<string>("read_plan_content", { filePath });
   };

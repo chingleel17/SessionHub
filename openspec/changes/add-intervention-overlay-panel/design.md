@@ -42,6 +42,8 @@
 - **替代方案 A**：主視窗把 `activityStatusMap` 的 waiting 子集 `emit_to("quota-overlay", …)`。否決 —— 主視窗關閉/最小化時 state 不更新，overlay 會停在舊清單，違反核心情境。
 - **替代方案 B**：overlay 完全靠輪詢一個 `get_waiting_list` command、不收事件。否決 —— 純輪詢延遲且浪費。惟初次快照仍需一個查詢 command（見下方「初次快照」），事件負責即時更新，兩者搭配而非二選一。
 - **狀態來源**：Registry 的更新點應接在後端 activity 計算之後（`derive_activity_status` / bridge 分支產生 waiting 的同一路徑），而非前端。與 design 慣例「activity 由後端計算」一致。
+- **Claude 實際 waiting 訊號**：查證 `.claude/hooks` 後確認，Claude Code 的等待授權/等待回應是透過 **`notification`**（`on-notification.cjs`，title 為 `permission_prompt` / `idle_prompt`）與 **`permission.requested`**（`on-permission-request.cjs`）事件表達，而非只有 `session.stop`。因此 `derive_activity_status` 需將 `permission.requested` 與 `notification(permission_prompt|idle_prompt)` 映射為 `waiting`；離開 waiting 由後續 `tool.pre`/`tool.post`/`prompt.submitted`/正常 `session.stop` 觸發 remove。Claude 分支對所有 hint 事件皆呼叫 Registry sync（upsert/remove），Registry 內建去重（內容未變不重複廣播）。
+- **已知限制（Copilot／Codex 不在本次覆蓋範圍）**：已查證 GitHub Copilot CLI 官方 hook 事件集合僅 `sessionStart`/`sessionEnd`/`userPromptSubmitted`/`preToolUse`/`postToolUse`/`errorOccurred`（本專案已全部接上），沒有任何「等待授權」事件；`preToolUse` 雖可回傳 allow/deny/ask 決策，但那是 hook 腳本主動控制執行與否，並非 Copilot 主動通知外部監聽者進入等待狀態的事件（GitHub 官方 issue `github/copilot-cli#1651`「Add hook for permission prompt」證實此為社群已知缺口、尚未提供）。因此 Copilot 的 `waiting` 目前只能由前端輪詢 `get_session_activity_statuses`（讀 `events.jsonl` 最後一筆 `assistant.turn_end`）偵測，而輪詢僅在主視窗開啟時執行，不符合本 change「清單獨立於主視窗運行狀態」的目標。Codex 的 activity 計算（`get_codex_activity_status`）本身從未產生 `waiting` 狀態，屬於真正的 N/A。為避免新增後端輪詢執行緒浪費資源，本 change **不將 Copilot 納入 `InterventionRegistry` 覆蓋範圍**；Copilot 的 waiting 提醒維持現況（僅主視窗內 Toast），overlay 常駐提醒僅涵蓋 Claude 與 OpenCode。未來若 Copilot CLI 提供對應 hook 事件，可再擴充此 Registry 的更新點。
 - **payload 最小化**：僅 sessionId / projectName / toolLabel，不含指令、路徑、resources。projectName 由 session cwd 尾段推導（與 `App.tsx:1038` `session?.cwd?.split("\\").pop()` 同規則）；toolLabel 僅工具類型字串。
 - **初次快照**：新增一個查詢當前清單的 command（如 `get_intervention_list`）。overlay 側沿用重構後 `EmbeddedQuotaOverlayApp` 既有慣例——以 `useQuery` 拉該 command 取初值，並訂閱 `intervention-list-changed` 事件於變動時 `invalidate`/`refetch`，不需後端「建立時補發事件」。此模式與 settings 的 `refetchInterval` + 事件更新一致，天然解掉「訂閱者錯過歷史 emit」問題。
 
@@ -98,3 +100,4 @@ overlay 提醒與 waiting Toast 講的是同一件事的兩種呈現（Toast=瞬
 ## Open Questions
 
 - 提醒區最大高度與可視筆數上限的具體值（預設先取「不超過可用工作區的一定比例 + 捲動」，實作時定 token）。
+- Copilot CLI 未來若釋出等待授權相關 hook，需重新評估是否納入 `InterventionRegistry` 更新點（見決策 1「已知限制」）。

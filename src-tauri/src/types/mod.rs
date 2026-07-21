@@ -14,6 +14,7 @@ pub(crate) fn default_false() -> bool {
 
 mod analytics;
 mod claude;
+mod intervention;
 mod misc;
 mod opencode;
 mod provider_integration;
@@ -24,6 +25,7 @@ mod sisyphus_openspec;
 
 pub(crate) use analytics::*;
 pub(crate) use claude::*;
+pub(crate) use intervention::*;
 pub(crate) use misc::*;
 pub(crate) use opencode::*;
 pub(crate) use provider_integration::*;

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 
-import type { AppSettings, QuotaSnapshot } from "../types";
+import type { AppSettings, InterventionItem, QuotaSnapshot } from "../types";
 import { QuotaOverlay } from "../components/QuotaOverlay";
 
 export function EmbeddedQuotaOverlayApp() {
@@ -20,6 +20,11 @@ export function EmbeddedQuotaOverlayApp() {
     queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
     staleTime: 60_000,
     refetchInterval: 15_000,
+  });
+  const interventionListQuery = useQuery({
+    queryKey: ["embedded_intervention_list", "quota_overlay"],
+    queryFn: () => invoke<InterventionItem[]>("get_intervention_list"),
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -48,11 +53,20 @@ export function EmbeddedQuotaOverlayApp() {
           );
         }
       });
+      const unlistenInterventionList = await listen<InterventionItem[]>(
+        "intervention-list-changed",
+        (event) => {
+          if (mounted) {
+            queryClient.setQueryData(["embedded_intervention_list", "quota_overlay"], event.payload);
+          }
+        },
+      );
 
       return () => {
         unlistenSnapshots();
         unlistenSettings();
         unlistenLock();
+        unlistenInterventionList();
       };
     };
 
@@ -79,6 +93,11 @@ export function EmbeddedQuotaOverlayApp() {
       locked={settings?.quotaOverlayLocked ?? true}
       theme={settings?.quotaOverlayTheme ?? "dark"}
       styleMode={settings?.quotaOverlayStyle ?? "compact"}
+      interventionItems={interventionListQuery.data ?? []}
+      interventionEnabled={settings?.enableInterventionNotification ?? true}
+      onInterventionCardClick={(sessionId) => {
+        void emit("intervention-focus-session", sessionId);
+      }}
       onLockToggle={() => {
         if (!settings) return;
         void invoke("save_settings", {

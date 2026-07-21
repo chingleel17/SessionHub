@@ -48,6 +48,14 @@ pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
     }
 }
 
+/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過介入提醒清單變動。
+pub(crate) fn emit_intervention_list_changed(app: &tauri::AppHandle, items: &[InterventionItem]) {
+    let _ = app.emit("intervention-list-changed", items);
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("intervention-list-changed", items);
+    }
+}
+
 /// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。
 fn has_saved_window_state(app: &tauri::AppHandle, label: &str) -> bool {
     let Ok(app_data_dir) = app.path().app_data_dir() else {
@@ -292,6 +300,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(ScanCache::default()))
         .manage(DbState::new().expect("failed to init metadata db"))
         .manage(QuotaCache::default())
+        .manage(InterventionRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -417,7 +426,8 @@ pub fn run() {
             upsert_mcp_server,
             delete_mcp_server,
             set_mcp_server_enabled,
-            check_codex_project_trust
+            check_codex_project_trust,
+            get_intervention_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -806,6 +816,32 @@ mod tests {
         assert_eq!(
             derive_activity_status("permission.v2.replied", None),
             ("active".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn derive_activity_status_maps_claude_permission_and_notification_events() {
+        // Claude Code 授權/等待訊號：permission.requested 與 notification(permission_prompt/idle_prompt)
+        assert_eq!(
+            derive_activity_status("permission.requested", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", Some("permission_prompt")),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", Some("idle_prompt")),
+            ("waiting".to_string(), None)
+        );
+        // 其他 notification 類型不視為 waiting
+        assert_eq!(
+            derive_activity_status("notification", Some("info")),
+            ("idle".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", None),
+            ("idle".to_string(), None)
         );
     }
 
