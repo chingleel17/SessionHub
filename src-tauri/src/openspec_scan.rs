@@ -1,7 +1,140 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use crate::types::*;
+
+fn parse_task_progress(tasks_path: &Path) -> Option<OpenSpecTaskProgress> {
+    let content = fs::read_to_string(tasks_path).ok()?;
+    let mut done = 0usize;
+    let mut total = 0usize;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("- [")
+            .or_else(|| trimmed.strip_prefix("* ["))
+            .or_else(|| trimmed.strip_prefix("+ ["))
+        {
+            if let Some(marker) = rest.chars().next() {
+                if rest.chars().nth(1) == Some(']') {
+                    total += 1;
+                    if matches!(marker, 'x' | 'X') {
+                        done += 1;
+                    }
+                }
+            }
+            continue;
+        }
+
+        let mut chars = trimmed.chars().peekable();
+        let mut has_digit = false;
+        while matches!(chars.peek(), Some(ch) if ch.is_ascii_digit()) {
+            has_digit = true;
+            chars.next();
+        }
+        if !has_digit
+            || chars.next() != Some('.')
+            || chars.next() != Some(' ')
+            || chars.next() != Some('[')
+        {
+            continue;
+        }
+        let marker = match chars.next() {
+            Some(value) => value,
+            None => continue,
+        };
+        if chars.next() != Some(']') {
+            continue;
+        }
+
+        total += 1;
+        if matches!(marker, 'x' | 'X') {
+            done += 1;
+        }
+    }
+
+    if total == 0 {
+        return None;
+    }
+
+    let status = if done == 0 {
+        "not_started"
+    } else if done == total {
+        "done"
+    } else {
+        "in_progress"
+    };
+
+    Some(OpenSpecTaskProgress {
+        done,
+        total,
+        status: status.to_string(),
+    })
+}
+
+fn scan_openspec_specs(specs_dir: &Path) -> Vec<OpenSpecSpec> {
+    if !specs_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(specs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let spec_md_path = path.join("spec.md");
+                let spec_path = if spec_md_path.is_file() {
+                    spec_md_path.to_string_lossy().to_string()
+                } else {
+                    path.to_string_lossy().to_string()
+                };
+                result.push(OpenSpecSpec {
+                    name,
+                    path: spec_path,
+                });
+            }
+        }
+    }
+
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
+fn parse_openspec_yaml_created(change_dir: &Path) -> Option<String> {
+    let yaml_path = change_dir.join(".openspec.yaml");
+    let content = fs::read_to_string(yaml_path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("created:") {
+            let value = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_change_created_at(change_dir: &Path) -> Option<String> {
+    if let Some(created_at) = parse_openspec_yaml_created(change_dir) {
+        return Some(created_at);
+    }
+
+    let metadata = fs::metadata(change_dir).ok()?;
+    let timestamp = metadata
+        .created()
+        .ok()
+        .or_else(|| metadata.modified().ok())?;
+    let datetime: DateTime<Utc> = timestamp.into();
+    Some(datetime.to_rfc3339())
+}
 
 pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let name = change_dir
@@ -12,23 +145,28 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
 
     let has_proposal = change_dir.join("proposal.md").is_file();
     let has_design = change_dir.join("design.md").is_file();
-    let has_tasks = change_dir.join("tasks.md").is_file();
+    let tasks_path = change_dir.join("tasks.md");
+    let has_tasks = tasks_path.is_file();
+    let task_progress = if has_tasks {
+        parse_task_progress(&tasks_path)
+    } else {
+        None
+    };
 
     let specs_dir = change_dir.join("specs");
-    let specs_count = if specs_dir.is_dir() {
-        fs::read_dir(&specs_dir)
-            .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).count())
-            .unwrap_or(0)
-    } else {
-        0
-    };
+    let specs = scan_openspec_specs(&specs_dir);
+    let specs_count = specs.len();
+    let created_at = resolve_change_created_at(change_dir);
 
     OpenSpecChange {
         name,
         has_proposal,
         has_design,
         has_tasks,
+        task_progress,
         specs_count,
+        specs,
+        created_at,
     }
 }
 
@@ -104,35 +242,7 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
 
     let specs = {
         let specs_dir = openspec_dir.join("specs");
-        if specs_dir.is_dir() {
-            let mut result = Vec::new();
-            if let Ok(entries) = fs::read_dir(&specs_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let name = path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        let spec_md_path = path.join("spec.md");
-                        let spec_path = if spec_md_path.is_file() {
-                            spec_md_path.to_string_lossy().to_string()
-                        } else {
-                            path.to_string_lossy().to_string()
-                        };
-                        result.push(OpenSpecSpec {
-                            name,
-                            path: spec_path,
-                        });
-                    }
-                }
-            }
-            result.sort_by(|a, b| a.name.cmp(&b.name));
-            result
-        } else {
-            Vec::new()
-        }
+        scan_openspec_specs(&specs_dir)
     };
 
     OpenSpecData {
@@ -147,6 +257,25 @@ pub(crate) fn read_openspec_file_internal(
     project_cwd: &str,
     relative_path: &str,
 ) -> Result<String, String> {
+    let canonical_target = resolve_openspec_file_internal(project_cwd, relative_path)?;
+
+    fs::read_to_string(&canonical_target).map_err(|e| format!("Failed to read file: {e}"))
+}
+
+pub(crate) fn write_openspec_file_internal(
+    project_cwd: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let canonical_target = resolve_openspec_file_internal(project_cwd, relative_path)?;
+
+    fs::write(&canonical_target, content).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+fn resolve_openspec_file_internal(
+    project_cwd: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     let base = PathBuf::from(project_cwd).join("openspec");
     let canonical_base = base
         .canonicalize()
@@ -166,5 +295,5 @@ pub(crate) fn read_openspec_file_internal(
         return Err(format!("Not a file: {}", canonical_target.display()));
     }
 
-    fs::read_to_string(&canonical_target).map_err(|e| format!("Failed to read file: {e}"))
+    Ok(canonical_target)
 }

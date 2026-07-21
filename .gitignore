@@ -17,6 +17,13 @@ src-tauri\gen
 target
 .tauri
 
+# design-sync（staged 腳本、建置輸出、機器狀態）
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+
 # Python 編譯產物
 __pycache__/
 *.pyc

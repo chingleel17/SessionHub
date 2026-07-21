@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { EditDialogState } from "../types";
+import { Button } from "./ui/Button";
 
 type Props = {
   dialog: EditDialogState;
@@ -11,6 +12,11 @@ type Props = {
 export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
   const { t } = useI18n();
   const [value, setValue] = useState(dialog.initialValue);
+
+  const handleSecondaryAction = () => {
+    dialog.onSecondaryAction?.(value);
+    onCancel();
+  };
 
   useEffect(() => {
     setValue(dialog.initialValue);
@@ -37,12 +43,20 @@ export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
           )}
         </div>
         <div className="dialog-actions">
-          <button type="button" className="ghost-button" onClick={onCancel}>
+          {dialog.secondaryActionLabel ? (
+            <Button
+              variant={dialog.secondaryActionTone === "danger" ? "danger" : "secondary"}
+              onClick={handleSecondaryAction}
+            >
+              {dialog.secondaryActionLabel}
+            </Button>
+          ) : null}
+          <Button variant="secondary" onClick={onCancel}>
             {t("dialog.cancel")}
-          </button>
-          <button type="button" className="dialog-confirm-button" onClick={() => onConfirm(value)}>
+          </Button>
+          <Button variant="primary" onClick={() => onConfirm(value)}>
             {dialog.actionLabel}
-          </button>
+          </Button>
         </div>
       </article>
     </div>

@@ -33,6 +33,9 @@ pub(crate) struct SessionInfo {
     #[serde(default = "default_provider")]
     pub(crate) provider: String,
     pub(crate) cwd: Option<String>,
+    pub(crate) repo_root: Option<String>,
+    pub(crate) repo_name: Option<String>,
+    pub(crate) git_branch: Option<String>,
     pub(crate) summary: Option<String>,
     pub(crate) summary_count: Option<u32>,
     pub(crate) created_at: Option<String>,
@@ -46,12 +49,94 @@ pub(crate) struct SessionInfo {
     pub(crate) has_events: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionTodo {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) description: Option<String>,
+    pub(crate) updated_at: Option<String>,
+}
+
 pub(crate) fn default_enabled_providers() -> Vec<String> {
-    vec!["copilot".to_string(), "opencode".to_string()]
+    vec![
+        "copilot".to_string(),
+        "opencode".to_string(),
+        "codex".to_string(),
+        ANTIGRAVITY_PROVIDER.to_string(),
+    ]
+}
+
+pub(crate) fn default_enabled_providers_all() -> Vec<String> {
+    vec![
+        CLAUDE_PROVIDER.to_string(),
+        COPILOT_PROVIDER.to_string(),
+        OPENCODE_PROVIDER.to_string(),
+        CODEX_PROVIDER.to_string(),
+        ANTIGRAVITY_PROVIDER.to_string(),
+    ]
+}
+
+pub(crate) fn default_claude_quota_reset_day() -> u8 {
+    1
+}
+
+pub(crate) fn default_hook_scripts_path() -> String {
+    String::new()
+}
+
+pub(crate) fn default_minimize_to_tray() -> bool {
+    false
 }
 
 pub(crate) fn default_notification_enabled() -> bool {
     true
+}
+
+pub(crate) fn default_true() -> bool {
+    true
+}
+
+pub(crate) fn default_false() -> bool {
+    false
+}
+
+pub(crate) fn default_quota_overlay_opacity() -> f64 {
+    0.3
+}
+
+pub(crate) fn default_quota_overlay_theme() -> OverlayTheme {
+    OverlayTheme::Dark
+}
+
+/// 系統匣圖示的 quota 顯示模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TrayQuotaMode {
+    #[default]
+    IconOnly,
+    Percentage,
+    Bar,
+    Hidden,
+}
+
+/// 桌面 quota overlay 的視覺主題
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+/// 桌面 quota overlay 的版型：完整（進度條列表）或精簡（圓環一列）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayStyle {
+    Full,
+    #[default]
+    Compact,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,12 +150,57 @@ pub(crate) struct SessionActivityStatus {
     pub(crate) last_activity_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionTargetedPayload {
+    pub(crate) session_id: String,
+    pub(crate) cwd: String,
+    pub(crate) event_type: String,
+}
+
+/// tool.pre / tool.post / prompt.submitted 等純活動提示事件的輕量 payload，
+/// 前端可直接用 cwd 比對更新 activity status，不需要任何 IPC 或檔案掃描。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ActivityHintPayload {
+    pub(crate) cwd: String,
+    pub(crate) event_type: String,
+    pub(crate) title: Option<String>,
+    pub(crate) error: Option<String>,
+    /// 後端已計算好的 session 狀態，前端直接 patch activityStatusMap 使用
+    pub(crate) session_id: Option<String>,
+    /// "active" | "waiting" | "idle"
+    pub(crate) status: Option<String>,
+    /// "thinking" | "tool_call" | "working"
+    pub(crate) detail: Option<String>,
+    pub(crate) last_activity_at: Option<String>,
+}
+
+/// 每次 provider bridge 收到事件時發送給前端的 debug log 記錄。
+/// status 可能值："targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit" | "activity_hint"
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BridgeEventLogEntry {
+    pub(crate) id: String,
+    pub(crate) provider: String,
+    pub(crate) event_type: String,
+    pub(crate) timestamp: String,
+    pub(crate) cwd: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) error: Option<String>,
+    /// "targeted" | "fallback" | "full_refresh" | "skipped_dedup" | "skipped_rate_limit"
+    pub(crate) status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppSettings {
     pub(crate) copilot_root: String,
     #[serde(default)]
     pub(crate) opencode_root: String,
+    #[serde(default)]
+    pub(crate) codex_root: String,
     pub(crate) terminal_path: Option<String>,
     pub(crate) external_editor_path: Option<String>,
     pub(crate) show_archived: bool,
@@ -86,17 +216,146 @@ pub(crate) struct AppSettings {
     pub(crate) enable_intervention_notification: bool,
     #[serde(default)]
     pub(crate) enable_session_end_notification: bool,
+    #[serde(default = "default_true")]
+    pub(crate) show_status_bar: bool,
+    #[serde(default = "default_analytics_refresh_interval")]
+    pub(crate) analytics_refresh_interval: u32,
+    #[serde(default)]
+    pub(crate) analytics_panel_collapsed: bool,
+    #[serde(default)]
+    pub(crate) claude_root: String,
+    #[serde(default)]
+    pub(crate) antigravity_root: String,
+    #[serde(default = "default_hook_scripts_path")]
+    pub(crate) hook_scripts_path: String,
+    #[serde(default = "default_claude_quota_reset_day")]
+    pub(crate) claude_quota_reset_day: u8,
+    #[serde(default = "default_minimize_to_tray")]
+    pub(crate) minimize_to_tray: bool,
+    #[serde(default = "default_true")]
+    pub(crate) enable_quota_monitoring: bool,
+    #[serde(default = "default_enabled_providers_all")]
+    pub(crate) quota_enabled_providers: Vec<String>,
+    #[serde(default = "default_false")]
+    pub(crate) allow_create_project_config_dir: bool,
+    #[serde(default)]
+    pub(crate) agents_source_root: String,
+    // ── Tray / Overlay quota widget 設定 ──
+    #[serde(default)]
+    pub(crate) tray_quota_mode: TrayQuotaMode,
+    #[serde(default)]
+    pub(crate) tray_quota_primary_provider: Option<String>,
+    #[serde(default = "default_true")]
+    pub(crate) tray_quota_panel_enabled: bool,
+    #[serde(default = "default_false")]
+    pub(crate) quota_overlay_enabled: bool,
+    #[serde(default = "default_true")]
+    pub(crate) quota_overlay_locked: bool,
+    #[serde(default = "default_quota_overlay_opacity")]
+    pub(crate) quota_overlay_opacity: f64,
+    #[serde(default)]
+    pub(crate) quota_overlay_providers: Vec<String>,
+    #[serde(default = "default_quota_overlay_theme")]
+    pub(crate) quota_overlay_theme: OverlayTheme,
+    #[serde(default)]
+    pub(crate) quota_overlay_style: OverlayStyle,
 }
 
-pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 3;
+pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 6;
 pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
+pub(crate) const CODEX_PROVIDER: &str = "codex";
+pub(crate) const CLAUDE_PROVIDER: &str = "claude";
+pub(crate) const ANTIGRAVITY_PROVIDER: &str = "antigravity";
+pub(crate) const AGENTS_PROVIDER: &str = "agents";
 pub(crate) const COPILOT_HOOK_FILE_NAME: &str = "sessionhub-provider-event-bridge.json";
+pub(crate) const CODEX_HOOK_FILE_NAME: &str = "hooks.json";
 pub(crate) const OPENCODE_PLUGIN_FILE_NAME: &str = "sessionhub-provider-event-bridge.ts";
 pub(crate) const OPENCODE_PLUGIN_METADATA_PREFIX: &str = "// sessionhub-provider-event-bridge:";
+pub(crate) const CLAUDE_HOOK_FILE_NAME: &str = "settings.json";
 
 pub(crate) fn default_provider_bridge_version() -> u32 {
     PROVIDER_INTEGRATION_VERSION
+}
+
+pub(crate) fn default_analytics_refresh_interval() -> u32 {
+    30
+}
+
+// ── Quota Snapshot 相關型別 ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuotaWindow {
+    pub(crate) window_key: String,
+    pub(crate) label: String,
+    pub(crate) utilization: f64,
+    pub(crate) resets_at: Option<String>,
+    /// 模型群組名稱（如 "Gemini Models" / "Claude and GPT models"），僅 Antigravity 使用；
+    /// 其餘 provider 維持 None，供前端依顯示情境過濾群組。
+    #[serde(default)]
+    pub(crate) group: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalTokenUsage {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) period_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExtraCredits {
+    pub(crate) is_enabled: bool,
+    pub(crate) monthly_limit: Option<u64>,
+    pub(crate) used_credits: f64,
+    pub(crate) utilization: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResetCreditEntry {
+    pub(crate) granted_at: Option<String>,
+    pub(crate) expires_at: Option<String>,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResetCredits {
+    pub(crate) available_count: u32,
+    pub(crate) credits: Vec<ResetCreditEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuotaSnapshot {
+    pub(crate) provider: String,
+    /// "ok" | "error" | "unsupported" | "no_auth"
+    pub(crate) status: String,
+    /// "remote_api" | "local_scan"
+    pub(crate) source: String,
+    pub(crate) fetched_at: String,
+    pub(crate) error_message: Option<String>,
+    pub(crate) windows: Option<Vec<QuotaWindow>>,
+    pub(crate) local_tokens: Option<LocalTokenUsage>,
+    pub(crate) extra_credits: Option<ExtraCredits>,
+    #[serde(default)]
+    pub(crate) reset_credits: Option<ResetCredits>,
+}
+
+pub(crate) struct QuotaCache {
+    pub(crate) snapshots: Mutex<HashMap<String, QuotaSnapshot>>,
+}
+
+impl Default for QuotaCache {
+    fn default() -> Self {
+        QuotaCache {
+            snapshots: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -212,6 +471,18 @@ pub(crate) struct SessionStats {
     pub(crate) is_live: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnalyticsDataPoint {
+    pub(crate) label: String,
+    pub(crate) output_tokens: u64,
+    pub(crate) input_tokens: u64,
+    pub(crate) interaction_count: u32,
+    pub(crate) cost_points: f64,
+    pub(crate) session_count: u32,
+    pub(crate) missing_count: u32,
+}
+
 impl Default for SessionStats {
     fn default() -> Self {
         Self {
@@ -316,20 +587,46 @@ pub(crate) struct SessionEvent {
     pub(crate) data: serde_json::Value,
 }
 
-#[derive(Default)]
 pub(crate) struct WatcherState {
     pub(crate) sessions: Mutex<Option<RecommendedWatcher>>,
     pub(crate) plan: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) project: Mutex<Option<RecommendedWatcher>>,
     pub(crate) opencode: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) codex: Mutex<Option<RecommendedWatcher>>,
+    pub(crate) claude: Mutex<Option<RecommendedWatcher>>,
     pub(crate) provider_bridge: Mutex<Option<RecommendedWatcher>>,
     pub(crate) last_provider_refresh: Arc<Mutex<HashMap<String, Instant>>>,
     pub(crate) last_bridge_records: Arc<Mutex<HashMap<String, String>>>,
+    /// 最後一次 get_settings 取得的 integration 狀態，供 restart_session_watcher 使用，避免重讀磁碟
+    pub(crate) known_integrations: Mutex<Vec<ProviderIntegrationStatus>>,
+    /// per-provider quota refresh 的最後觸發時間（用於 bridge 事件後 30 秒 debounce）
+    pub(crate) last_quota_refresh_trigger: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+impl Default for WatcherState {
+    fn default() -> Self {
+        WatcherState {
+            sessions: Mutex::new(None),
+            plan: Mutex::new(None),
+            project: Mutex::new(None),
+            opencode: Mutex::new(None),
+            codex: Mutex::new(None),
+            claude: Mutex::new(None),
+            provider_bridge: Mutex::new(None),
+            last_provider_refresh: Arc::new(Mutex::new(HashMap::new())),
+            last_bridge_records: Arc::new(Mutex::new(HashMap::new())),
+            known_integrations: Mutex::new(Vec::new()),
+            last_quota_refresh_trigger: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
 }
 
 /// Copilot watcher 防抖時間（毫秒）
 pub(crate) const COPILOT_DEBOUNCE_MS: u64 = 800;
 /// OpenCode WAL watcher 防抖時間（毫秒）
 pub(crate) const OPENCODE_DEBOUNCE_MS: u64 = 500;
+/// 專案 plans/specs watcher 防抖時間（毫秒）
+pub(crate) const PROJECT_FILES_DEBOUNCE_MS: u64 = 400;
 /// Provider bridge watcher 防抖時間（毫秒）
 pub(crate) const PROVIDER_BRIDGE_DEBOUNCE_MS: u64 = 250;
 /// 短時間內同 provider refresh 去重視窗（毫秒）
@@ -350,10 +647,30 @@ pub(crate) struct ProviderCache {
 }
 
 /// 兩個 provider 各自持有的掃描快取
-#[derive(Default)]
 pub(crate) struct ScanCache {
     pub(crate) copilot: Mutex<Option<ProviderCache>>,
     pub(crate) opencode: Mutex<Option<ProviderCache>>,
+    pub(crate) codex: Mutex<Option<ProviderCache>>,
+    pub(crate) claude: Mutex<Option<ProviderCache>>,
+    pub(crate) antigravity: Mutex<Option<ProviderCache>>,
+    // session_id → (events_mtime_secs, SessionActivityStatus)
+    pub(crate) activity: Mutex<HashMap<String, (i64, SessionActivityStatus)>>,
+    // 防止同時進行多個掃描的全局互斥體
+    pub(crate) scan_lock: Mutex<()>,
+}
+
+impl Default for ScanCache {
+    fn default() -> Self {
+        ScanCache {
+            copilot: Mutex::new(None),
+            opencode: Mutex::new(None),
+            codex: Mutex::new(None),
+            claude: Mutex::new(None),
+            antigravity: Mutex::new(None),
+            activity: Mutex::new(HashMap::new()),
+            scan_lock: Mutex::new(()),
+        }
+    }
 }
 
 // ── OpenCode JSON 儲存格式（session/*.json / project/*.json）────────────────
@@ -467,28 +784,43 @@ pub(crate) struct OpencodeMessage {
     #[serde(default)]
     pub(crate) role: String,
     #[serde(default)]
+    pub(crate) time: Option<OpencodeMessageTime>,
+    #[serde(default, alias = "modelID")]
+    pub(crate) model_id: Option<String>,
+    #[serde(default)]
+    pub(crate) tokens: Option<OpencodeTokens>,
+    #[serde(default)]
     pub(crate) metadata: Option<OpencodeMessageMetadata>,
 }
 
 impl OpencodeMessage {
     pub(crate) fn time(&self) -> Option<&OpencodeMessageTime> {
-        self.metadata.as_ref()?.time.as_ref()
+        self.time
+            .as_ref()
+            .or_else(|| self.metadata.as_ref()?.time.as_ref())
     }
     pub(crate) fn model_id(&self) -> Option<&str> {
-        self.metadata
-            .as_ref()?
-            .assistant
-            .as_ref()?
-            .model_id
+        self.model_id
             .as_deref()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.metadata
+                    .as_ref()?
+                    .assistant
+                    .as_ref()?
+                    .model_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+            })
     }
     pub(crate) fn tokens(&self) -> Option<&OpencodeTokens> {
-        self.metadata.as_ref().and_then(|m| {
-            m.assistant
-                .as_ref()
-                .and_then(|a| a.tokens.as_ref())
-                .or(m.usage.as_ref())
+        self.tokens.as_ref().or_else(|| {
+            self.metadata.as_ref().and_then(|m| {
+                m.assistant
+                    .as_ref()
+                    .and_then(|a| a.tokens.as_ref())
+                    .or(m.usage.as_ref())
+            })
         })
     }
 }
@@ -537,12 +869,23 @@ pub(crate) struct SisyphusData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct OpenSpecTaskProgress {
+    pub(crate) done: usize,
+    pub(crate) total: usize,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct OpenSpecChange {
     pub(crate) name: String,
     pub(crate) has_proposal: bool,
     pub(crate) has_design: bool,
     pub(crate) has_tasks: bool,
+    pub(crate) task_progress: Option<OpenSpecTaskProgress>,
     pub(crate) specs_count: usize,
+    pub(crate) specs: Vec<OpenSpecSpec>,
+    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -585,6 +928,102 @@ pub(crate) struct OpenCodeMessageTime2 {
 pub struct ToolAvailability {
     pub copilot: bool,
     pub opencode: bool,
+    pub claude: bool,
+    pub codex: bool,
     pub gemini: bool,
     pub vscode: bool,
+}
+
+// ── Claude JSONL 解析型別 ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub(crate) struct ClaudeEntry {
+    #[serde(rename = "type")]
+    pub(crate) entry_type: String,
+    pub(crate) uuid: Option<String>,
+    #[serde(default)]
+    pub(crate) is_sidechain: bool,
+    pub(crate) message: Option<ClaudeMessage>,
+    pub(crate) request_id: Option<String>,
+    pub(crate) timestamp: Option<String>,
+    #[serde(default)]
+    pub(crate) cwd: Option<String>,
+    pub(crate) session_id: Option<String>,
+    #[serde(default)]
+    pub(crate) is_api_error_message: Option<bool>,
+    #[serde(default)]
+    pub(crate) git_branch: Option<String>,
+    /// user entry 中由系統自動產生的 meta 訊息（local-command-caveat 等），不算互動次數
+    #[serde(default)]
+    pub(crate) is_meta: Option<bool>,
+    /// ai-title entry 中的 AI 生成標題
+    #[serde(rename = "aiTitle")]
+    pub(crate) ai_title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeMessage {
+    pub(crate) id: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) role: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) usage: Option<ClaudeUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeUsage {
+    #[serde(default)]
+    pub(crate) input_tokens: u64,
+    #[serde(default)]
+    pub(crate) output_tokens: u64,
+    #[serde(default)]
+    pub(crate) cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub(crate) cache_read_input_tokens: u64,
+    pub(crate) speed: Option<String>,
+    pub(crate) service_tier: Option<String>,
+    pub(crate) cache_creation: Option<ClaudeCacheCreation>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeCacheCreation {
+    #[serde(default)]
+    pub(crate) ephemeral_1h_input_tokens: u64,
+    #[serde(default)]
+    pub(crate) ephemeral_5m_input_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeUsageBlock {
+    pub(crate) start_time: String,
+    pub(crate) end_time: String,
+    pub(crate) is_active: bool,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cost_usd: f64,
+    pub(crate) usage_limit_reset_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderQuota {
+    pub(crate) provider: String,
+    pub(crate) billing_period: String,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cost_usd: f64,
+    pub(crate) monthly_limit_tokens: Option<u64>,
+    pub(crate) monthly_limit_usd: Option<f64>,
+    pub(crate) reset_day: u8,
+    pub(crate) next_reset_date: String,
 }

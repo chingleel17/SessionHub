@@ -81,7 +81,7 @@
 #### Scenario: Explorer 整體高度限制
 
 - **WHEN** PlansSpecsView 在任意視窗大小下渲染
-- **THEN** `.explorer-layout` 的高度使用 `calc(100vh - 260px)` 而非 `height: 100%`
+- **THEN** `.explorer-layout` 的高度使用 `calc(100vh - 215px)` 而非 `height: 100%`
 - **AND** 最小高度為 420px（防止視窗過小時版面破裂）
 - **AND** 左右兩側面板各自獨立捲動，不引發頁面級捲動
 

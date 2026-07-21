@@ -10,7 +10,7 @@ use super::{
     validate_integration_target, validate_managed_metadata, write_provider_integration_file,
 };
 
-fn render_opencode_integration(bridge_path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn render_opencode_integration(bridge_path: &std::path::Path) -> Result<String, String> {
     let metadata =
         serde_json::to_string(&managed_provider_metadata(OPENCODE_PROVIDER, bridge_path)).map_err(
             |error| format!("failed to serialize OpenCode integration metadata: {error}"),
@@ -66,6 +66,34 @@ fn render_opencode_integration(bridge_path: &std::path::Path) -> Result<String, 
             "          sourcePath: null,\n",
             "          title: null,\n",
             "          error: ((props as any).error as any)?.message ?? String((props as any).error) ?? null,\n",
+            "        }});\n",
+            "      }} else if (event.type === \"permission.updated\" || event.type === \"permission.asked\" || (event.type as string) === \"permission.v2.asked\") {{\n",
+            "        const props = event.properties as any;\n",
+            "        const permissionType = props.title ?? props.permission ?? props.type ?? props.action ?? \"permission\";\n",
+            "        const requestId = props.id ?? props.requestID ?? props.permissionID ?? null;\n",
+            "        await appendRecord({{\n",
+            "          version: {version},\n",
+            "          provider: \"{provider}\",\n",
+            "          eventType: event.type,\n",
+            "          timestamp: new Date(props.time?.created ?? Date.now()).toISOString(),\n",
+            "          sessionId: props.sessionID ?? null,\n",
+            "          cwd: null,\n",
+            "          sourcePath: null,\n",
+            "          title: requestId ? `${{permissionType}} [${{requestId}}]` : permissionType,\n",
+            "          error: null,\n",
+            "        }});\n",
+            "      }} else if (event.type === \"permission.replied\" || (event.type as string) === \"permission.v2.replied\") {{\n",
+            "        const props = event.properties as any;\n",
+            "        await appendRecord({{\n",
+            "          version: {version},\n",
+            "          provider: \"{provider}\",\n",
+            "          eventType: event.type,\n",
+            "          timestamp: new Date().toISOString(),\n",
+            "          sessionId: props.sessionID ?? null,\n",
+            "          cwd: null,\n",
+            "          sourcePath: null,\n",
+            "          title: props.requestID ?? props.permissionID ?? null,\n",
+            "          error: null,\n",
             "        }});\n",
             "      }}\n",
             "    }},\n",
@@ -260,4 +288,41 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
             Some(error),
         ),
     }
+}
+
+pub(crate) fn uninstall_opencode_integration() -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(OPENCODE_PROVIDER);
+    let config_path = match resolve_opencode_integration_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                OPENCODE_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                None,
+                Some(error),
+            );
+        }
+    };
+
+    if config_path.exists() {
+        if let Err(error) = fs::remove_file(&config_path) {
+            return build_install_failure_status(
+                OPENCODE_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to remove OpenCode plugin file: {error}"),
+            );
+        }
+    }
+
+    build_provider_integration_status(
+        OPENCODE_PROVIDER,
+        ProviderIntegrationState::Missing,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
 }

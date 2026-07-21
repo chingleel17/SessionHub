@@ -20,7 +20,7 @@ export function ProjectStatsBanner({ sessions, sessionStats, sessionStatsLoading
     (acc, session) => {
       const stats = sessionStats[session.id];
       if (!stats) return acc;
-      acc.tokens += stats.outputTokens;
+      acc.tokens += stats.outputTokens + stats.inputTokens;
       acc.interactions += stats.interactionCount;
       acc.cost += Object.values(stats.modelMetrics ?? {}).reduce(
         (sum, metric) => sum + metric.requestsCost,

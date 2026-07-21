@@ -22,6 +22,9 @@
 - Callback props 命名：`onXxx` 前綴（`onArchive`, `onOpenTerminal`...）
 - 不得在元件內部呼叫 `invoke()`，一律透過 props callback 觸發
 - CSS class 名稱對應元件語意，如 `session-card`, `plan-editor-pane`
+- 一般操作與導覽圖示一律由 `Icons.tsx` 的 Lucide 映射提供；僅圖表、quota ring 與品牌資產可使用專用 SVG。
+- 共用互動元件使用 `ui/Button`、`ui/IconButton`、`ui/Select` 與 `DropdownMenu`；IconButton 必須提供 i18n 的 `label`。
+- 使用 `bun run lint` 檢查前端；新增元件不得引入新的 lint error。
 
 ## ProjectView 子 Tab 規則
 

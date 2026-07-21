@@ -1,0 +1,10 @@
+{
+  "conflictChoice": null,
+  "ignoredPaths": [],
+  "enabledTargets": [
+    "codex",
+    "opencode",
+    "copilot",
+    "claude"
+  ]
+}

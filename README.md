@@ -1,162 +1,156 @@
 # SessionHub
 
-> 一個 Windows 桌面應用程式，讓你輕鬆管理所有 GitHub Copilot CLI 的 Session。
+> Windows 桌面版 AI coding session 工作台：集中管理多個 CLI provider 的 session、quota、Plans & Specs、Agents 與 MCP 設定。
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-![Stack](https://img.shields.io/badge/stack-Tauri%202%20%2B%20React%20%2B%20Rust-orange)
+<p>
+  <a href="https://github.com/chingleel17/SessionHub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/chingleel17/SessionHub/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
+  <a href="https://github.com/chingleel17/SessionHub/releases"><img src="https://img.shields.io/github/v/release/chingleel17/SessionHub?style=for-the-badge&color=7c3aed" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/version-0.1.8-2563eb?style=for-the-badge" alt="Version 0.1.8">
+  <img src="https://img.shields.io/badge/platform-Windows-475569?style=for-the-badge" alt="Platform Windows">
+  <img src="https://img.shields.io/badge/license-MIT-16a34a?style=for-the-badge" alt="MIT License">
+  <img src="https://img.shields.io/badge/stack-Tauri%202%20%2B%20React%2019%20%2B%20Rust-f97316?style=for-the-badge" alt="Tauri 2, React 19, Rust">
+</p>
 
----
+SessionHub 適合同時使用 GitHub Copilot CLI、OpenCode、Codex、Claude Code 與 Antigravity 的開發者。它將分散在各工具資料夾中的工作階段集中到單一介面，讓你更快找到工作脈絡、重新進入終端機，並掌握目前的模型額度。
 
-## 為什麼需要這個工具？
+## 特色
 
-使用 GitHub Copilot CLI 一段時間後，`~/.copilot/session-state/` 目錄下會累積大量 session 資料夾。這些 session 分散在不同專案之間，既沒有統一的檢視介面，也沒有方法快速回到某個 session 繼續工作。
+- **多 Provider Session 總覽**：掃描五種 AI coding 工具的 session，顯示專案、分支、摘要與更新時間。
+- **專案分頁與搜尋**：依工作目錄分組，支援關鍵字、標籤、釘選與排序。
+- **Dashboard 與統計**：用看板掌握 session 狀態，查看 Token、互動次數與花費趨勢。
+- **Quota 監控**：依 provider 與模型群組查看使用率、剩餘額度與重置時間。
+- **Tray 與 Overlay**：縮小至系統匣後快速查看額度，Overlay 提供小型與完整明細兩種檢視。
+- **Plans & Specs**：瀏覽 OpenSpec 變更、規格、任務與 `.sisyphus` 計畫資料。
+- **Agents 與 MCP 管理**：檢視同步狀態，並以 GUI 管理 Agents、Skills、Commands 與 MCP Server。
+- **Hook 與即時更新**：整合 provider hook，session 有變更時自動刷新並提供通知。
+- **Session 操作**：一鍵開啟終端、複製重新進入指令、編輯 `plan.md`、加上備註與標籤，或封存 session。
+- **繁中／英文介面**：支援繁體中文與 English。
 
-**SessionHub 解決了以下問題：**
+## 支援的 Provider
 
-- 無法一覽所有 session 及其對應專案
-- 不知道哪些 session 有進行中的 `plan.md` 計畫
-- 每次要重新開啟 session 都需要手動複製指令
-- Session 越來越多卻沒有封存或刪除的管理方式
+| Provider | Session 資料來源 | 額度支援 |
+| --- | --- | --- |
+| GitHub Copilot CLI | `~/.copilot/session-state/` | 狀態與額度整合 |
+| OpenCode | session／message／part 資料目錄 | Session 統計 |
+| Codex | Codex 資料目錄 | 額度與 reset credits |
+| Claude Code | `~/.claude/` | API quota |
+| Antigravity（Google Gemini） | `~/.gemini/` brain roots | 本機 language server RPC quota |
 
----
+各 provider 可在設定頁個別啟用、停用與指定資料根目錄。實際可取得的額度資訊會依 provider 版本、登入狀態與本機環境而異。
 
-## 主要功能
+## 畫面展示
 
-| 功能                    | 說明                                                                   |
-| ----------------------- | ---------------------------------------------------------------------- |
-| **Session 列表**        | 掃描並列出所有 Copilot session，顯示專案路徑、摘要、建立時間、更新時間 |
-| **依專案分頁**          | 每個專案（cwd）開啟獨立分頁，方便跨專案切換                            |
-| **搜尋與篩選**          | 關鍵字搜尋、標籤多選篩選、排序（時間／名稱）                           |
-| **Dashboard**           | 統計總覽：session 數量、近期活動、專案分佈                             |
-| **一鍵開啟終端**        | 直接以指定終端（pwsh/PowerShell）在 session 的工作目錄開啟             |
-| **複製 Session 指令**   | 一鍵複製重新進入該 session 的 Copilot 指令                             |
-| **封存／刪除**          | 封存不再需要的 session，或永久刪除                                     |
-| **Plan 編輯器**         | 在 app 內查看、編輯 `plan.md`，支援 Markdown 預覽                      |
-| **外部編輯器開啟 Plan** | 以 VSCode 或自訂編輯器開啟 `plan.md`                                   |
-| **即時更新**            | 監聽 session-state 目錄，新增或修改時自動刷新列表                      |
-| **備註與標籤**          | 為每個 session 加入個人備註與標籤，存於本地資料庫                      |
-| **多語系**              | 支援繁體中文介面                                                       |
+### Dashboard
 
----
+集中查看 session 數量、活躍專案、Token 用量、互動次數與花費，並以看板方式瀏覽各專案的 session 狀態。
 
-## 系統需求
+![SessionHub Dashboard](./docs/screenshots/dashboard.png)
 
-- **作業系統**：Windows 10 / 11（x64）
-- **GitHub Copilot CLI** 已安裝，session-state 路徑為 `~/.copilot/session-state/`（可自訂）
-- **終端機**：PowerShell 7（pwsh）或 Windows PowerShell
+### Plans & Specs
 
----
+在專案內瀏覽 OpenSpec 的 active／archived changes、規格與任務進度，支援 Tree、List、Cols 三種檢視模式。
 
-## 安裝方式
+![Plans and Specs](./docs/screenshots/plans-and-specs.png)
 
-### 方式一：使用安裝檔（建議）
+### 系統匣額度面板
 
-1. 前往 [Releases](../../releases) 下載最新版本
-2. 執行 `.msi` 或 `-setup.exe` 安裝檔
-3. 依照安裝精靈完成安裝
-4. 從開始選單或桌面捷徑開啟 **SessionHub**
+SessionHub 縮小至系統匣後，點擊 Tray 圖示即可查看 Claude、Copilot、Codex 等 provider 的額度使用率、重置時間與更新狀態。
 
-### 方式二：從原始碼建置
+![Tray quota panel](./docs/screenshots/quota-tray.png)
 
-**前置需求：**
+### 額度 Overlay
 
-- [Rust](https://rustup.rs/)（stable toolchain）
-- [Node.js](https://nodejs.org/) 22+
-- [Bun](https://bun.sh/)
+Overlay 提供兩種尺寸：小型版本適合快速確認，完整版本依 provider 分組顯示額度視窗、進度條與重置時間。
+
+![Compact quota overlay](./docs/screenshots/quota-overlay-mini.png)
+
+![Full quota overlay](./docs/screenshots/quota-overlay-full.png)
+
+## 安裝
+
+### 使用安裝檔
+
+1. 前往 [Releases](../../releases) 下載最新的 `.msi` 或 `-setup.exe`。
+2. 執行安裝檔並依照安裝精靈完成安裝。
+3. 從開始選單或桌面捷徑開啟 SessionHub。
+
+### 從原始碼建置
+
+需求：Windows 10／11 x64、Rust stable、Node.js 22+、Bun，以及至少一個支援的 AI coding 工具。
 
 ```bash
-# 安裝相依套件
 bun install
-
-# 開發模式（熱重載）
 bun run tauri dev
+```
 
-# 建置安裝檔
+建立安裝檔：
+
+```bash
 bun run tauri build
 ```
 
-建置完成後，安裝檔位於：
+輸出位於 `src-tauri/target/release/bundle/`。
 
-```
-src-tauri/target/release/bundle/
-  msi/    → SessionHub_0.1.0_x64_en-US.msi
-  nsis/   → SessionHub_0.1.0_x64-setup.exe
-```
+## 快速開始
 
----
+1. 開啟「設定」，啟用要管理的 provider 並確認資料根目錄。
+2. 設定 PowerShell／pwsh 路徑；需要時設定外部編輯器。
+3. 依需求啟用 quota、通知、Tray 與 hook 整合。
+4. 回到 Dashboard，從專案分頁搜尋或開啟 session。
+5. 點擊 Tray 圖示，隨時查看額度面板；Overlay 可切換快速與完整檢視。
 
-## 首次設定
+## 資料與隱私
 
-1. 開啟應用程式後，前往左側 Sidebar 的「**設定**」
-2. 確認 **Copilot 路徑**（預設 `~/.copilot`）是否正確
-3. 設定**終端機路徑**（點擊「自動偵測」讓 app 自動找到 pwsh/PowerShell）
-4. 選填**外部編輯器路徑**（用於開啟 plan.md，點擊「偵測 VSCode」自動填入）
-5. 儲存設定，回到主頁即可看到所有 session
+SessionHub 主要讀取本機 provider 資料，設定與備註儲存在 `%APPDATA%\SessionHub\`。除 provider 本身需要的額度查詢外，不會將 session 內容上傳至 SessionHub 的自有服務；本專案目前沒有自有雲端後端。
 
----
+| 資料 | 路徑 |
+| --- | --- |
+| 應用程式設定 | `%APPDATA%\SessionHub\settings.json` |
+| 備註、標籤與快取 | `%APPDATA%\SessionHub\metadata.db` |
+| GitHub Copilot CLI Sessions | `~/.copilot/session-state/` |
+| Claude Code Sessions | `~/.claude/` |
+| Antigravity Sessions | `~/.gemini/` |
 
-## 使用說明
-
-### 查看所有 Session
-
-- 主頁（Dashboard）顯示統計資訊與最近活動
-- 點擊左側 Sidebar 的「**Sessions**」進入完整列表
-- 使用頂部搜尋列過濾，或點選標籤篩選
-
-### 開啟 Session
-
-選擇任一 session，點擊：
-
-- 🖥 **開啟終端**：在該專案目錄開啟終端機
-- 📋 **複製指令**：複製 `gh copilot session <id>` 指令，貼到任何終端執行
-
-### 管理 Plan
-
-Session 卡片上若有 📄 圖示，代表該 session 包含 `plan.md`：
-
-- 點擊 session 展開 **Plan 編輯器**，可直接在 app 內查看與編輯
-- 點擊「**外部開啟**」以 VSCode 或指定編輯器開啟
-
-### 封存與刪除
-
-- **封存**：將 session 移至封存區，不再顯示於主列表（可在專案頁面切換「顯示封存」查看）
-- **刪除**：永久移除 session 資料夾（不可復原）
-
----
-
-## 資料存放位置
-
-| 資料                 | 路徑                                  |
-| -------------------- | ------------------------------------- |
-| 應用程式設定         | `%APPDATA%\SessionHub\settings.json`  |
-| 備註與標籤（SQLite） | `%APPDATA%\SessionHub\metadata.db`    |
-| Copilot Sessions     | `~/.copilot/session-state/`（可自訂） |
-
----
+請勿在 Issue、截圖或 PR 中貼出 API key、Access Token、session 內容或其他敏感資訊。
 
 ## 技術棧
 
-- **前端**：React 18 + TypeScript + Vite + React Query
-- **後端**：Rust + Tauri 2
-- **資料庫**：SQLite（rusqlite，bundled）
-- **即時監控**：notify crate（filesystem watcher）
-- **UI**：純 CSS（無 CSS 框架）
+- 前端：React 19、TypeScript、Vite、React Query
+- 桌面框架：Tauri 2
+- 後端：Rust
+- 儲存：SQLite（rusqlite bundled）
+- 即時監控：`notify` filesystem watcher 與 provider hook bridge
+- UI：純 CSS、主題 token 與 responsive layout
 
----
-
-## 開發
+## 開發與驗證
 
 ```bash
-# 執行 Rust 單元測試
-cd src-tauri && cargo test
-
-# 前端型別檢查
+# 前端型別檢查與建置
 bun run build
+
+# Rust 格式、Lint 與單元測試
+cd src-tauri
+cargo fmt -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
 ```
 
----
+每個 Pull Request 會由 GitHub Actions 執行前端建置、Rust fmt、Clippy、單元測試、依賴漏洞檢查與祕密資料掃描。詳細規則請參考 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## License
+CI 會自動驗證每個 PR；GitHub Copilot review 可在 repository 的設定中啟用，並會讀取 [.github/copilot-instructions.md](.github/copilot-instructions.md) 執行風險導向的程式碼審查。AI 審查只提供建議，最終仍由維護者決定是否合併。
 
-MIT
+## 貢獻與回報問題
+
+歡迎技術交流、錯誤回報與功能建議：
+
+- Bug 或功能建議：使用 GitHub [Issues](../../issues/new/choose)。
+- 程式碼變更：請先閱讀 [CONTRIBUTING.md](CONTRIBUTING.md)，再建立 Pull Request。
+- 安全漏洞：請依 [SECURITY.md](SECURITY.md) 的方式私下回報，不要直接公開在 Issue。
+
+## 授權
+
+本專案以 [MIT License](LICENSE) 授權。第三方 provider、CLI 與圖示資源仍受其各自授權條款約束。
+
+## 變更紀錄
+
+請參考 [CHANGELOG.md](CHANGELOG.md)。

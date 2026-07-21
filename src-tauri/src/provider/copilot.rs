@@ -1,107 +1,125 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::db::ensure_parent_dir;
-use crate::settings::resolve_copilot_root;
+use crate::settings::{default_copilot_hook_scripts_root, resolve_copilot_root};
 use crate::types::*;
 
 use super::bridge::{read_bridge_diagnostics, resolve_copilot_integration_path};
 use super::{
-    build_install_failure_status, build_provider_integration_status, managed_provider_metadata,
-    validate_integration_target, validate_managed_metadata, write_provider_integration_file,
+    build_install_failure_status, build_provider_integration_status, install_hook_scripts,
+    managed_provider_metadata, validate_integration_target, validate_managed_metadata,
+    write_provider_integration_file,
 };
 
-fn powershell_single_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
+const HOOK_SCRIPT_VERSION: &str = "3";
+
+// Node.js 主軌（.cjs，強制 CommonJS）
+const MODULE_RECORD_EVENT_JS: &str =
+    include_str!("../../../hooks/copilot/modules/record-event.cjs");
+const MODULE_NOTIFY_JS: &str = include_str!("../../../hooks/copilot/modules/notify.cjs");
+const SCRIPT_ON_SESSION_START_JS: &str =
+    include_str!("../../../hooks/copilot/on-session-start.cjs");
+const SCRIPT_ON_SESSION_END_JS: &str = include_str!("../../../hooks/copilot/on-session-end.cjs");
+const SCRIPT_ON_USER_PROMPT_SUBMITTED_JS: &str =
+    include_str!("../../../hooks/copilot/on-user-prompt-submitted.cjs");
+const SCRIPT_ON_PRE_TOOL_USE_JS: &str = include_str!("../../../hooks/copilot/on-pre-tool-use.cjs");
+const SCRIPT_ON_POST_TOOL_USE_JS: &str =
+    include_str!("../../../hooks/copilot/on-post-tool-use.cjs");
+const SCRIPT_ON_ERROR_OCCURRED_JS: &str =
+    include_str!("../../../hooks/copilot/on-error-occurred.cjs");
+
+// sh fallback（無 node 環境時的手動退路）
+const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/copilot/modules/record-event.sh");
+const SCRIPT_ON_SESSION_START_SH: &str = include_str!("../../../hooks/copilot/on-session-start.sh");
+const SCRIPT_ON_SESSION_END_SH: &str = include_str!("../../../hooks/copilot/on-session-end.sh");
+const SCRIPT_ON_USER_PROMPT_SUBMITTED_SH: &str =
+    include_str!("../../../hooks/copilot/on-user-prompt-submitted.sh");
+const SCRIPT_ON_PRE_TOOL_USE_SH: &str = include_str!("../../../hooks/copilot/on-pre-tool-use.sh");
+const SCRIPT_ON_POST_TOOL_USE_SH: &str = include_str!("../../../hooks/copilot/on-post-tool-use.sh");
+const SCRIPT_ON_ERROR_OCCURRED_SH: &str =
+    include_str!("../../../hooks/copilot/on-error-occurred.sh");
+
+fn hook_script_entries() -> [(&'static str, &'static str); 15] {
+    [
+        ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
+        ("modules/notify.cjs", MODULE_NOTIFY_JS),
+        ("on-session-start.cjs", SCRIPT_ON_SESSION_START_JS),
+        ("on-session-end.cjs", SCRIPT_ON_SESSION_END_JS),
+        (
+            "on-user-prompt-submitted.cjs",
+            SCRIPT_ON_USER_PROMPT_SUBMITTED_JS,
+        ),
+        ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
+        ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
+        ("on-error-occurred.cjs", SCRIPT_ON_ERROR_OCCURRED_JS),
+        ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
+        ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
+        ("on-session-end.sh", SCRIPT_ON_SESSION_END_SH),
+        (
+            "on-user-prompt-submitted.sh",
+            SCRIPT_ON_USER_PROMPT_SUBMITTED_SH,
+        ),
+        ("on-pre-tool-use.sh", SCRIPT_ON_PRE_TOOL_USE_SH),
+        ("on-post-tool-use.sh", SCRIPT_ON_POST_TOOL_USE_SH),
+        ("on-error-occurred.sh", SCRIPT_ON_ERROR_OCCURRED_SH),
+    ]
 }
 
-fn render_copilot_hook_ps(
-    bridge_path: &Path,
-    event_type: &str,
-    title_assignment: &str,
-    error_assignment: &str,
-) -> String {
-    let bridge_path_literal = powershell_single_quoted(&bridge_path.to_string_lossy());
-    let bridge_parent_literal = powershell_single_quoted(
-        &bridge_path
-            .parent()
-            .unwrap_or(bridge_path)
-            .to_string_lossy(),
-    );
-    let event_type_literal = powershell_single_quoted(event_type);
-    let provider_literal = powershell_single_quoted(COPILOT_PROVIDER);
+pub(crate) fn ensure_copilot_hook_scripts_installed() -> Result<PathBuf, String> {
+    let root = default_copilot_hook_scripts_root()?;
+    install_hook_scripts(
+        "Copilot",
+        &root,
+        &hook_script_entries(),
+        HOOK_SCRIPT_VERSION,
+    )?;
+    super::install_notification_binary(&root)?;
+    Ok(root)
+}
+
+/// 移除 SessionHub 安裝的 Copilot hook 腳本（`~/.copilot/hooks`），保留使用者自訂檔案
+fn remove_copilot_hook_scripts() {
+    let Ok(root) = default_copilot_hook_scripts_root() else {
+        return;
+    };
+    super::uninstall_hook_scripts(&root, &hook_script_entries());
+    super::uninstall_notification_binary(&root);
+}
+
+fn sh_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// 產生 Node.js 主軌 hook 命令。Copilot 在各平台以 shell 執行 `command` 欄，
+/// shell 會由 PATH 解析 `node`；無 node 環境時可改用磁碟上保留的 .sh 腳本手動退路。
+fn render_copilot_hook_command(script_path: &Path, bridge_path: &Path) -> String {
+    let script_literal = sh_single_quoted(&script_path.to_string_lossy());
+    let bridge_literal = sh_single_quoted(&bridge_path.to_string_lossy());
 
     format!(
-        concat!(
-            "$payload = [Console]::In.ReadToEnd(); ",
-            "if ([string]::IsNullOrWhiteSpace($payload)) {{ exit 0 }}; ",
-            "$event = $payload | ConvertFrom-Json; ",
-            "$timestamp = if ($event.timestamp) {{ [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$event.timestamp).UtcDateTime.ToString('o') }} else {{ [DateTimeOffset]::UtcNow.ToString('o') }}; ",
-            "$cwd = if ($null -ne $event.cwd -and -not [string]::IsNullOrWhiteSpace([string]$event.cwd)) {{ [string]$event.cwd }} else {{ $null }}; ",
-            "{title_assignment} ",
-            "{error_assignment} ",
-            "$record = [ordered]@{{ version = {version}; provider = {provider}; eventType = {event_type}; timestamp = $timestamp; sessionId = $null; cwd = $cwd; sourcePath = $null; title = $title; error = $error }}; ",
-            "New-Item -ItemType Directory -Force -Path {bridge_parent} | Out-Null; ",
-            "[System.IO.File]::AppendAllText({bridge_path}, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false));",
-        ),
-        title_assignment = title_assignment,
-        error_assignment = error_assignment,
-        version = PROVIDER_INTEGRATION_VERSION,
-        provider = provider_literal,
-        event_type = event_type_literal,
-        bridge_parent = bridge_parent_literal,
-        bridge_path = bridge_path_literal,
+        "node {script} --bridge-path {bridge} --provider {provider} # {marker}",
+        script = script_literal,
+        bridge = bridge_literal,
+        provider = COPILOT_PROVIDER,
+        marker = SESSIONHUB_HOOK_COMMAND_MARKER,
     )
 }
 
-fn render_copilot_integration(bridge_path: &Path) -> Result<String, String> {
-    let hook_session_start = render_copilot_hook_ps(
-        bridge_path,
-        "session.started",
-        "$title = $null;",
-        "$error = $null;",
-    );
-    let hook_session_end = render_copilot_hook_ps(
-        bridge_path,
-        "session.ended",
-        "$title = $null;",
-        "$error = if ($event.reason -eq 'error') { 'copilot session ended with error' } else { $null };",
-    );
-    let hook_prompt_submitted = render_copilot_hook_ps(
-        bridge_path,
-        "prompt.submitted",
-        "$title = if ($event.prompt) { $s = [string]$event.prompt; if ($s.Length -gt 80) { $s.Substring(0, 80) } else { $s } } else { $null };",
-        "$error = $null;",
-    );
-    let hook_pre_tool = render_copilot_hook_ps(
-        bridge_path,
-        "tool.pre",
-        "$title = if ($event.toolName) { [string]$event.toolName } else { $null };",
-        "$error = $null;",
-    );
-    let hook_post_tool = render_copilot_hook_ps(
-        bridge_path,
-        "tool.post",
-        "$title = if ($event.toolName) { [string]$event.toolName } else { $null };",
-        "$rt = if ($event.toolResult) { [string]$event.toolResult.resultType } else { $null }; $error = if ($rt -eq 'failure' -or $rt -eq 'denied') { 'tool ' + [string]$event.toolName + ' ' + $rt } else { $null };",
-    );
-    let hook_error_occurred = render_copilot_hook_ps(
-        bridge_path,
-        "session.errored",
-        "$title = if ($event.error -and $event.error.name) { [string]$event.error.name } else { $null };",
-        "$error = if ($event.error -and $event.error.message) { [string]$event.error.message } else { 'unknown error' };",
-    );
-
+fn render_copilot_integration(
+    bridge_path: &Path,
+    hook_scripts_root: &Path,
+) -> Result<String, String> {
     let integration = serde_json::json!({
         "version": 1,
         "sessionHub": managed_provider_metadata(COPILOT_PROVIDER, bridge_path),
         "hooks": {
-            "sessionStart":         [{ "type": "command", "powershell": hook_session_start }],
-            "sessionEnd":           [{ "type": "command", "powershell": hook_session_end }],
-            "userPromptSubmitted":  [{ "type": "command", "powershell": hook_prompt_submitted }],
-            "preToolUse":           [{ "type": "command", "powershell": hook_pre_tool }],
-            "postToolUse":          [{ "type": "command", "powershell": hook_post_tool }],
-            "errorOccurred":        [{ "type": "command", "powershell": hook_error_occurred }],
+            "sessionStart": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-session-start.cjs"), bridge_path) }],
+            "sessionEnd": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-session-end.cjs"), bridge_path) }],
+            "userPromptSubmitted": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-user-prompt-submitted.cjs"), bridge_path) }],
+            "preToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-pre-tool-use.cjs"), bridge_path) }],
+            "postToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-post-tool-use.cjs"), bridge_path) }],
+            "errorOccurred": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-error-occurred.cjs"), bridge_path) }],
         }
     });
 
@@ -138,7 +156,28 @@ pub(crate) fn install_or_update_copilot_integration(
         );
     };
 
-    let content = match render_copilot_integration(&bridge_path) {
+    if let Err(error) = ensure_copilot_hook_scripts_installed() {
+        return build_install_failure_status(
+            COPILOT_PROVIDER,
+            Some(config_path.clone()),
+            diagnostics,
+            error,
+        );
+    }
+
+    let hook_scripts_root = match default_copilot_hook_scripts_root() {
+        Ok(path) => path,
+        Err(error) => {
+            return build_install_failure_status(
+                COPILOT_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                error,
+            );
+        }
+    };
+
+    let content = match render_copilot_integration(&bridge_path, &hook_scripts_root) {
         Ok(content) => content,
         Err(error) => {
             return build_install_failure_status(
@@ -150,9 +189,7 @@ pub(crate) fn install_or_update_copilot_integration(
         }
     };
 
-    if let Err(error) = ensure_parent_dir(&bridge_path)
-        .and_then(|_| write_provider_integration_file(&config_path, &content))
-    {
+    if let Err(error) = write_provider_integration_file(&config_path, &content) {
         return build_install_failure_status(
             COPILOT_PROVIDER,
             Some(config_path),
@@ -282,4 +319,46 @@ pub(crate) fn detect_copilot_integration_status(
             Some(error),
         ),
     }
+}
+
+pub(crate) fn uninstall_copilot_integration(
+    copilot_root: Option<&str>,
+) -> ProviderIntegrationStatus {
+    let diagnostics = read_bridge_diagnostics(COPILOT_PROVIDER);
+    let copilot_root = match resolve_copilot_root(copilot_root) {
+        Ok(path) => path,
+        Err(error) => {
+            return build_provider_integration_status(
+                COPILOT_PROVIDER,
+                ProviderIntegrationState::ManualRequired,
+                None,
+                diagnostics,
+                None,
+                Some(error),
+            );
+        }
+    };
+    let config_path = resolve_copilot_integration_path(&copilot_root);
+
+    remove_copilot_hook_scripts();
+
+    if config_path.exists() {
+        if let Err(error) = fs::remove_file(&config_path) {
+            return build_install_failure_status(
+                COPILOT_PROVIDER,
+                Some(config_path),
+                diagnostics,
+                format!("failed to remove Copilot integration file: {error}"),
+            );
+        }
+    }
+
+    build_provider_integration_status(
+        COPILOT_PROVIDER,
+        ProviderIntegrationState::Missing,
+        Some(config_path),
+        diagnostics,
+        None,
+        None,
+    )
 }

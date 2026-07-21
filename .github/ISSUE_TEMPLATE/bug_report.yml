@@ -1,0 +1,43 @@
+name: Bug 回報
+description: 回報可重現的錯誤
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        請先確認沒有重複的 Issue。請勿貼出 API key、Access Token、session 內容或個人資料。
+  - type: input
+    id: version
+    attributes:
+      label: SessionHub 版本
+      placeholder: 0.1.6 或 commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      description: 請用最小步驟描述如何觸發問題。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期行為
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 實際行為
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境資訊
+      description: Windows 版本、provider、安裝方式，以及相關設定摘要。
+    validations:
+      required: true

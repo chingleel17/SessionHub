@@ -11,7 +11,7 @@
 
 #### Scenario: 篩選至單一 provider
 
-- **WHEN** 使用者點擊 `Copilot` 或 `OpenCode` 篩選按鈕
+- **WHEN** 使用者點擊 `Copilot`、`OpenCode` 或 `Codex` 篩選按鈕
 - **THEN** session 列表只顯示該 provider 的 session
 - **AND** 篩選按鈕呈現選中狀態（active style）
 

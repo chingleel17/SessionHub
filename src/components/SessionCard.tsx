@@ -1,117 +1,85 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
-import type { IdeLauncherType, SessionActivityStatus, SessionInfo, SessionStats, ToolAvailability } from "../types";
+import type {
+  SessionActivityStatus,
+  SessionInfo,
+  SessionStats,
+  SessionTodo,
+} from "../types";
 import { formatDateTime } from "../utils/formatDate";
+import { getProviderLabel } from "../utils/providerLabel";
 import {
   ArchiveIcon,
   CopyIcon,
   DeleteIcon,
   EditNotesIcon,
   EditTagsIcon,
+  FocusIcon,
   PlanIcon,
   StatsIcon,
   TerminalIcon,
   UnarchiveIcon,
 } from "./Icons";
+import { IconButton } from "./ui/IconButton";
+import { ProviderIcon } from "./ProviderIcon";
 import { SessionStatsBadge } from "./SessionStatsBadge";
 import { SessionStatsPanel } from "./SessionStatsPanel";
 
-const LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
-  { type: "terminal", label: "Terminal", icon: ">_" },
-  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
-  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
-  { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
-  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
-  { type: "explorer", label: "Explorer", icon: "📁" },
-];
-
 type Props = {
   session: SessionInfo;
-  onOpenTerminal: (session: SessionInfo) => void;
   onCopyCommand: (session: SessionInfo) => void;
   onEditNotes: (session: SessionInfo) => void;
   onEditTags: (session: SessionInfo) => void;
+  onEditTag: (session: SessionInfo, tag: string, tagIndex: number) => void;
   onOpenPlan: (session: SessionInfo) => void;
+  onOpenTodos: (session: SessionInfo) => void;
   onArchive: (session: SessionInfo) => void;
   onUnarchive: (session: SessionInfo) => void;
   onDelete: (session: SessionInfo) => void;
   stats?: SessionStats;
   statsLoading: boolean;
+  todos: SessionTodo[];
+  todosLoading: boolean;
   activityStatus?: SessionActivityStatus;
-  onOpenInTool: (session: SessionInfo, tool: IdeLauncherType) => void;
+  onResumeSession: (session: SessionInfo) => void;
   onFocusTerminal: (session: SessionInfo) => void;
-  defaultLauncher: string | null;
-  toolAvailability: ToolAvailability | null;
-  isLauncherOpen: boolean;
-  onToggleLauncher: () => void;
 };
 
 function getSessionTitle(session: SessionInfo) {
   return session.summary?.trim() || session.id;
 }
 
-function getProviderLabel(provider: string): string {
-  switch (provider) {
-    case "copilot":
-      return "Copilot";
-    case "opencode":
-      return "OpenCode";
-    default:
-      return provider;
-  }
+function supportsSessionCommandCopy(provider: string): boolean {
+  return ["copilot", "opencode", "codex", "claude"].includes(provider);
 }
 
 export function SessionCard({
   session,
-  onOpenTerminal,
   onCopyCommand,
   onEditNotes,
   onEditTags,
+  onEditTag,
   onOpenPlan,
+  onOpenTodos,
   onArchive,
   onUnarchive,
   onDelete,
   stats,
   statsLoading,
+  todos,
+  todosLoading,
   activityStatus,
-  onOpenInTool,
+  onResumeSession,
   onFocusTerminal,
-  defaultLauncher,
-  toolAvailability,
-  isLauncherOpen,
-  onToggleLauncher,
 }: Props) {
   const { t, locale } = useI18n();
   const [showStats, setShowStats] = useState(false);
-  const menuBtnRef = useRef<HTMLButtonElement>(null);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-
-  // 選單開啟時計算位置；關閉時清除
-  useEffect(() => {
-    if (isLauncherOpen && menuBtnRef.current) {
-      const rect = menuBtnRef.current.getBoundingClientRect();
-      setMenuPos({ top: rect.bottom + 2, left: rect.left });
-    } else {
-      setMenuPos(null);
-    }
-  }, [isLauncherOpen]);
-
-  // click-outside 自動關閉
-  useEffect(() => {
-    if (!isLauncherOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as Element).closest("[data-launcher-menu]")) {
-        onToggleLauncher();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [isLauncherOpen, onToggleLauncher]);
 
   const activityStatusCls = activityStatus
     ? `activity-badge activity-badge--${activityStatus.status}`
     : null;
+  const supportsCommandCopy = supportsSessionCommandCopy(session.provider);
+  const supportsPlanEditing = session.provider !== "codex";
   const activityLabel = activityStatus
     ? activityStatus.status === "active"
       ? (t as (k: string) => string)(`dashboard.kanban.detail.${activityStatus.detail ?? "working"}`)
@@ -128,13 +96,20 @@ export function SessionCard({
 
         <div className="session-chip-row">
           <span className={`provider-tag provider-tag--${session.provider}`}>
+            <ProviderIcon provider={session.provider} label={getProviderLabel(session.provider)} />
             {getProviderLabel(session.provider)}
           </span>
           {session.isArchived ? (
             <span className="session-chip muted-chip">{t("session.archived")}</span>
           ) : null}
           {session.hasPlan ? (
-            <span className="session-chip">{t("session.hasPlan")}</span>
+            <button
+              type="button"
+              className="session-chip session-chip-button"
+              onClick={() => onOpenPlan(session)}
+            >
+              {t("session.hasPlan")}
+            </button>
           ) : null}
           {session.parseError ? (
             <span className="session-chip error-chip">{t("session.parseError")}</span>
@@ -142,10 +117,17 @@ export function SessionCard({
           {activityStatusCls && activityLabel ? (
             <span className={activityStatusCls}>{activityLabel}</span>
           ) : null}
-          {session.tags.map((tag) => (
-            <span key={tag} className="session-chip tag-chip">
+          {session.tags.map((tag, tagIndex) => (
+            <button
+              key={`${session.id}:${tag}:${tagIndex}`}
+              type="button"
+              className="session-chip session-chip-button tag-chip tag-chip-button"
+              onClick={() => onEditTag(session, tag, tagIndex)}
+              title={t("session.actions.editTags")}
+              aria-label={`${t("session.actions.editTags")}: #${tag}`}
+            >
               #{tag}
-            </span>
+            </button>
           ))}
         </div>
       </div>
@@ -163,161 +145,125 @@ export function SessionCard({
           <span className="session-meta-label">{t("session.summaryCount")}</span>
           <p>{session.summaryCount ?? 0}</p>
         </div>
+        <div>
+          <span className="session-meta-label">{t("session.repo")}</span>
+          <p>{session.repoName ?? "-"}</p>
+        </div>
       </div>
 
       {session.notes ? (
-        <p className="session-notes">
+        <button
+          type="button"
+          className="session-notes session-notes-button"
+          onClick={() => onEditNotes(session)}
+          title={t("session.actions.editNotes")}
+          aria-label={t("session.actions.editNotes")}
+        >
           <strong>{t("session.notes")}</strong> {session.notes}
-        </p>
+        </button>
       ) : null}
 
       <div className="session-actions">
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.openTerminal")}
-          aria-label={t("session.actions.openTerminal")}
-          onClick={() => onOpenTerminal(session)}
+        <IconButton
+          label={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+          className="session-action-button"
+          onClick={() => onResumeSession(session)}
         >
           <TerminalIcon size={16} />
-        </button>
-        <div className="launcher-dropdown">
-          <button
-            ref={menuBtnRef}
-            type="button"
-            className="icon-button"
-            title={t("session.actions.chooseTool")}
-            aria-label={t("session.actions.chooseTool")}
-            onClick={() => onToggleLauncher()}
-          >
-            ⋯
-          </button>
-          {isLauncherOpen && menuPos ? createPortal(
-            <div
-              data-launcher-menu="true"
-              className="launcher-menu"
-              style={{
-                position: "fixed",
-                top: menuPos.top,
-                left: menuPos.left,
-                zIndex: 9999,
-              }}
-            >
-              {LAUNCHER_OPTIONS.map((opt) => {
-                const available = !opt.availKey || !toolAvailability ? true : toolAvailability[opt.availKey];
-                return (
-                  <button
-                    key={opt.type}
-                    type="button"
-                    className={`launcher-menu-item${defaultLauncher === opt.type ? " launcher-menu-item--default" : ""}${!available ? " launcher-menu-item--disabled" : ""}`}
-                    disabled={!available}
-                    onClick={() => { onOpenInTool(session, opt.type); onToggleLauncher(); }}
-                  >
-                    <span className="launcher-option-icon">{opt.icon}</span>
-                    {opt.label}
-                    {!available ? <span className="launcher-option-unavail"> (未安裝)</span> : null}
-                  </button>
-                );
-              })}
-            </div>,
-            document.body
-          ) : null}
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.focusTerminal")}
-          aria-label={t("session.actions.focusTerminal")}
+        </IconButton>
+        <IconButton
+          label={t("session.actions.focusTerminal")}
+          className="session-action-button"
           onClick={() => onFocusTerminal(session)}
         >
-          ⊙
-        </button>
+          <FocusIcon size={16} />
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.copyCommand")}
-          aria-label={t("session.actions.copyCommand")}
-          onClick={() => onCopyCommand(session)}
-        >
-          <CopyIcon size={16} />
-        </button>
+        {supportsCommandCopy ? (
+          <IconButton
+            label={t("session.actions.copyCommand")}
+            className="session-action-button"
+            onClick={() => onCopyCommand(session)}
+          >
+            <CopyIcon size={16} />
+          </IconButton>
+        ) : null}
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editNotes")}
-          aria-label={t("session.actions.editNotes")}
+        <IconButton
+          label={t("session.actions.editNotes")}
+          className="session-action-button"
           onClick={() => onEditNotes(session)}
         >
           <EditNotesIcon size={16} />
-        </button>
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editTags")}
-          aria-label={t("session.actions.editTags")}
+        <IconButton
+          label={t("session.actions.editTags")}
+          className="session-action-button"
           onClick={() => onEditTags(session)}
         >
           <EditTagsIcon size={16} />
-        </button>
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("session.actions.editPlan")}
-          aria-label={t("session.actions.editPlan")}
-          onClick={() => onOpenPlan(session)}
-        >
-          <PlanIcon size={16} />
-        </button>
+        {supportsPlanEditing ? (
+          <IconButton
+            label={t("session.actions.editPlan")}
+            className="session-action-button"
+            onClick={() => onOpenPlan(session)}
+          >
+            <PlanIcon size={16} />
+          </IconButton>
+        ) : null}
 
         {session.isArchived ? (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.unarchive")}
-            aria-label={t("session.actions.unarchive")}
+          <IconButton
+            label={t("session.actions.unarchive")}
+            className="session-action-button"
             onClick={() => onUnarchive(session)}
           >
             <UnarchiveIcon size={16} />
-          </button>
+          </IconButton>
         ) : (
-          <button
-            type="button"
-            className="icon-button"
-            title={t("session.actions.archive")}
-            aria-label={t("session.actions.archive")}
+          <IconButton
+            label={t("session.actions.archive")}
+            className="session-action-button"
             onClick={() => onArchive(session)}
           >
             <ArchiveIcon size={16} />
-          </button>
+          </IconButton>
         )}
 
-        <button
-          type="button"
-          className="icon-button"
-          title={t("stats.detail.title")}
-          aria-label={t("stats.detail.title")}
+        <IconButton
+          label={t("stats.detail.title")}
+          className="session-action-button"
           onClick={() => setShowStats((value) => !value)}
         >
           <StatsIcon size={16} />
-        </button>
+        </IconButton>
 
-        <button
-          type="button"
-          className="icon-button icon-button--danger"
-          title={t("session.actions.delete")}
-          aria-label={t("session.actions.delete")}
+        <IconButton
+          label={t("session.actions.delete")}
+          className="session-action-button"
           onClick={() => onDelete(session)}
+          danger
         >
           <DeleteIcon size={16} />
-        </button>
+        </IconButton>
       </div>
 
-      <SessionStatsBadge stats={stats} isLoading={statsLoading} />
-      {showStats && stats ? <SessionStatsPanel stats={stats} provider={session.provider} /> : null}
+      <SessionStatsBadge
+        session={session}
+        stats={stats}
+        isLoading={statsLoading}
+        todos={todos}
+        todosLoading={todosLoading}
+        onOpenTodos={onOpenTodos}
+      />
+      {showStats ? (
+        <>
+          {stats ? <SessionStatsPanel stats={stats} /> : null}
+        </>
+      ) : null}
     </article>
   );
 }

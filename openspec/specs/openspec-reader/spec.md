@@ -41,3 +41,18 @@
 
 - **WHEN** 指定路徑的檔案不存在
 - **THEN** 系統回傳 `Err("file not found")`
+
+### Requirement: 寫入 OpenSpec 文件內容
+
+系統 SHALL 提供 `write_openspec_file(project_cwd, relative_path, content)` Tauri command，安全地寫回指定 openspec 目錄下的 md 文件內容。
+
+#### Scenario: 成功寫入文件內容
+
+- **WHEN** 前端呼叫 `write_openspec_file` 並傳入有效的 project_cwd、relative_path 與 content
+- **AND** relative_path 對應的檔案存在且在 openspec 目錄下
+- **THEN** 系統將 content 完整寫回該檔案
+
+#### Scenario: 寫入路徑安全驗證失敗
+
+- **WHEN** relative_path 包含 `..` 或正規化後逃逸出 `<project_cwd>/openspec/` 目錄
+- **THEN** 系統回傳錯誤，不寫入任何檔案

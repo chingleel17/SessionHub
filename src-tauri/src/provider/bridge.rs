@@ -1,14 +1,19 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
-use crate::settings::resolve_provider_bridge_path;
+use crate::db::DbState;
+use crate::sessions::find_session_by_cwd_internal;
+use crate::settings::{resolve_copilot_root, resolve_provider_bridge_path};
 use crate::types::*;
+
+static EVENT_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ── 路徑輔助 ────────────────────────────────────────────────────────────────
 
@@ -22,6 +27,8 @@ pub(crate) fn provider_refresh_event_name(provider: &str) -> Result<&'static str
     match provider {
         COPILOT_PROVIDER => Ok("copilot-sessions-updated"),
         OPENCODE_PROVIDER => Ok("opencode-sessions-updated"),
+        CODEX_PROVIDER => Ok("codex-sessions-updated"),
+        CLAUDE_PROVIDER => Ok("claude-sessions-updated"),
         _ => Err(format!("unsupported provider: {provider}")),
     }
 }
@@ -82,6 +89,29 @@ pub(crate) fn should_emit_provider_refresh_at(
 
     tracked.insert(provider.to_string(), now);
     Ok(true)
+}
+
+fn make_log_entry(record: &ProviderBridgeRecord, status: &str) -> BridgeEventLogEntry {
+    let seq = EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    BridgeEventLogEntry {
+        id: format!("{ms}-{seq}"),
+        provider: record.provider.clone(),
+        event_type: record.event_type.clone(),
+        timestamp: record.timestamp.clone(),
+        cwd: record.cwd.clone(),
+        session_id: record.session_id.clone(),
+        title: record.title.clone(),
+        error: record.error.clone(),
+        status: status.to_string(),
+    }
+}
+
+fn emit_event_log(app: &tauri::AppHandle, entry: BridgeEventLogEntry) {
+    let _ = app.emit("provider-bridge-event-logged", entry);
 }
 
 pub(crate) fn emit_provider_refresh(
@@ -189,10 +219,7 @@ pub(crate) fn should_emit_copilot_refresh(
     Ok(true)
 }
 
-pub(crate) fn is_relevant_copilot_event(
-    event: &notify::Event,
-    session_roots: &[PathBuf],
-) -> bool {
+pub(crate) fn is_relevant_copilot_event(event: &notify::Event, session_roots: &[PathBuf]) -> bool {
     if !is_relevant_watcher_event_kind(&event.kind) {
         return false;
     }
@@ -209,14 +236,16 @@ pub(crate) fn is_relevant_copilot_event(
 // ── OpenCode Watch Snapshot ──────────────────────────────────────────────────
 
 pub(crate) fn build_opencode_watch_snapshot(opencode_root: &Path) -> OpenCodeWatchSnapshot {
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
     let session_storage = opencode_root.join("storage").join("session");
     let message_storage = opencode_root.join("storage").join("message");
 
     OpenCodeWatchSnapshot {
-        db_exists: session_storage.exists(),
-        wal_exists: message_storage.exists(),
-        db_mtime_ms: path_mtime_millis(&session_storage),
-        wal_mtime_ms: path_mtime_millis(&message_storage),
+        db_exists: db_path.exists() || session_storage.exists(),
+        wal_exists: wal_path.exists() || message_storage.exists(),
+        db_mtime_ms: path_mtime_millis(&db_path).max(path_mtime_millis(&session_storage)),
+        wal_mtime_ms: path_mtime_millis(&wal_path).max(path_mtime_millis(&message_storage)),
         max_cursor: None,
     }
 }
@@ -238,25 +267,106 @@ pub(crate) fn should_emit_opencode_refresh(
     Ok(true)
 }
 
-pub(crate) fn is_relevant_opencode_event(
-    event: &notify::Event,
-    opencode_root: &Path,
-) -> bool {
+pub(crate) fn is_relevant_opencode_event(event: &notify::Event, opencode_root: &Path) -> bool {
     if !is_relevant_watcher_event_kind(&event.kind) {
         return false;
     }
 
+    let db_path = opencode_root.join("opencode.db");
+    let wal_path = opencode_root.join("opencode.db-wal");
     let session_storage = opencode_root.join("storage").join("session");
     let message_storage = opencode_root.join("storage").join("message");
 
     event.paths.iter().any(|path| {
         path == opencode_root
+            || path == &db_path
+            || path == &wal_path
             || path.starts_with(&session_storage)
             || path.starts_with(&message_storage)
     })
 }
 
 // ── Bridge Provider 比對 ─────────────────────────────────────────────────────
+
+/// 判斷事件是否為純活動提示：不改變 session 元數據，只需更新 activity status。
+/// 這類事件改走輕量 copilot-activity-hint，避免不必要的 workspace.yaml 掃描。
+fn is_activity_only_event(event_type: &str) -> bool {
+    matches!(event_type, "tool.pre" | "tool.post" | "prompt.submitted")
+}
+
+/// 依 hook eventType 計算前端需要的 (status, detail)。
+pub(crate) fn derive_activity_status(
+    event_type: &str,
+    stop_reason: Option<&str>,
+) -> (String, Option<String>) {
+    match event_type {
+        "session.started" | "prompt.submitted" => {
+            ("active".to_string(), Some("thinking".to_string()))
+        }
+        "tool.pre" => ("active".to_string(), Some("tool_call".to_string())),
+        "tool.post" => ("active".to_string(), Some("working".to_string())),
+        "session.stop" => {
+            let reason = stop_reason.unwrap_or("normal");
+            if reason == "normal" {
+                ("idle".to_string(), None)
+            } else {
+                ("waiting".to_string(), None)
+            }
+        }
+        "permission.updated" | "permission.asked" | "permission.v2.asked" => {
+            ("waiting".to_string(), None)
+        }
+        "permission.replied" | "permission.v2.replied" => ("active".to_string(), None),
+        _ => ("idle".to_string(), None),
+    }
+}
+
+fn current_timestamp_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // 簡易 ISO 8601 UTC 格式
+    let secs = ms / 1000;
+    let millis = ms % 1000;
+    let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
+}
+
+fn epoch_to_ymd_hms(secs: u128) -> (u32, u32, u32, u32, u32, u32) {
+    let secs = secs as u64;
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    // Tomohiko Sakamoto's algorithm
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    (y as u32, mo as u32, d as u32, h as u32, m as u32, s as u32)
+}
+
+/// 從 transcript_path（source_path）推導 Claude session_id。
+/// transcript_path 格式：`.../.claude/projects/<project>/<session-id>.jsonl`
+fn session_id_from_source_path(source_path: Option<&str>) -> Option<String> {
+    let path = source_path.filter(|s| !s.is_empty())?;
+    let p = Path::new(path);
+    if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
 
 pub(crate) fn matched_bridge_providers(
     event: &notify::Event,
@@ -302,10 +412,175 @@ pub(crate) fn process_provider_bridge_event(
     }
 
     if !register_provider_bridge_record(last_bridge_records, provider, &record)? {
+        emit_event_log(app, make_log_entry(&record, "skipped_dedup"));
         return Ok(false);
     }
 
-    emit_provider_refresh(app, refresh_state, provider)
+    if provider == COPILOT_PROVIDER {
+        if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
+            // tool.pre / tool.post / prompt.submitted 不會更改 session 元數據（summary/updatedAt）。
+            // 只需告知前端活動狀態即可，不做任何檔案 I/O 或 session 掃描。
+            if is_activity_only_event(&record.event_type) {
+                let (status, detail) = derive_activity_status(&record.event_type, None);
+                let payload = ActivityHintPayload {
+                    cwd: cwd.to_string(),
+                    event_type: record.event_type.clone(),
+                    title: record.title.clone(),
+                    error: record.error.clone(),
+                    session_id: None,
+                    status: Some(status),
+                    detail,
+                    last_activity_at: Some(current_timestamp_iso()),
+                };
+                app.emit("copilot-activity-hint", &payload)
+                    .map_err(|e| format!("failed to emit copilot-activity-hint: {e}"))?;
+                emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                return Ok(true);
+            }
+
+            let copilot_root = resolve_copilot_root(None)?;
+            let rate_ok =
+                should_emit_provider_refresh_at(refresh_state, COPILOT_PROVIDER, Instant::now())?;
+            if !rate_ok {
+                emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+                return Ok(false);
+            }
+
+            let db_state = app.state::<DbState>();
+            let conn = db_state
+                .conn
+                .lock()
+                .map_err(|e| format!("db lock poisoned: {e}"))?;
+            match find_session_by_cwd_internal(&copilot_root, cwd, &*conn)? {
+                Some(session) => {
+                    let payload = SessionTargetedPayload {
+                        session_id: session.id.clone(),
+                        cwd: cwd.to_string(),
+                        event_type: record.event_type.clone(),
+                    };
+                    app.emit("copilot-session-targeted", payload)
+                        .map_err(|e| format!("failed to emit copilot-session-targeted: {e}"))?;
+                    emit_event_log(app, make_log_entry(&record, "targeted"));
+                }
+                None => {
+                    app.emit("copilot-sessions-updated", ()).map_err(|e| {
+                        format!("failed to emit copilot-sessions-updated fallback: {e}")
+                    })?;
+                    emit_event_log(app, make_log_entry(&record, "fallback"));
+                }
+            }
+            return Ok(true);
+        }
+    }
+
+    if provider == CLAUDE_PROVIDER {
+        if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
+            // tool.pre / tool.post / prompt.submitted / session.started / session.stop
+            // 只需更新 activity status，不觸發掃描（session.stop 與 session.started 不改 JSONL 結構）
+            let is_hint = is_activity_only_event(&record.event_type)
+                || matches!(
+                    record.event_type.as_str(),
+                    "session.started" | "session.stop"
+                );
+            if is_hint {
+                let resolved_session_id = record
+                    .session_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| session_id_from_source_path(record.source_path.as_deref()));
+                let stop_reason = record.title.as_deref();
+                let (status, detail) = derive_activity_status(&record.event_type, stop_reason);
+                let payload = ActivityHintPayload {
+                    cwd: cwd.to_string(),
+                    event_type: record.event_type.clone(),
+                    title: record.title.clone(),
+                    error: record.error.clone(),
+                    session_id: resolved_session_id,
+                    status: Some(status),
+                    detail,
+                    last_activity_at: Some(current_timestamp_iso()),
+                };
+                app.emit("claude-activity-hint", &payload)
+                    .map_err(|e| format!("failed to emit claude-activity-hint: {e}"))?;
+                emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                // session.started 還需要觸發掃描（新 session），session.stop 則不需要
+                if record.event_type == "session.started" {
+                    let rate_ok = should_emit_provider_refresh_at(
+                        refresh_state,
+                        CLAUDE_PROVIDER,
+                        Instant::now(),
+                    )?;
+                    if rate_ok {
+                        app.emit("claude-sessions-updated", ())
+                            .map_err(|e| format!("failed to emit claude-sessions-updated: {e}"))?;
+                    }
+                }
+                return Ok(true);
+            }
+        }
+
+        // session_id 優先從 record 欄位取得；若無則從 source_path（transcript_path）推導
+        let resolved_session_id = record
+            .session_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| session_id_from_source_path(record.source_path.as_deref()));
+
+        if let Some(session_id) = resolved_session_id {
+            let rate_ok =
+                should_emit_provider_refresh_at(refresh_state, CLAUDE_PROVIDER, Instant::now())?;
+            if !rate_ok {
+                emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+                return Ok(false);
+            }
+            let payload = SessionTargetedPayload {
+                session_id,
+                cwd: record.cwd.clone().unwrap_or_default(),
+                event_type: record.event_type.clone(),
+            };
+            app.emit("claude-session-targeted", payload)
+                .map_err(|e| format!("failed to emit claude-session-targeted: {e}"))?;
+            emit_event_log(app, make_log_entry(&record, "targeted"));
+            return Ok(true);
+        }
+    }
+
+    if provider == OPENCODE_PROVIDER
+        && matches!(
+            record.event_type.as_str(),
+            "permission.updated"
+                | "permission.asked"
+                | "permission.v2.asked"
+                | "permission.replied"
+                | "permission.v2.replied"
+        )
+    {
+        let (status, detail) = derive_activity_status(&record.event_type, None);
+        let payload = ActivityHintPayload {
+            cwd: String::new(),
+            event_type: record.event_type.clone(),
+            title: record.title.clone(),
+            error: record.error.clone(),
+            session_id: record.session_id.clone(),
+            status: Some(status),
+            detail,
+            last_activity_at: Some(current_timestamp_iso()),
+        };
+        app.emit("opencode-activity-hint", &payload)
+            .map_err(|error| format!("failed to emit opencode-activity-hint: {error}"))?;
+        emit_event_log(app, make_log_entry(&record, "activity_hint"));
+        return Ok(true);
+    }
+
+    let rate_ok = emit_provider_refresh(app, refresh_state, provider)?;
+    if rate_ok {
+        emit_event_log(app, make_log_entry(&record, "full_refresh"));
+    } else {
+        emit_event_log(app, make_log_entry(&record, "skipped_rate_limit"));
+    }
+    Ok(rate_ok)
 }
 
 // ── Bridge 記錄讀寫 ──────────────────────────────────────────────────────────

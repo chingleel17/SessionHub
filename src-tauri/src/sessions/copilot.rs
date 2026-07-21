@@ -9,9 +9,8 @@ use std::os::windows::process::CommandExt;
 
 use rusqlite::Connection;
 
-use crate::db::{
-    delete_session_meta_internal, ensure_parent_dir, init_db, open_db_connection, read_session_meta,
-};
+use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_meta};
+use crate::sessions::configure_msys_stackdump_suppression;
 use crate::settings::detect_vscode_path;
 use crate::types::*;
 
@@ -56,6 +55,9 @@ pub(crate) fn parse_workspace_file(
         id: fallback_id.clone(),
         provider: default_provider(),
         cwd: None,
+        repo_root: None,
+        repo_name: None,
+        git_branch: None,
         summary: None,
         summary_count: None,
         created_at: None,
@@ -75,6 +77,9 @@ pub(crate) fn parse_workspace_file(
                 id: workspace.id,
                 provider: default_provider(),
                 cwd: workspace.cwd,
+                repo_root: None,
+                repo_name: None,
+                git_branch: None,
                 summary: workspace.summary,
                 summary_count: workspace.summary_count,
                 created_at: workspace.created_at,
@@ -202,7 +207,61 @@ pub(crate) fn scan_copilot_incremental_internal(
     Ok(())
 }
 
-// ── Session 操作 ─────────────────────────────────────────────────────────────
+pub(crate) fn find_session_by_cwd_internal(
+    copilot_root: &Path,
+    target_cwd: &str,
+    connection: &Connection,
+) -> Result<Option<SessionInfo>, String> {
+    let normalize = |p: &str| p.replace('\\', "/").to_lowercase();
+    let normalized_target = normalize(target_cwd);
+
+    for (dir, is_archived) in [
+        (copilot_root.join("session-state"), false),
+        (copilot_root.join("session-state-archive"), true),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("failed to read entry: {e}"))?;
+            let session_dir = entry.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let workspace_path = session_dir.join("workspace.yaml");
+            if !workspace_path.exists() {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&workspace_path) {
+                if let Ok(workspace) = serde_yaml::from_str::<WorkspaceYaml>(&content) {
+                    if workspace
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|c| normalize(c) == normalized_target)
+                    {
+                        let session_id = session_dir
+                            .file_name()
+                            .map(|v| v.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let meta = read_session_meta(&connection, &session_id)?;
+                        return Ok(Some(parse_workspace_file(
+                            &session_dir,
+                            &workspace_path,
+                            is_archived,
+                            meta,
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
 
 pub(crate) fn archive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     let source_dir = root_dir.join("session-state").join(session_id);
@@ -223,10 +282,7 @@ pub(crate) fn archive_session_internal(root_dir: &Path, session_id: &str) -> Res
     Ok(())
 }
 
-pub(crate) fn unarchive_session_internal(
-    root_dir: &Path,
-    session_id: &str,
-) -> Result<(), String> {
+pub(crate) fn unarchive_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
     let source_dir = root_dir.join("session-state-archive").join(session_id);
     let target_dir = root_dir.join("session-state").join(session_id);
 
@@ -248,7 +304,11 @@ pub(crate) fn unarchive_session_internal(
     Ok(())
 }
 
-pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Result<(), String> {
+pub(crate) fn delete_session_internal(
+    root_dir: &Path,
+    session_id: &str,
+    connection: &Connection,
+) -> Result<(), String> {
     for candidate in [
         root_dir.join("session-state").join(session_id),
         root_dir.join("session-state-archive").join(session_id),
@@ -257,9 +317,7 @@ pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Resu
             fs::remove_dir_all(&candidate)
                 .map_err(|error| format!("failed to delete session {}: {error}", session_id))?;
 
-            let connection = open_db_connection()?;
-            init_db(&connection)?;
-            delete_session_meta_internal(&connection, session_id)?;
+            delete_session_meta_internal(connection, session_id)?;
 
             return Ok(());
         }
@@ -268,7 +326,10 @@ pub(crate) fn delete_session_internal(root_dir: &Path, session_id: &str) -> Resu
     Err(format!("session {} does not exist", session_id))
 }
 
-pub(crate) fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize, String> {
+pub(crate) fn delete_empty_sessions_internal(
+    copilot_root: &str,
+    connection: &Connection,
+) -> Result<usize, String> {
     let root = PathBuf::from(copilot_root);
     let session_state_dir = root.join("session-state");
 
@@ -310,10 +371,7 @@ pub(crate) fn delete_empty_sessions_internal(copilot_root: &str) -> Result<usize
 
         match fs::remove_dir_all(&session_dir) {
             Ok(_) => {
-                if let Ok(connection) = open_db_connection() {
-                    let _ = init_db(&connection);
-                    let _ = delete_session_meta_internal(&connection, &session_id);
-                }
+                let _ = delete_session_meta_internal(connection, &session_id);
                 deleted_count += 1;
             }
             Err(error) => {
@@ -356,6 +414,8 @@ pub(crate) fn open_terminal_internal(terminal_path: &str, cwd: &str) -> Result<(
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+    configure_msys_stackdump_suppression(&mut cmd);
 
     cmd.spawn()
         .map_err(|error| format!("failed to open terminal: {error}"))?;

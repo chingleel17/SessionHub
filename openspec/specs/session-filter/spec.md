@@ -2,7 +2,7 @@
 
 ### Requirement: 多維度 session 篩選
 
-Session 列表 SHALL 支援多個篩選維度同時作用，以 AND 邏輯組合。
+Session 列表 SHALL 支援多個篩選維度同時作用，以 AND 邏輯組合。篩選工具列 SHALL 以緊湊單行佈局顯示，高度縮減至約 60px（含 padding），較原先高度縮減約 50%。
 
 #### Scenario: 文字搜尋篩選
 
@@ -23,6 +23,11 @@ Session 列表 SHALL 支援多個篩選維度同時作用，以 AND 邏輯組合
 
 - **WHEN** 多個篩選條件同時啟用
 - **THEN** 只顯示同時滿足所有條件的 session
+
+#### Scenario: 緊湊排版
+
+- **WHEN** 使用者開啟 sessions sub-tab
+- **THEN** 篩選工具列 SHALL 以 flex 單行排列顯示搜尋框、排序選單、checkbox 與動作按鈕，整體高度 SHALL 不超過 72px
 
 ### Requirement: 篩選狀態提示
 

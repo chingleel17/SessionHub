@@ -1,53 +1,556 @@
-﻿mod types;
-mod settings;
-mod db;
-mod provider;
-mod sessions;
-mod stats;
-mod watcher;
 mod activity;
-mod sisyphus;
-mod openspec_scan;
+mod agents_config;
+mod antigravity_hooks;
 mod commands;
+mod db;
+mod mcp_config;
+mod openspec_scan;
 mod platform;
+mod provider;
+mod quota;
+mod sessions;
+mod settings;
+mod sisyphus;
+mod stats;
+mod tray_icon;
+mod types;
+mod watcher;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
-pub(crate) use types::*;
-pub(crate) use settings::*;
-pub(crate) use db::*;
-pub(crate) use watcher::*;
 pub(crate) use commands::*;
+pub(crate) use db::*;
+pub(crate) use settings::*;
+pub(crate) use types::*;
+pub(crate) use watcher::*;
+
+/// overlay 視窗 label
+pub(crate) const QUOTA_OVERLAY_LABEL: &str = "quota-overlay";
+/// mini panel 視窗 label
+pub(crate) const TRAY_PANEL_LABEL: &str = "tray-panel";
+
+/// 將設定變更定向通知 overlay webview，避免動態建立視窗遺漏 AppHandle 廣播。
+pub(crate) fn emit_overlay_settings_changed(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+) {
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("quota-overlay-settings-changed", settings);
+    }
+}
+
+/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過快照更新。
+pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
+    let _ = app.emit("quota-snapshots-updated", ());
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("quota-snapshots-updated", ());
+    }
+}
+
+/// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。
+fn has_saved_window_state(app: &tauri::AppHandle, label: &str) -> bool {
+    let Ok(app_data_dir) = app.path().app_data_dir() else {
+        return false;
+    };
+    let state_path = app_data_dir.join(".window-state.json");
+    let Ok(contents) = std::fs::read_to_string(state_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    value.get(label).is_some()
+}
+
+/// 將視窗定位到主螢幕右下角（保留少量邊距）。
+fn position_window_bottom_right(window: &tauri::WebviewWindow) {
+    const MARGIN: i32 = 16;
+    let (Ok(monitor), Ok(size)) = (window.current_monitor(), window.outer_size()) else {
+        return;
+    };
+    let Some(monitor) = monitor else { return };
+    let screen_pos = monitor.position();
+    let screen_size = monitor.size();
+    let x = screen_pos.x + screen_size.width as i32 - size.width as i32 - MARGIN;
+    let y = screen_pos.y + screen_size.height as i32 - size.height as i32 - MARGIN;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x.max(screen_pos.x), y.max(screen_pos.y)));
+}
+
+/// 建立（或顯示）常駐 quota overlay 視窗。
+///
+/// 必須在 Rust 端以 `WebviewWindowBuilder` 建立，`tauri.conf.json` 的 `focus: false`
+/// 在 Windows 不生效（tauri#11566 / #7519）。
+pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSettings) {
+    if let Some(existing) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        // 尺寸由前端依內容量測後自行同步（QuotaOverlay 的 ResizeObserver），這裡不強制固定尺寸
+        let _ = existing.show();
+        // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+        let _ = existing.set_skip_taskbar(true);
+        apply_overlay_locked(&existing, settings.quota_overlay_locked);
+        emit_overlay_settings_changed(app, settings);
+        return;
+    }
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        QUOTA_OVERLAY_LABEL,
+        tauri::WebviewUrl::App("index.html?view=quota-overlay".into()),
+    )
+    .title("SessionHub Quota Overlay")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .resizable(false)
+    .visible(false)
+    .inner_size(320.0, 360.0);
+
+    let window = match builder.build() {
+        Ok(w) => w,
+        Err(err) => {
+            eprintln!("[tray-quota] 建立 overlay 失敗: {err}");
+            return;
+        }
+    };
+
+    // 還原上次位置（若有），並套用多螢幕邊界驗證
+    use tauri_plugin_window_state::{StateFlags, WindowExt};
+    // 舊版 overlay 曾儲存過過小的尺寸，僅還原位置以免內容再次被裁切。
+    if has_saved_window_state(app, QUOTA_OVERLAY_LABEL) {
+        let _ = window.restore_state(StateFlags::POSITION);
+    } else {
+        // 首次啟用時尚無已存位置，預設定位到主螢幕右下角
+        position_window_bottom_right(&window);
+    }
+
+    // Windows transparent 白底 workaround（tauri#4881）：微調 size 觸發重繪後再顯示
+    if let Ok(size) = window.inner_size() {
+        let _ = window.set_size(tauri::PhysicalSize::new(
+            size.width.saturating_add(1),
+            size.height,
+        ));
+        let _ = window.set_size(size);
+    }
+
+    apply_overlay_locked(&window, settings.quota_overlay_locked);
+    emit_overlay_settings_changed(app, settings);
+    let _ = window.show();
+    // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+    let _ = window.set_skip_taskbar(true);
+}
+
+/// 依鎖定狀態設定滑鼠穿透（鎖定 = 穿透）
+pub(crate) fn apply_overlay_locked(window: &tauri::WebviewWindow, locked: bool) {
+    let _ = window.set_ignore_cursor_events(locked);
+}
+
+/// 關閉 overlay 視窗（若存在）
+pub(crate) fn close_quota_overlay(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        // 關閉前先把目前位置寫入 window-state 檔，
+        // 確保「隱藏後再開啟」（未重啟 app）也能還原到相同位置
+        use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+        let _ = app.save_window_state(StateFlags::POSITION);
+        let _ = window.close();
+    }
+}
+
+/// 依 `quota_overlay_enabled` 建立或關閉 overlay，並套用鎖定狀態。
+pub(crate) fn sync_overlay_visibility(app: &tauri::AppHandle, settings: &AppSettings) {
+    if settings.quota_overlay_enabled {
+        create_quota_overlay(app, settings);
+    } else {
+        close_quota_overlay(app);
+    }
+}
+
+/// 切換 tray mini panel 的顯示狀態（左鍵點擊 tray 時呼叫）。
+/// panel 不存在則建立於系統匣附近；已可見則隱藏；隱藏中則顯示並置前。
+pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, f64)>) {
+    if let Some(window) = app.get_webview_window(TRAY_PANEL_LABEL) {
+        let visible = window.is_visible().unwrap_or(false);
+        if visible {
+            let _ = window.hide();
+        } else {
+            position_panel_near_tray(app, &window, tray_rect);
+            let _ = window.show();
+            // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+            let _ = window.set_skip_taskbar(true);
+            let _ = window.set_focus();
+        }
+        return;
+    }
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        TRAY_PANEL_LABEL,
+        tauri::WebviewUrl::App("index.html?view=tray-panel".into()),
+    )
+    .title("SessionHub Quota")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .inner_size(320.0, 480.0)
+    .visible(false);
+
+    let window = match builder.build() {
+        Ok(w) => w,
+        Err(err) => {
+            eprintln!("[tray-quota] 建立 mini panel 失敗: {err}");
+            return;
+        }
+    };
+
+    // 定位到系統匣附近（右下角，taskbar 上方）
+    position_panel_near_tray(app, &window, tray_rect);
+    let _ = window.show();
+    // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
+    let _ = window.set_skip_taskbar(true);
+    let _ = window.set_focus();
+}
+
+/// 將 panel 定位到系統匣附近；取不到 tray 座標時退回螢幕右下角。
+fn position_panel_near_tray(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    tray_rect: Option<(f64, f64)>,
+) {
+    let panel_w = 320.0_f64;
+    let panel_h = 480.0_f64;
+    let margin = 12.0_f64;
+
+    // 使用 tray 所在螢幕的實體座標與原點，支援副螢幕不在 (0, 0) 的情況。
+    let monitor = tray_rect.and_then(|(tray_x, tray_y)| {
+        app.available_monitors().ok().and_then(|monitors| {
+            monitors.into_iter().find(|monitor| {
+                let position = monitor.position();
+                let size = monitor.size();
+                let right = position.x as f64 + size.width as f64;
+                let bottom = position.y as f64 + size.height as f64;
+                tray_x >= position.x as f64
+                    && tray_x <= right
+                    && tray_y >= position.y as f64
+                    && tray_y <= bottom
+            })
+        })
+    }).or_else(|| window.current_monitor().ok().flatten());
+
+    let (screen_x, screen_y, screen_w, screen_h, scale) = monitor
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            (
+                position.x as f64,
+                position.y as f64,
+                size.width as f64,
+                size.height as f64,
+                monitor.scale_factor(),
+            )
+        })
+        .unwrap_or((0.0, 0.0, 1920.0, 1080.0, 1.0));
+
+    let panel_w_phys = panel_w * scale;
+    let panel_h_phys = panel_h * scale;
+    let margin_phys = margin * scale;
+    // 預留 taskbar 高度（估 48 邏輯像素）
+    let taskbar_phys = 48.0 * scale;
+
+    let (x, y) = match tray_rect {
+        Some((tray_x, tray_y)) => {
+            let x = (tray_x - panel_w_phys / 2.0)
+                .min(screen_x + screen_w - panel_w_phys - margin_phys)
+                .max(screen_x + margin_phys);
+            let y = (tray_y - panel_h_phys - margin_phys).max(screen_y + margin_phys);
+            (x, y)
+        }
+        None => (
+            screen_x + screen_w - panel_w_phys - margin_phys,
+            screen_y + screen_h - panel_h_phys - taskbar_phys - margin_phys,
+        ),
+    };
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(WatcherState::default())
-        .manage(ScanCache::default())
+        .manage(std::sync::Arc::new(ScanCache::default()))
+        .manage(DbState::new().expect("failed to init metadata db"))
+        .manage(QuotaCache::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
-            open_db_connection_and_init()
-                .map_err(|e| tauri::Error::from(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            ensure_logs_dir();
+            provider::ensure_claude_hook_scripts_installed(Some(
+                settings.hook_scripts_path.as_str(),
+            ))?;
+            provider::ensure_codex_hook_scripts_installed()?;
+            provider::ensure_copilot_hook_scripts_installed()?;
             let watcher_state = app.state::<WatcherState>();
             restart_session_watcher_internal(
                 app.handle(),
                 &watcher_state,
                 Some(&settings.copilot_root),
                 Some(&settings.opencode_root),
+                Some(&settings.codex_root),
+                Some(&settings.claude_root),
                 &settings.enabled_providers,
             )?;
+
+            // Quota monitoring startup: load from DB then do background refresh
+            if settings.enable_quota_monitoring {
+                let db_state = app.state::<DbState>();
+                let quota_cache = app.state::<QuotaCache>();
+                {
+                    let conn = db_state.conn.lock().unwrap_or_else(|p| p.into_inner());
+                    let _ = quota::cache::load_cache_from_db(
+                        &conn,
+                        &quota_cache,
+                        &settings.quota_enabled_providers,
+                    );
+                }
+
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // Small delay to let the app fully start before first refresh
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    let db_state = app_handle.state::<DbState>();
+                    let quota_cache = app_handle.state::<QuotaCache>();
+                    let settings = load_settings_internal().unwrap_or_else(|_| AppSettings {
+                        enable_quota_monitoring: false,
+                        copilot_root: String::new(),
+                        opencode_root: String::new(),
+                        codex_root: String::new(),
+                        claude_root: String::new(),
+                        antigravity_root: String::new(),
+                        hook_scripts_path: String::new(),
+                        claude_quota_reset_day: 1,
+                        minimize_to_tray: false,
+                        terminal_path: None,
+                        external_editor_path: None,
+                        show_archived: false,
+                        pinned_projects: Vec::new(),
+                        enabled_providers: Vec::new(),
+                        provider_integrations: Vec::new(),
+                        default_launcher: None,
+                        enable_intervention_notification: false,
+                        enable_session_end_notification: false,
+                        show_status_bar: true,
+                        analytics_refresh_interval: 30,
+                        analytics_panel_collapsed: false,
+                        quota_enabled_providers: Vec::new(),
+                        allow_create_project_config_dir: false,
+                        agents_source_root: String::new(),
+                        tray_quota_mode: TrayQuotaMode::default(),
+                        tray_quota_primary_provider: None,
+                        tray_quota_panel_enabled: true,
+                        quota_overlay_enabled: false,
+                        quota_overlay_locked: true,
+                        quota_overlay_opacity: crate::types::default_quota_overlay_opacity(),
+                        quota_overlay_providers: Vec::new(),
+                        quota_overlay_theme: OverlayTheme::default(),
+                        quota_overlay_style: OverlayStyle::default(),
+                    });
+                    if settings.enable_quota_monitoring {
+                        commands::quota::refresh_quota_internal(
+                            &db_state,
+                            &quota_cache,
+                            &settings,
+                            None,
+                        );
+                        emit_quota_snapshots_updated(&app_handle);
+                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
+                    }
+                });
+            }
+
+            // Background quota polling thread
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mut last_refresh = std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(3600))
+                        .unwrap_or(std::time::Instant::now());
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        let settings = match load_settings_internal() {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        if !settings.enable_quota_monitoring {
+                            continue;
+                        }
+                        // 固定每 30 分鐘刷新一次，避免與 Claude Code CLI 等工具同時打 API 撞到 429 限流
+                        const QUOTA_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
+                        if last_refresh.elapsed().as_secs() < QUOTA_REFRESH_INTERVAL_SECS {
+                            continue;
+                        }
+                        last_refresh = std::time::Instant::now();
+                        let db_state = app_handle.state::<DbState>();
+                        let quota_cache = app_handle.state::<QuotaCache>();
+                        commands::quota::refresh_quota_internal(
+                            &db_state,
+                            &quota_cache,
+                            &settings,
+                            None,
+                        );
+                        emit_quota_snapshots_updated(&app_handle);
+                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
+                    }
+                });
+            }
+
+            // Build system tray icon with menu
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok();
+            let mut tray_builder =
+                tauri::tray::TrayIconBuilder::with_id(crate::tray_icon::TRAY_ICON_ID);
+            if let Some(icon) = tray_icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            let show_item = tray_builder.on_tray_icon_event(|tray, event| {
+                if let tauri::tray::TrayIconEvent::Click {
+                    button: tauri::tray::MouseButton::Left,
+                    button_state: tauri::tray::MouseButtonState::Up,
+                    rect,
+                    ..
+                } = event
+                {
+                    let app = tray.app_handle();
+                    let panel_enabled = load_settings_internal()
+                        .map(|s| s.tray_quota_panel_enabled)
+                        .unwrap_or(true);
+                    if panel_enabled {
+                        // 點擊系統匣圖示彈出 mini panel（rect.position 為 physical/logical enum）
+                        let tray_pos = match rect.position {
+                            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                            tauri::Position::Logical(p) => (p.x, p.y),
+                        };
+                        toggle_tray_panel(app, Some(tray_pos));
+                    } else if let Some(window) = app.get_webview_window("main") {
+                        // panel 停用時回復原本開啟主視窗行為
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            });
+
+            let show_menu_item = tauri::menu::MenuItemBuilder::new("顯示視窗")
+                .id("show_window")
+                .build(app)?;
+            let overlay_toggle_item = tauri::menu::MenuItemBuilder::new("顯示/隱藏 Quota Overlay")
+                .id("toggle_overlay")
+                .build(app)?;
+            let overlay_lock_item = tauri::menu::MenuItemBuilder::new("編輯 / 鎖定 Overlay 位置")
+                .id("toggle_overlay_lock")
+                .build(app)?;
+            let quit_menu_item = tauri::menu::MenuItemBuilder::new("退出 SessionHub")
+                .id("quit")
+                .build(app)?;
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .item(&show_menu_item)
+                .separator()
+                .item(&overlay_toggle_item)
+                .item(&overlay_lock_item)
+                .separator()
+                .item(&quit_menu_item)
+                .build()?;
+
+            show_item
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show_window" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "toggle_overlay" => {
+                        // toggle quota_overlay_enabled 並持久化，再建立/關閉視窗
+                        if let Ok(mut settings) = load_settings_internal() {
+                            settings.quota_overlay_enabled = !settings.quota_overlay_enabled;
+                            let _ = save_settings_internal(&settings);
+                            sync_overlay_visibility(app, &settings);
+                        }
+                    }
+                    "toggle_overlay_lock" => {
+                        // toggle 鎖定狀態，即時套用滑鼠穿透並通知前端切換編輯視覺
+                        if let Ok(mut settings) = load_settings_internal() {
+                            settings.quota_overlay_locked = !settings.quota_overlay_locked;
+                            let _ = save_settings_internal(&settings);
+                            if let Some(window) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+                                apply_overlay_locked(&window, settings.quota_overlay_locked);
+                            }
+                            let _ = app.emit(
+                                "quota-overlay-locked-changed",
+                                settings.quota_overlay_locked,
+                            );
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            // 啟動時依設定初始化 tray icon 與 overlay
+            {
+                let app_handle = app.handle().clone();
+                let startup_settings = settings.clone();
+                crate::tray_icon::update_tray_from_cache(&app_handle, &startup_settings);
+                if startup_settings.quota_overlay_enabled {
+                    create_quota_overlay(&app_handle, &startup_settings);
+                }
+            }
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // mini panel 失焦時自動隱藏（僅 panel，overlay 不受此影響）
+            if window.label() == TRAY_PANEL_LABEL {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let minimize = load_settings_internal()
+                    .map(|s| s.minimize_to_tray)
+                    .unwrap_or(false);
+                if minimize {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
+            get_sessions_cached,
             get_settings,
             save_settings,
             install_provider_integration,
             update_provider_integration,
             recheck_provider_integration,
+            uninstall_provider_integration,
             detect_terminal,
             detect_vscode,
             restart_session_watcher,
@@ -59,6 +562,10 @@ pub fn run() {
             delete_session,
             delete_empty_sessions,
             get_session_stats,
+            get_all_session_stats,
+            trigger_stats_backfill,
+            read_session_todos,
+            get_analytics_data,
             open_terminal,
             check_directory_exists,
             read_plan,
@@ -66,48 +573,102 @@ pub fn run() {
             open_plan_external,
             upsert_session_meta,
             delete_session_meta,
+            get_session_by_cwd,
             get_project_plans,
             get_project_specs,
             read_plan_content,
             get_session_activity_statuses,
             open_in_tool,
+            resume_session_in_terminal,
+            show_main_window,
             focus_terminal_window,
             read_openspec_file,
+            write_openspec_file,
+            watch_project_files,
+            stop_project_watch,
             check_tool_availability,
-            send_intervention_notification
+            check_jq_available,
+            send_intervention_notification,
+            get_provider_quota,
+            set_provider_quota_settings,
+            get_claude_usage_blocks,
+            refresh_claude_quota,
+            get_quota_snapshots,
+            refresh_quota,
+            scan_agents_md,
+            scan_global_agents_md,
+            scan_agents_skills,
+            scan_agents_commands,
+            sync_agents_items,
+            read_agents_file,
+            write_agents_file,
+            load_project_agents_prefs,
+            save_project_agents_prefs,
+            check_agents_root_link,
+            link_agents_root,
+            list_mcp_configs,
+            upsert_mcp_server,
+            delete_mcp_server,
+            set_mcp_server_enabled,
+            check_codex_project_trust
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
+/// 跨測試模組共用的環境變數鎖：任何會改動行程層級 env（USERPROFILE / APPDATA /
+/// COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE）的測試都必須先取得此鎖，
+/// 否則平行執行的測試會互相汙染環境而間歇性失敗。
+#[cfg(test)]
+pub(crate) fn shared_env_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-    use std::env;
-    use std::fs::{self, File};
-    use std::io::{BufRead, BufReader};
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, OnceLock};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-    use std::ffi::OsString;
-    use rusqlite::Connection;
-    use crate::provider::register_provider_bridge_record;
-    use crate::provider::bridge::{
-        build_opencode_watch_snapshot, resolve_copilot_integration_path,
-        should_emit_provider_refresh_at, should_emit_opencode_refresh,
+    use crate::openspec_scan::{
+        read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
     };
-    use crate::provider::copilot::{detect_copilot_integration_status, install_or_update_copilot_integration};
-    use crate::provider::opencode::{detect_opencode_integration_status, install_or_update_opencode_integration};
+    use crate::provider::bridge::{
+        build_opencode_watch_snapshot, derive_activity_status, provider_refresh_event_name,
+        resolve_copilot_integration_path, should_emit_opencode_refresh,
+        should_emit_provider_refresh_at,
+    };
+    use crate::provider::codex::{
+        detect_codex_integration_status, install_or_update_codex_integration,
+        resolve_codex_integration_path,
+    };
+    use crate::provider::copilot::{
+        detect_copilot_integration_status, install_or_update_copilot_integration,
+    };
+    use crate::provider::opencode::{
+        detect_opencode_integration_status, install_or_update_opencode_integration,
+    };
+    use crate::provider::register_provider_bridge_record;
     use crate::sessions::copilot::{
         delete_empty_sessions_internal, dir_mtime_secs, scan_copilot_incremental_internal,
         scan_session_dir, should_full_scan,
     };
     use crate::sessions::get_sessions_internal;
-    use crate::sessions::opencode::{scan_opencode_incremental_internal, scan_opencode_sessions_internal};
-    use crate::stats::{calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal};
-    use crate::openspec_scan::scan_openspec_internal;
+    use crate::sessions::opencode::{
+        scan_opencode_incremental_internal, scan_opencode_sessions_internal,
+    };
+    use crate::sessions::{configure_msys_stackdump_suppression, merge_msys_options};
     use crate::sisyphus::scan_sisyphus_internal;
+    use crate::stats::{
+        calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal,
+        upsert_session_stats_cache,
+    };
+    use rusqlite::Connection;
+    use std::collections::{BTreeMap, HashMap};
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     fn with_appdata<T>(appdata_dir: &Path, callback: impl FnOnce() -> T) -> T {
         unsafe {
@@ -150,8 +711,7 @@ mod tests {
     }
 
     fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::shared_env_test_lock()
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
@@ -226,6 +786,35 @@ mod tests {
     }
 
     #[test]
+    fn opencode_refresh_snapshot_emits_after_db_and_wal_change() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let oc_dir = unique_test_dir("oc-refresh-db-snapshot");
+        fs::create_dir_all(&oc_dir).expect("create opencode dir");
+
+        let snapshot_state = Arc::new(Mutex::new(build_opencode_watch_snapshot(&oc_dir)));
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot should not emit"));
+
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-snap",
+            "D:\\repo\\snapshot",
+            &[("ses_db_snap", "Snapshot", 1000, 2000, None)],
+        );
+        assert!(should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("db creation should emit"));
+
+        fs::write(oc_dir.join("opencode.db-wal"), "wal-change").expect("write wal file");
+        assert!(
+            should_emit_opencode_refresh(&oc_dir, &snapshot_state).expect("wal change should emit")
+        );
+        assert!(!should_emit_opencode_refresh(&oc_dir, &snapshot_state)
+            .expect("unchanged snapshot after wal should not emit"));
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup opencode dir");
+    }
+
+    #[test]
     fn register_provider_bridge_record_skips_duplicate_last_record() {
         let bridge_records = Arc::new(Mutex::new(HashMap::new()));
         let record = ProviderBridgeRecord {
@@ -275,6 +864,141 @@ mod tests {
         assert!(
             register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
                 .expect("record with different error should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_adds_error_start_when_missing() {
+        assert_eq!(merge_msys_options(None), "error_start:");
+        assert_eq!(
+            merge_msys_options(Some("winsymlinks:nativestrict")),
+            "winsymlinks:nativestrict error_start:"
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_preserves_existing_error_start_case_insensitively() {
+        assert_eq!(
+            merge_msys_options(Some("winsymlinks:nativestrict ERROR_START:debugger")),
+            "winsymlinks:nativestrict ERROR_START:debugger"
+        );
+        assert_eq!(
+            merge_msys_options(Some("error_start=debugger")),
+            "error_start=debugger"
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_handles_empty_values_and_is_idempotent() {
+        assert_eq!(merge_msys_options(Some("")), "error_start:");
+
+        let configured = merge_msys_options(Some("winsymlinks:nativestrict"));
+        assert_eq!(merge_msys_options(Some(&configured)), configured);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn msys_stackdump_suppression_is_inherited_by_child_process() {
+        let _guard = test_lock().lock().expect("lock");
+        let previous = env::var_os("MSYS");
+        unsafe {
+            env::set_var("MSYS", "winsymlinks:nativestrict");
+        }
+
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "echo %MSYS%"]);
+        configure_msys_stackdump_suppression(&mut command);
+        let output = command.output().expect("start child process");
+
+        unsafe {
+            match previous {
+                Some(previous) => env::set_var("MSYS", previous),
+                None => env::remove_var("MSYS"),
+            }
+        }
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "winsymlinks:nativestrict error_start:"
+        );
+    }
+
+    #[test]
+    fn opencode_permission_records_with_distinct_timestamps_are_not_deduplicated() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let mut record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "permission.updated".to_string(),
+            timestamp: "2026-04-01T09:00:00.001Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: None,
+            source_path: None,
+            title: Some("Access external directory".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first permission record should register")
+        );
+
+        record.timestamp = "2026-04-01T09:00:01.001Z".to_string();
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("new permission record should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn opencode_v2_permission_records_with_distinct_request_ids_are_not_deduplicated() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let mut record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "permission.v2.asked".to_string(),
+            timestamp: "2026-07-20T09:00:00.001Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: None,
+            source_path: None,
+            title: Some("bash [permission-001]".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first v2 permission record should register")
+        );
+
+        record.title = Some("bash [permission-002]".to_string());
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("new v2 request id should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn derive_activity_status_maps_opencode_permission_events() {
+        assert_eq!(
+            derive_activity_status("permission.updated", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.asked", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.replied", None),
+            ("active".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.v2.asked", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.v2.replied", None),
+            ("active".to_string(), None)
         );
     }
 
@@ -341,7 +1065,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -391,7 +1118,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -419,7 +1149,10 @@ mod tests {
         unsafe {
             env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
         }
-        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy());
+        let conn = open_db_connection().expect("open db");
+        init_db(&conn).expect("init db");
+        let result = delete_empty_sessions_internal(&root_dir.to_string_lossy(), &conn);
+        drop(conn);
         unsafe {
             env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         }
@@ -734,6 +1467,9 @@ mod tests {
             id: "ghost-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -777,6 +1513,9 @@ mod tests {
             id: "active-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -794,6 +1533,9 @@ mod tests {
             id: "archived-session".to_string(),
             provider: "copilot".to_string(),
             cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
             summary: None,
             summary_count: None,
             created_at: None,
@@ -855,6 +1597,139 @@ mod tests {
             );
             fs::write(session_dir.join(format!("{id}.json")), json).expect("write session json");
         }
+    }
+
+    fn create_opencode_db_sessions(
+        dir: &Path,
+        project_id: &str,
+        worktree: &str,
+        sessions: &[(&str, &str, i64, i64, Option<i64>)],
+    ) {
+        fs::create_dir_all(dir).expect("create opencode root dir");
+        let db_path = dir.join("opencode.db");
+        let connection = Connection::open(&db_path).expect("open opencode db");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE project (
+                  id TEXT PRIMARY KEY,
+                  worktree TEXT NOT NULL,
+                  name TEXT,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  sandboxes TEXT NOT NULL
+                );
+                CREATE TABLE session (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  parent_id TEXT,
+                  slug TEXT NOT NULL,
+                  directory TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  version TEXT NOT NULL,
+                  share_url TEXT,
+                  summary_additions INTEGER,
+                  summary_deletions INTEGER,
+                  summary_files INTEGER,
+                  summary_diffs TEXT,
+                  revert TEXT,
+                  permission TEXT,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  time_compacting INTEGER,
+                  time_archived INTEGER,
+                  workspace_id TEXT,
+                  path TEXT,
+                  agent TEXT,
+                  model TEXT,
+                  cost REAL DEFAULT 0 NOT NULL,
+                  tokens_input INTEGER DEFAULT 0 NOT NULL,
+                  tokens_output INTEGER DEFAULT 0 NOT NULL,
+                  tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
+                  tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+                  tokens_cache_write INTEGER DEFAULT 0 NOT NULL
+                );
+                CREATE TABLE message (
+                  id TEXT PRIMARY KEY,
+                  session_id TEXT NOT NULL,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  data TEXT NOT NULL
+                );
+                CREATE TABLE part (
+                  id TEXT PRIMARY KEY,
+                  message_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL,
+                  data TEXT NOT NULL
+                );
+                ",
+            )
+            .expect("create opencode schema");
+        connection
+            .execute(
+                "INSERT INTO project (id, worktree, name, time_created, time_updated, sandboxes) VALUES (?1, ?2, NULL, 1, 1, '[]')",
+                rusqlite::params![project_id, worktree],
+            )
+            .expect("insert project");
+
+        for (id, title, time_created, time_updated, time_archived) in sessions {
+            connection
+                .execute(
+                    "
+                    INSERT INTO session (
+                      id, project_id, parent_id, slug, directory, title, version,
+                      share_url, summary_additions, summary_deletions, summary_files, summary_diffs,
+                      revert, permission, time_created, time_updated, time_compacting, time_archived,
+                      workspace_id, path, agent, model, cost, tokens_input, tokens_output,
+                      tokens_reasoning, tokens_cache_read, tokens_cache_write
+                    ) VALUES (
+                      ?1, ?2, NULL, 'slug', ?3, ?4, '1.1.60',
+                      NULL, 2, 3, 4, NULL,
+                      NULL, NULL, ?5, ?6, NULL, ?7,
+                      NULL, NULL, NULL, NULL, 0, 0, 0,
+                      0, 0, 0
+                    )",
+                    rusqlite::params![id, project_id, worktree, title, time_created, time_updated, time_archived],
+                )
+                .expect("insert session");
+        }
+    }
+
+    fn insert_opencode_db_message(
+        dir: &Path,
+        session_id: &str,
+        message_id: &str,
+        time_created: i64,
+        time_updated: i64,
+        data: &str,
+    ) {
+        let connection = Connection::open(dir.join("opencode.db")).expect("open opencode db");
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![message_id, session_id, time_created, time_updated, data],
+            )
+            .expect("insert message");
+    }
+
+    fn insert_opencode_db_part(
+        dir: &Path,
+        session_id: &str,
+        message_id: &str,
+        part_id: &str,
+        time_created: i64,
+        time_updated: i64,
+        data: &str,
+    ) {
+        let connection = Connection::open(dir.join("opencode.db")).expect("open opencode db");
+        connection
+            .execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![part_id, message_id, session_id, time_created, time_updated, data],
+            )
+            .expect("insert part");
     }
 
     #[test]
@@ -941,6 +1816,60 @@ mod tests {
     }
 
     #[test]
+    fn scan_opencode_sessions_reads_db_rows_and_maps_metadata() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-db-full-scan");
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-001",
+            "D:\\repo\\db-demo",
+            &[(
+                "ses_db_001",
+                "DB Session",
+                1710000000000,
+                1710000300000,
+                None,
+            )],
+        );
+        insert_opencode_db_message(
+            &oc_dir,
+            "ses_db_001",
+            "msg_db_001",
+            1710000000000,
+            1710000300000,
+            r#"{"role":"assistant","time":{"created":1710000000000,"completed":1710000300000},"modelID":"gpt-5","tokens":{"input":10,"output":20,"reasoning":2,"cache":{"write":0,"read":0}}}"#,
+        );
+
+        let metadata_conn = Connection::open_in_memory().expect("open metadata db");
+        init_db(&metadata_conn).expect("init metadata db");
+        upsert_session_meta_internal(
+            &metadata_conn,
+            "ses_db_001",
+            Some("DB 備註".to_string()),
+            vec!["db".to_string()],
+        )
+        .expect("insert metadata");
+
+        let sessions = scan_opencode_sessions_internal(&oc_dir, false, &metadata_conn)
+            .expect("scan db sessions");
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.id, "ses_db_001");
+        assert_eq!(session.provider, OPENCODE_PROVIDER);
+        assert_eq!(session.cwd.as_deref(), Some("D:\\repo\\db-demo"));
+        assert_eq!(session.summary.as_deref(), Some("DB Session"));
+        assert_eq!(session.summary_count, Some(9));
+        assert_eq!(session.created_at.as_deref(), Some("2024-03-09T16:00:00Z"));
+        assert_eq!(session.updated_at.as_deref(), Some("2024-03-09T16:05:00Z"));
+        assert_eq!(session.notes.as_deref(), Some("DB 備註"));
+        assert_eq!(session.tags, vec!["db".to_string()]);
+        assert!(session.has_events);
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+    }
+
+    #[test]
     fn get_sessions_filters_by_enabled_providers() {
         let _guard = test_lock().lock().expect("lock");
         let appdata_dir = unique_test_dir("providers-appdata");
@@ -975,13 +1904,19 @@ mod tests {
         let scan_cache = ScanCache::default();
 
         with_appdata(&appdata_dir, || {
+            let conn = open_db_connection().expect("open db");
+            init_db(&conn).expect("init db");
             let copilot_only = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
+                Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![COPILOT_PROVIDER.to_string()]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan copilot only");
             assert_eq!(copilot_only.len(), 1);
@@ -990,10 +1925,14 @@ mod tests {
             let opencode_only = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
+                Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![OPENCODE_PROVIDER.to_string()]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan opencode only");
             assert_eq!(opencode_only.len(), 1);
@@ -1002,6 +1941,9 @@ mod tests {
             let all_providers = get_sessions_internal(
                 Some(copilot_root.to_string_lossy().to_string()),
                 Some(opencode_root.to_string_lossy().to_string()),
+                Some(String::new()),
+                Some(String::new()),
+                Some(String::new()),
                 Some(false),
                 Some(vec![
                     COPILOT_PROVIDER.to_string(),
@@ -1009,6 +1951,7 @@ mod tests {
                 ]),
                 Some(true),
                 &scan_cache,
+                &conn,
             )
             .expect("scan all providers");
             assert_eq!(all_providers.len(), 2);
@@ -1166,6 +2109,14 @@ mod tests {
             openspec_dir
                 .join("changes")
                 .join("feature-b")
+                .join(".openspec.yaml"),
+            "created: 2026-07-02\n",
+        )
+        .expect("write change yaml");
+        fs::write(
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
                 .join("proposal.md"),
             "# Proposal",
         )
@@ -1211,12 +2162,45 @@ mod tests {
         assert!(data.active_changes[0].has_proposal);
         assert!(!data.active_changes[0].has_design);
         assert!(data.active_changes[0].has_tasks);
+        assert_eq!(
+            data.active_changes[0].created_at.as_deref(),
+            Some("2026-07-02")
+        );
+        assert_eq!(
+            data.active_changes[0]
+                .task_progress
+                .as_ref()
+                .map(|p| p.done),
+            Some(0)
+        );
+        assert_eq!(
+            data.active_changes[0]
+                .task_progress
+                .as_ref()
+                .map(|p| p.total),
+            Some(1)
+        );
         assert_eq!(data.active_changes[0].specs_count, 1);
+        assert_eq!(data.active_changes[0].specs.len(), 1);
+        assert_eq!(data.active_changes[0].specs[0].name, "auth");
+        assert_eq!(
+            data.active_changes[0].specs[0].path,
+            openspec_dir
+                .join("changes")
+                .join("feature-b")
+                .join("specs")
+                .join("auth")
+                .join("spec.md")
+                .to_string_lossy()
+                .to_string()
+        );
         assert_eq!(data.archived_changes.len(), 1);
         assert_eq!(data.archived_changes[0].name, "legacy-a");
         assert!(!data.archived_changes[0].has_proposal);
         assert!(data.archived_changes[0].has_design);
         assert!(!data.archived_changes[0].has_tasks);
+        assert!(data.archived_changes[0].task_progress.is_none());
+        assert!(data.archived_changes[0].specs.is_empty());
         assert_eq!(data.specs.len(), 2);
         assert_eq!(data.specs[0].name, "api");
         assert_eq!(
@@ -1242,6 +2226,26 @@ mod tests {
     }
 
     #[test]
+    fn scan_openspec_falls_back_to_filesystem_created_time_when_yaml_missing() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-project-fallback-created-at");
+        let change_dir = project_dir
+            .join("openspec")
+            .join("changes")
+            .join("feature-fallback");
+
+        fs::create_dir_all(&change_dir).expect("create change dir");
+
+        let data = scan_openspec_internal(&project_dir);
+
+        assert_eq!(data.active_changes.len(), 1);
+        assert_eq!(data.active_changes[0].name, "feature-fallback");
+        assert!(data.active_changes[0].created_at.is_some());
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
     fn scan_project_metadata_returns_empty_structures_when_dirs_missing() {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("project-empty-metadata");
@@ -1259,6 +2263,50 @@ mod tests {
         assert!(openspec_data.active_changes.is_empty());
         assert!(openspec_data.archived_changes.is_empty());
         assert!(openspec_data.specs.is_empty());
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
+    fn openspec_file_roundtrip_enforces_scope() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-file-roundtrip");
+        let openspec_dir = project_dir.join("openspec");
+        let tasks_path = openspec_dir
+            .join("changes")
+            .join("feature-a")
+            .join("tasks.md");
+        fs::create_dir_all(tasks_path.parent().expect("tasks parent"))
+            .expect("create tasks parent");
+        fs::write(&tasks_path, "- [ ] first task\n").expect("write tasks");
+
+        let original = read_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+        )
+        .expect("read openspec file");
+        assert_eq!(original, "- [ ] first task\n");
+
+        write_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+            "- [x] first task\n",
+        )
+        .expect("write openspec file");
+
+        let updated = read_openspec_file_internal(
+            &project_dir.to_string_lossy(),
+            "changes/feature-a/tasks.md",
+        )
+        .expect("read updated openspec file");
+        assert_eq!(updated, "- [x] first task\n");
+
+        let traversal_error =
+            write_openspec_file_internal(&project_dir.to_string_lossy(), "../README.md", "denied")
+                .expect_err("path traversal should fail");
+        assert!(
+            traversal_error.contains("File not found") || traversal_error.contains("Access denied")
+        );
 
         fs::remove_dir_all(&project_dir).expect("cleanup project dir");
     }
@@ -1540,6 +2588,35 @@ mod tests {
     }
 
     #[test]
+    fn incremental_opencode_picks_up_db_only_session() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-db-incremental");
+        let appdata_dir = unique_test_dir("appdata");
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-002",
+            "D:\\repo\\db-only",
+            &[("ses_db_new", "DB New", 1000, 5000, None)],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("incremental db scan");
+
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "ses_db_new");
+            assert_eq!(cache.last_cursor, 5000);
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
     fn provider_bridge_paths_use_appdata_override() {
         let _guard = test_lock().lock().expect("lock");
         let appdata_dir = unique_test_dir("provider-bridge-appdata");
@@ -1550,6 +2627,8 @@ mod tests {
                 resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
             let opencode_path =
                 resolve_provider_bridge_path(OPENCODE_PROVIDER).expect("resolve opencode bridge");
+            let codex_path =
+                resolve_provider_bridge_path(CODEX_PROVIDER).expect("resolve codex bridge");
 
             assert_eq!(
                 copilot_path,
@@ -1564,6 +2643,13 @@ mod tests {
                     .join("SessionHub")
                     .join("provider-bridge")
                     .join("opencode.jsonl")
+            );
+            assert_eq!(
+                codex_path,
+                appdata_dir
+                    .join("SessionHub")
+                    .join("provider-bridge")
+                    .join("codex.jsonl")
             );
         });
 
@@ -1606,7 +2692,12 @@ mod tests {
                     "integrationVersion": PROVIDER_INTEGRATION_VERSION
                 },
                 "hooks": {
-                    "sessionEnd": []
+                    "sessionStart": [{ "type": "command", "command": "node on-session-start.cjs" }],
+                    "sessionEnd": [{ "type": "command", "command": "node on-session-end.cjs" }],
+                    "userPromptSubmitted": [{ "type": "command", "command": "node on-user-prompt-submitted.cjs" }],
+                    "preToolUse": [{ "type": "command", "command": "node on-pre-tool-use.cjs" }],
+                    "postToolUse": [{ "type": "command", "command": "node on-post-tool-use.cjs" }],
+                    "errorOccurred": [{ "type": "command", "command": "node on-error-occurred.cjs" }]
                 }
             });
             fs::write(
@@ -1656,7 +2747,12 @@ mod tests {
                     "integrationVersion": PROVIDER_INTEGRATION_VERSION - 1
                 },
                 "hooks": {
-                    "sessionEnd": []
+                    "sessionStart": [{ "type": "command", "command": "node on-session-start.cjs" }],
+                    "sessionEnd": [{ "type": "command", "command": "node on-session-end.cjs" }],
+                    "userPromptSubmitted": [{ "type": "command", "command": "node on-user-prompt-submitted.cjs" }],
+                    "preToolUse": [{ "type": "command", "command": "node on-pre-tool-use.cjs" }],
+                    "postToolUse": [{ "type": "command", "command": "node on-post-tool-use.cjs" }],
+                    "errorOccurred": [{ "type": "command", "command": "node on-error-occurred.cjs" }]
                 }
             });
             fs::write(
@@ -1707,7 +2803,10 @@ mod tests {
         assert!(content.contains("\"preToolUse\""));
         assert!(content.contains("\"postToolUse\""));
         assert!(content.contains("\"errorOccurred\""));
-        assert!(content.contains("AppendAllText"));
+        assert!(content.contains("node "));
+        assert!(content.contains("on-session-start.cjs"));
+        assert!(content.contains("\"command\""));
+        assert!(!content.contains("\"powershell\""));
 
         fs::remove_dir_all(&copilot_root).expect("cleanup copilot root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
@@ -1847,10 +2946,205 @@ mod tests {
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains(OPENCODE_PLUGIN_METADATA_PREFIX));
         assert!(content.contains("\"session.updated\""));
+        assert!(content.contains("\"permission.updated\""));
+        assert!(content.contains("\"permission.asked\""));
+        assert!(content.contains("\"permission.replied\""));
+        assert!(content.contains("\"permission.v2.asked\""));
+        assert!(content.contains("\"permission.v2.replied\""));
+        assert!(content.contains(
+            "props.title ?? props.permission ?? props.type ?? props.action ?? \"permission\""
+        ));
+        assert!(content.contains("props.id ?? props.requestID ?? props.permissionID ?? null"));
+        assert!(!content.contains("props.resources"));
         assert!(content.contains("appendFile"));
 
         fs::remove_dir_all(&user_profile).expect("cleanup user profile");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_codex_integration_status_reads_installed_state_and_last_error() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-appdata");
+        let codex_root = unique_test_dir("codex-provider-root");
+        let config_path = resolve_codex_integration_path(&codex_root);
+
+        fs::create_dir_all(&codex_root).expect("create codex root");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        let status = with_appdata(&appdata_dir, || {
+            let bridge_path =
+                resolve_provider_bridge_path(CODEX_PROVIDER).expect("resolve codex bridge");
+            ensure_parent_dir(&bridge_path).expect("create bridge dir");
+            fs::write(
+                &bridge_path,
+                format!(
+                    "{}\n",
+                    bridge_record_json(
+                        CODEX_PROVIDER,
+                        "session.updated",
+                        "2026-04-03T09:15:00Z",
+                        Some("codex hook failed")
+                    )
+                ),
+            )
+            .expect("write bridge record");
+
+            let integration = serde_json::json!({
+                "sessionHub": {
+                    "provider": CODEX_PROVIDER,
+                    "bridgePath": bridge_path.to_string_lossy().to_string(),
+                    "integrationVersion": PROVIDER_INTEGRATION_VERSION
+                },
+                "hooks": {
+                    "SessionStart": [{
+                        "matcher": "startup|resume|clear|compact",
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "node '/tmp/on-session-start.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "PreToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "node '/tmp/on-pre-tool-use.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "PostToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "node '/tmp/on-post-tool-use.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "UserPromptSubmit": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "node '/tmp/on-user-prompt-submit.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }],
+                    "Stop": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!(
+                                "node '/tmp/on-stop.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                                bridge_path.to_string_lossy()
+                            )
+                        }]
+                    }]
+                }
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&integration).expect("serialize codex integration"),
+            )
+            .expect("write codex integration");
+
+            let root_string = codex_root.to_string_lossy().to_string();
+            detect_codex_integration_status(Some(root_string.as_str()))
+        });
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(
+            status.last_event_at.as_deref(),
+            Some("2026-04-03T09:15:00Z")
+        );
+        assert_eq!(status.last_error.as_deref(), Some("codex hook failed"));
+        assert_eq!(
+            status.config_path.as_deref(),
+            Some(config_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(status.installed_version, None);
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn detect_codex_integration_status_marks_missing_and_manual_required() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-missing-appdata");
+        let codex_root = unique_test_dir("codex-provider-missing-root");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&codex_root).expect("create codex root");
+
+        let missing_status = with_appdata(&appdata_dir, || {
+            let root_string = codex_root.to_string_lossy().to_string();
+            detect_codex_integration_status(Some(root_string.as_str()))
+        });
+        assert_eq!(missing_status.status, ProviderIntegrationState::Missing);
+        assert!(missing_status.last_error.is_none());
+        assert!(missing_status
+            .config_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(CODEX_HOOK_FILE_NAME)));
+
+        let manual_required_status = with_appdata(&appdata_dir, || {
+            without_env_var("USERPROFILE", || detect_codex_integration_status(None))
+        });
+        assert_eq!(
+            manual_required_status.status,
+            ProviderIntegrationState::ManualRequired
+        );
+        assert!(manual_required_status.config_path.is_none());
+        assert!(manual_required_status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("USERPROFILE")));
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn install_codex_integration_writes_managed_hook_file() {
+        let _guard = test_lock().lock().expect("lock");
+        let appdata_dir = unique_test_dir("codex-provider-install-appdata");
+        let codex_root = unique_test_dir("codex-provider-install-root");
+
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+        fs::create_dir_all(&codex_root).expect("create codex root");
+
+        let status = with_appdata(&appdata_dir, || {
+            let root_string = codex_root.to_string_lossy().to_string();
+            install_or_update_codex_integration(Some(root_string.as_str()))
+        });
+        let config_path = resolve_codex_integration_path(&codex_root);
+        let content = fs::read_to_string(&config_path).expect("read codex hook file");
+
+        assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert!(content.contains("\"SessionStart\""));
+        assert!(content.contains("\"PreToolUse\""));
+        assert!(content.contains("\"PostToolUse\""));
+        assert!(content.contains("\"UserPromptSubmit\""));
+        assert!(content.contains("\"Stop\""));
+        assert!(content.contains("node "));
+        assert!(content.contains("on-session-start.cjs"));
+        assert!(content.contains("sessionhub-provider-event-bridge"));
+        assert!(!content.contains("\"commandWindows\""));
+
+        fs::remove_dir_all(&codex_root).expect("cleanup codex root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn provider_refresh_event_name_supports_codex() {
+        assert_eq!(
+            provider_refresh_event_name(CODEX_PROVIDER).expect("resolve codex refresh event"),
+            "codex-sessions-updated"
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -1872,6 +3166,9 @@ mod tests {
                     id: "ses-aaa".to_string(),
                     provider: "copilot".to_string(),
                     cwd: Some("C:/proj/a".to_string()),
+                    repo_root: Some("C:/proj".to_string()),
+                    repo_name: Some("proj".to_string()),
+                    git_branch: Some("main".to_string()),
                     summary: Some("initial session".to_string()),
                     summary_count: Some(3),
                     created_at: Some("2026-01-01T00:00:00Z".to_string()),
@@ -1888,6 +3185,9 @@ mod tests {
                     id: "ses-bbb".to_string(),
                     provider: "copilot".to_string(),
                     cwd: Some("C:/proj/b".to_string()),
+                    repo_root: Some("C:/proj".to_string()),
+                    repo_name: Some("proj".to_string()),
+                    git_branch: Some("feature/test".to_string()),
                     summary: None,
                     summary_count: None,
                     created_at: None,
@@ -1916,6 +3216,9 @@ mod tests {
                 .expect("ses-aaa not found");
             assert_eq!(a.provider, "copilot");
             assert_eq!(a.cwd.as_deref(), Some("C:/proj/a"));
+            assert_eq!(a.repo_root.as_deref(), Some("C:/proj"));
+            assert_eq!(a.repo_name.as_deref(), Some("proj"));
+            assert_eq!(a.git_branch.as_deref(), Some("main"));
             assert_eq!(a.summary.as_deref(), Some("initial session"));
             assert_eq!(a.summary_count, Some(3));
             assert!(!a.parse_error);
@@ -2011,6 +3314,205 @@ mod tests {
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
     }
 
+    #[test]
+    fn test_get_analytics_data_internal_groups_by_day_week_month() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-analytics-group");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            save_sessions_cache_to_db(
+                &connection,
+                &["copilot".to_string()],
+                &[
+                    SessionInfo {
+                        id: "analytics-a".to_string(),
+                        provider: "copilot".to_string(),
+                        cwd: Some("D:\\repo\\demo".to_string()),
+                        repo_root: Some("D:\\repo\\demo".to_string()),
+                        repo_name: Some("demo".to_string()),
+                        git_branch: Some("main".to_string()),
+                        summary: Some("A".to_string()),
+                        summary_count: Some(1),
+                        created_at: Some("2026-04-01T00:00:00Z".to_string()),
+                        updated_at: Some("2026-04-01T08:00:00Z".to_string()),
+                        session_dir: "D:\\repo\\demo\\a".to_string(),
+                        parse_error: false,
+                        is_archived: false,
+                        notes: None,
+                        tags: Vec::new(),
+                        has_plan: false,
+                        has_events: true,
+                    },
+                    SessionInfo {
+                        id: "analytics-b".to_string(),
+                        provider: "copilot".to_string(),
+                        cwd: Some("D:\\repo\\demo".to_string()),
+                        repo_root: Some("D:\\repo\\demo".to_string()),
+                        repo_name: Some("demo".to_string()),
+                        git_branch: Some("main".to_string()),
+                        summary: Some("B".to_string()),
+                        summary_count: Some(1),
+                        created_at: Some("2026-04-02T00:00:00Z".to_string()),
+                        updated_at: Some("2026-04-08T09:00:00Z".to_string()),
+                        session_dir: "D:\\repo\\demo\\b".to_string(),
+                        parse_error: false,
+                        is_archived: false,
+                        notes: None,
+                        tags: Vec::new(),
+                        has_plan: false,
+                        has_events: true,
+                    },
+                ],
+            )
+            .expect("save sessions cache");
+
+            upsert_session_stats_cache(
+                &connection,
+                "analytics-a",
+                100,
+                &SessionStats {
+                    output_tokens: 120,
+                    input_tokens: 80,
+                    interaction_count: 4,
+                    model_metrics: BTreeMap::from([(
+                        "gpt-5.4".to_string(),
+                        ModelMetricsEntry {
+                            requests_count: 2.0,
+                            requests_cost: 1.5,
+                            input_tokens: 80,
+                            output_tokens: 120,
+                        },
+                    )]),
+                    ..SessionStats::default()
+                },
+            )
+            .expect("upsert stats a");
+
+            upsert_session_stats_cache(
+                &connection,
+                "analytics-b",
+                101,
+                &SessionStats {
+                    output_tokens: 60,
+                    input_tokens: 30,
+                    interaction_count: 2,
+                    model_metrics: BTreeMap::from([(
+                        "gpt-5.4".to_string(),
+                        ModelMetricsEntry {
+                            requests_count: 1.0,
+                            requests_cost: 0.5,
+                            input_tokens: 30,
+                            output_tokens: 60,
+                        },
+                    )]),
+                    ..SessionStats::default()
+                },
+            )
+            .expect("upsert stats b");
+
+            let by_day = get_analytics_data_internal(
+                &connection,
+                Some("D:\\repo\\demo"),
+                "2026-04-01",
+                "2026-04-30",
+                "day",
+            )
+            .expect("analytics by day");
+            assert_eq!(by_day.len(), 2);
+            assert_eq!(by_day[0].label, "2026-04-01");
+            assert_eq!(by_day[0].output_tokens, 120);
+            assert_eq!(by_day[0].cost_points, 1.5);
+            assert_eq!(by_day[1].label, "2026-04-08");
+
+            let by_week = get_analytics_data_internal(
+                &connection,
+                Some("D:\\repo\\demo"),
+                "2026-04-01",
+                "2026-04-30",
+                "week",
+            )
+            .expect("analytics by week");
+            assert_eq!(by_week.len(), 2);
+            assert_eq!(by_week[0].label, "2026-W14");
+            assert_eq!(by_week[1].label, "2026-W15");
+
+            let by_month = get_analytics_data_internal(
+                &connection,
+                Some("D:\\repo\\demo"),
+                "2026-04-01",
+                "2026-04-30",
+                "month",
+            )
+            .expect("analytics by month");
+            assert_eq!(by_month.len(), 1);
+            assert_eq!(by_month[0].label, "2026-04");
+            assert_eq!(by_month[0].output_tokens, 180);
+            assert_eq!(by_month[0].interaction_count, 6);
+            assert_eq!(by_month[0].cost_points, 2.0);
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn test_get_analytics_data_internal_returns_empty_for_no_matches() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-analytics-empty");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            let points = get_analytics_data_internal(
+                &connection,
+                Some("D:\\repo\\demo"),
+                "2026-04-01",
+                "2026-04-30",
+                "day",
+            )
+            .expect("empty analytics");
+            assert!(points.is_empty());
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn test_get_analytics_data_internal_validates_inputs() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let appdata_dir = unique_test_dir("appdata-analytics-errors");
+        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open db");
+            init_db(&connection).expect("init db");
+
+            let invalid_start =
+                get_analytics_data_internal(&connection, None, "2026/04/01", "2026-04-30", "day");
+            assert_eq!(invalid_start.unwrap_err(), "invalid date format: startDate");
+
+            let reversed =
+                get_analytics_data_internal(&connection, None, "2026-04-30", "2026-04-01", "day");
+            assert_eq!(reversed.unwrap_err(), "startDate must be before endDate");
+
+            let invalid_group = get_analytics_data_internal(
+                &connection,
+                None,
+                "2026-04-01",
+                "2026-04-30",
+                "quarter",
+            );
+            assert_eq!(invalid_group.unwrap_err(), "invalid groupBy value");
+        });
+
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // session-stats-panel-opencode-redesign：測試 7.1
     // ──────────────────────────────────────────────────────────────────────────
@@ -2047,6 +3549,59 @@ mod tests {
 
         assert_eq!(stats2.output_tokens, 150);
         assert_eq!(stats2.interaction_count, 1);
+
+        fs::remove_dir_all(&root_dir).expect("cleanup root");
+    }
+
+    #[test]
+    fn test_opencode_session_stats_db_only_message_source() {
+        let _guard = test_lock().lock().expect("failed to lock test mutex");
+        let root_dir = unique_test_dir("oc-stats-db");
+        let storage_root = root_dir.join("storage");
+        let message_dir = storage_root.join("message").join("ses_db_stats");
+
+        fs::create_dir_all(&storage_root).expect("create storage root");
+        create_opencode_db_sessions(
+            &root_dir,
+            "project-db-stats",
+            "D:\\repo\\stats",
+            &[("ses_db_stats", "Stats Session", 1000, 4000, None)],
+        );
+        insert_opencode_db_message(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_user",
+            1000,
+            1000,
+            r#"{"role":"user","time":{"created":1000}}"#,
+        );
+        insert_opencode_db_message(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_assistant",
+            1001,
+            4000,
+            r#"{"role":"assistant","time":{"created":1001,"completed":4000},"modelID":"gpt-5","tokens":{"input":80,"output":150,"reasoning":10,"cache":{"write":0,"read":0}},"finish":"tool-calls"}"#,
+        );
+        insert_opencode_db_part(
+            &root_dir,
+            "ses_db_stats",
+            "msg_db_assistant",
+            "prt_db_tool",
+            1002,
+            1002,
+            r#"{"type":"tool","tool":"bash"}"#,
+        );
+
+        let stats =
+            calculate_opencode_session_stats(&message_dir).expect("db stats should calculate");
+
+        assert_eq!(stats.output_tokens, 150);
+        assert_eq!(stats.input_tokens, 80);
+        assert_eq!(stats.reasoning_count, 1);
+        assert_eq!(stats.interaction_count, 1);
+        assert_eq!(stats.tool_call_count, 1);
+        assert_eq!(stats.tool_breakdown.get("bash"), Some(&1));
 
         fs::remove_dir_all(&root_dir).expect("cleanup root");
     }

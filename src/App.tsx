@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
@@ -9,65 +10,322 @@ import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
 import type {
+  ActivityHintPayload,
+  AgentsMdScanResult,
+  AgentsRootLinkStatus,
+  AnalyticsDataPoint,
+  AnalyticsGroupBy,
   AppSettings,
+  BridgeEventLogEntry,
+  CommandsScanResult,
   ConfirmDialogState,
   EditDialogState,
   IdeLauncherType,
+  McpProviderConfig,
   OpenSpecData,
+  ProjectAgentsPrefs,
   ProjectGroup,
+  ProjectSubTabState,
   ProviderIntegrationStatus,
+  ProviderQuota,
+  QuotaSnapshot,
+  SaveProjectAgentsPrefsResult,
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
+  SessionTodo,
+  SessionTargetedPayload,
+  SkillsScanResult,
   SisyphusData,
+  SyncActionResult,
+  SyncReport,
+  SyncRequest,
   ToolAvailability,
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
+import { parseTaskProgress } from "./utils/parseTaskProgress";
 
+import { AgentsConfigView, type AgentsScopeDataBundle } from "./components/AgentsConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
-import { PinIcon } from "./components/Icons";
 import { ProjectView } from "./components/ProjectView";
+import { QuotaOverlay } from "./components/QuotaOverlay";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
+import { SyncConflictDialog } from "./components/SyncConflictDialog";
+import { TrayQuotaPanel } from "./components/TrayQuotaPanel";
+import { StatusBar } from "./components/StatusBar";
+
+const EMBEDDED_VIEW = new URLSearchParams(window.location.search).get("view");
+
+if (EMBEDDED_VIEW) {
+  document.documentElement.classList.add("embedded-quota-view");
+}
+
+function EmbeddedQuotaOverlayApp() {
+  const queryClient = useQueryClient();
+  const [overlayRevision, setOverlayRevision] = useState(0);
+  const settingsQuery = useQuery({
+    queryKey: ["embedded_settings", "quota_overlay"],
+    queryFn: () => invoke<AppSettings>("get_settings"),
+    // Overlay 是獨立動態 webview；輪詢本機設定避免建立時機造成事件遺漏。
+    refetchInterval: 1_000,
+  });
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["embedded_quota_snapshots", "quota_overlay"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
+    refetchInterval: 15_000,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setup = async () => {
+      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
+        if (mounted) {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
+          void queryClient.refetchQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
+        }
+      });
+      const unlistenSettings = await listen<AppSettings>("quota-overlay-settings-changed", (event) => {
+        if (mounted) {
+          queryClient.setQueryData(["embedded_settings", "quota_overlay"], event.payload);
+          // 重新讀取持久化設定，並重新掛載透明 overlay 以確保樣式立即套用。
+          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+          void queryClient.refetchQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+          setOverlayRevision((revision) => revision + 1);
+        }
+      });
+      const unlistenLock = await listen<boolean>("quota-overlay-locked-changed", (event) => {
+        if (mounted) {
+          queryClient.setQueryData<AppSettings>(["embedded_settings", "quota_overlay"], (current) =>
+            current ? { ...current, quotaOverlayLocked: event.payload } : current,
+          );
+        }
+      });
+
+      return () => {
+        unlistenSnapshots();
+        unlistenSettings();
+        unlistenLock();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => {
+      cleanup = dispose;
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [queryClient]);
+
+  const settings = settingsQuery.data;
+
+  return (
+    <QuotaOverlay
+      key={overlayRevision}
+      snapshots={quotaSnapshotQuery.data ?? []}
+      enabledProviders={settings?.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"]}
+      selectedProviders={settings?.quotaOverlayProviders ?? []}
+      opacity={settings?.quotaOverlayOpacity ?? 0.3}
+      locked={settings?.quotaOverlayLocked ?? true}
+      theme={settings?.quotaOverlayTheme ?? "dark"}
+      styleMode={settings?.quotaOverlayStyle ?? "compact"}
+      onLockToggle={() => {
+        if (!settings) return;
+        void invoke("save_settings", {
+          settings: { ...settings, quotaOverlayLocked: !settings.quotaOverlayLocked },
+        }).then(() => {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
+        });
+      }}
+    />
+  );
+}
+
+function EmbeddedTrayPanelApp() {
+  const queryClient = useQueryClient();
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["embedded_quota_snapshots", "tray_panel"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setup = async () => {
+      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
+        if (mounted) {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
+        }
+      });
+
+      return () => {
+        unlistenSnapshots();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => {
+      cleanup = dispose;
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [queryClient]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        void getCurrentWindow().hide();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  return (
+    <TrayQuotaPanel
+      snapshots={quotaSnapshotQuery.data ?? []}
+      onRefresh={() => {
+        void invoke<QuotaSnapshot[]>("refresh_quota", { provider: null }).then(() => {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
+        });
+      }}
+      onOpenSettings={() => {
+        void invoke("show_main_window", { view: "settings" }).then(() => getCurrentWindow().close());
+      }}
+    />
+  );
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function normalizePath(path: string): string {
   // Windows 路徑大小寫不敏感，正規化為小寫用於分組比對
-  return path.toLowerCase();
+  return path.replace(/\//g, "\\").toLowerCase();
+}
+
+function normalizePinnedProjectKey(projectKey: string): string {
+  const branchSeparatorIndex = projectKey.lastIndexOf(":");
+  if (branchSeparatorIndex <= 1) {
+    return normalizePath(projectKey);
+  }
+
+  const projectPath = projectKey.slice(0, branchSeparatorIndex);
+  const branch = projectKey.slice(branchSeparatorIndex + 1);
+  return `${normalizePath(projectPath)}:${branch}`;
 }
 
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
-  const raw = session.cwd?.trim();
+  const raw = session.repoRoot?.trim() || session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
-  return normalizePath(raw);
+  const branch = session.gitBranch?.trim() ?? "";
+  return `${normalizePath(raw)}:${branch}`;
+}
+
+function getProjectDisplayPath(session: SessionInfo, uncategorizedLabel: string): string {
+  return session.repoRoot?.trim() || session.cwd?.trim() || uncategorizedLabel;
+}
+
+function getProjectTitle(session: SessionInfo, displayPath: string, uncategorizedLabel: string): string {
+  if (displayPath === uncategorizedLabel) return uncategorizedLabel;
+  const repoName = session.repoName?.trim();
+  if (repoName) return repoName;
+  const parts = displayPath.replace(/\//g, "\\").split("\\").filter(Boolean);
+  return parts[parts.length - 1] ?? displayPath;
+}
+
+function getProjectBranchLabel(sessions: SessionInfo[]): string | null {
+  return sessions.map((session) => session.gitBranch?.trim()).find((branch): branch is string => Boolean(branch)) ?? null;
+}
+
+function getDashboardPeriodStart(period: "week" | "month"): number {
+  const now = new Date();
+  if (period === "week") {
+    const start = new Date(now);
+    start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    start.setHours(0, 0, 0, 0);
+    return start.getTime();
+  }
+
+  return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+}
+
+function formatDateInput(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function getDirectoryPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) {
+    return filePath;
+  }
+  const separator = filePath.includes("\\") ? "\\" : "/";
+  return normalized.slice(0, index).replace(/\//g, separator);
+}
+
+function readSessionTodos(sessionDir: string): Promise<SessionTodo[]> {
+  return invoke<SessionTodo[]>("read_session_todos", { sessionDir });
+}
+
+function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const tag of tags) {
+    const trimmed = tag.trim();
+    if (!trimmed) continue;
+    const dedupeKey = trimmed.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function triggerStatsBackfill(rootDir: string | null | undefined): Promise<number> {
+  return invoke<number>("trigger_stats_backfill", { rootDir: rootDir ?? null });
+}
+
+function isSessionInUpdatedRange(session: SessionInfo, periodStartTime: number): boolean {
+  if (!session.updatedAt) return false;
+  const updatedAtTime = Date.parse(session.updatedAt);
+  return !Number.isNaN(updatedAtTime) && updatedAtTime >= periodStartTime;
 }
 
 function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string, locale: string): ProjectGroup[] {
-  const groupMap = new Map<string, { displayPath: string; sessions: SessionInfo[] }>();
+  const groupMap = new Map<string, { displayPath: string; title: string; sessions: SessionInfo[] }>();
 
   for (const session of sessions) {
     const key = getProjectKey(session, uncategorizedLabel);
-    const displayPath = session.cwd?.trim() || uncategorizedLabel;
+    const displayPath = getProjectDisplayPath(session, uncategorizedLabel);
     if (!groupMap.has(key)) {
-      groupMap.set(key, { displayPath, sessions: [] });
+      groupMap.set(key, {
+        displayPath,
+        title: getProjectTitle(session, displayPath, uncategorizedLabel),
+        sessions: [],
+      });
     }
     groupMap.get(key)!.sessions.push(session);
   }
 
-  const getTitle = (pathLabel: string) => {
-    if (pathLabel === uncategorizedLabel) return pathLabel;
-    const parts = pathLabel.split("\\").filter(Boolean);
-    return parts[parts.length - 1] ?? pathLabel;
-  };
-
   return Array.from(groupMap.entries())
-    .map(([key, { displayPath, sessions: groupedSessions }]) => ({
+    .map(([key, { displayPath, title, sessions: groupedSessions }]) => ({
       key,
-      title: getTitle(displayPath),
+      title,
       pathLabel: displayPath,
+      branchLabel: getProjectBranchLabel(groupedSessions),
       sessions: groupedSessions.sort((a, b) =>
         (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
       ),
@@ -80,18 +338,27 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string,
     .sort((a, b) => b.sessions.length - a.sessions.length);
 }
 
-type ProviderIntegrationAction = "install" | "update" | "recheck";
+type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
 function getProviderLabel(
   provider: string,
   copilotLabel: string,
   opencodeLabel: string,
+  codexLabel: string,
+  claudeLabel?: string,
+  antigravityLabel?: string,
 ): string {
   switch (provider) {
     case "copilot":
       return copilotLabel;
     case "opencode":
       return opencodeLabel;
+    case "codex":
+      return codexLabel;
+    case "claude":
+      return claudeLabel ?? provider;
+    case "antigravity":
+      return antigravityLabel ?? provider;
     default:
       return provider;
   }
@@ -102,6 +369,22 @@ function resolveProviderTargetPath(integration: ProviderIntegrationStatus): stri
   if (configPath) return configPath;
   const bridgePath = integration.bridgePath?.trim();
   return bridgePath || null;
+}
+
+// Provider → resume 指令對照。與後端 `src-tauri/src/commands/tools.rs` 的 `resume_session_command` 保持同步。
+function getSessionOpenCommand(provider: string, sessionId: string): string {
+  switch (provider) {
+    case "copilot":
+      return `copilot --resume=${sessionId}`;
+    case "opencode":
+      return `opencode --session ${sessionId}`;
+    case "codex":
+      return `codex resume ${sessionId}`;
+    case "claude":
+      return `claude --resume=${sessionId}`;
+    default:
+      return "";
+  }
 }
 
 function upsertProviderIntegrationStatus(
@@ -146,6 +429,33 @@ function resolveErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const DEFAULT_PROJECT_AGENTS_PREFS: ProjectAgentsPrefs = {
+  conflictChoice: null,
+  ignoredPaths: [],
+  enabledTargets: ["claude", "codex", "opencode", "copilot"],
+};
+
+function formatAgentsReportToast(report: SyncReport, template: string): string {
+  const summary = report.actions.reduce<Record<string, number>>((acc, action) => {
+    acc[action.action] = (acc[action.action] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return template
+    .replace("{create}", String(summary.create ?? 0))
+    .replace("{overwrite}", String(summary.overwrite ?? 0))
+    .replace("{skip}", String(summary["skip-in-sync"] ?? 0))
+    .replace("{error}", String(summary.error ?? 0));
+}
+
+function formatProjectConfigCreatedToast(template: string, storedPath: string): string {
+  return template.replace("{path}", storedPath);
+}
+
+function getRealtimeSyncLabel(): string {
+  return new Date().toLocaleTimeString("zh-TW", { hour12: false });
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -163,15 +473,15 @@ function App() {
 
   // Plan sub-tab state per project — preserved across project switches
   const [projectSubTabStates, setProjectSubTabStates] = useState<
-    Map<string, { openPlanKeys: string[]; activeSubTab: string }>
+    Map<string, ProjectSubTabState>
   >(new Map());
 
   const getProjectSubTabState = (projectKey: string) =>
-    projectSubTabStates.get(projectKey) ?? { openPlanKeys: [], activeSubTab: "sessions" };
+    projectSubTabStates.get(projectKey) ?? { openDetailKeys: [], activeSubTab: "sessions" };
 
   const handleSubTabStateChange = (
     projectKey: string,
-    state: { openPlanKeys: string[]; activeSubTab: string },
+    state: ProjectSubTabState,
   ) => {
     setProjectSubTabStates((prev) => new Map(prev).set(projectKey, state));
   };
@@ -179,28 +489,71 @@ function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
+  const [globalAgentsPrefs, setGlobalAgentsPrefs] = useState<ProjectAgentsPrefs>(DEFAULT_PROJECT_AGENTS_PREFS);
+  const [syncConflictDialog, setSyncConflictDialog] = useState<{
+    conflicts: SyncActionResult[];
+    canRememberChoice: boolean;
+    onResolve: (result: { items: SyncRequest["items"]; rememberChoice: boolean; rememberedChoice: "source-wins" | "target-wins" | null }) => void;
+  } | null>(null);
 
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "active" | "error">(
     "connecting",
   );
   const [lastRealtimeSyncAt, setLastRealtimeSyncAt] = useState<string | null>(null);
-  const [forceFull, setForceFull] = useState(false);
+  // 下一次 sessions 掃描是否強制全掃。用 ref 而非 state，避免它進入 queryKey 造成 fetch 過程中
+  // queryKey 變動而連續觸發兩次掃描（async 化後會讓 isFetching 永遠為 true，狀態列卡在「掃描中」）。
+  const forceFullRef = useRef(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
+
+  const [bridgeEventLog, setBridgeEventLog] = useState<BridgeEventLogEntry[]>([]);
+  const [lastBridgeEvent, setLastBridgeEvent] = useState<{ entry: BridgeEventLogEntry; receivedAt: Date } | null>(null);
+  const [showEventMonitor, setShowEventMonitor] = useState(false);
+  const lastBridgeEventTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bridgeEventBufferRef = useRef<BridgeEventLogEntry[]>([]);
+  const bridgeEventFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasShownOutdatedToast = useRef(false);
   const prevActivityStatusRef = useRef<Map<string, string>>(new Map());
   const lastInterventionSessionRef = useRef<string | null>(null);
   const lastNotificationSessionRef = useRef<{ id: string; type: string } | null>(null);
+  const lastBackfillRequestRef = useRef<string | null>(null);
+  // sessionsDataRef 讓事件 listener 不因 stale closure 而讀到舊的 sessionsQuery.data
+  const sessionsDataRef = useRef<SessionInfo[]>([]);
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
     copilotRoot: "",
     opencodeRoot: "",
+    codexRoot: "",
     terminalPath: "",
     externalEditorPath: "",
     showArchived: false,
-    enabledProviders: ["copilot", "opencode"],
+    enabledProviders: ["copilot", "opencode", "codex"],
     providerIntegrations: [],
+    defaultLauncher: "terminal",
     enableInterventionNotification: true,
     enableSessionEndNotification: false,
+    showStatusBar: true,
+    analyticsRefreshInterval: 30,
+    analyticsPanelCollapsed: false,
+    minimizeToTray: false,
+    claudeRoot: "",
+    antigravityRoot: "",
+    hookScriptsPath: "",
+    claudeQuotaResetDay: 1,
+    claudeMonthlyLimitTokens: null,
+    claudeMonthlyLimitUsd: null,
+    enableQuotaMonitoring: true,
+    quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
+    allowCreateProjectConfigDir: false,
+    agentsSourceRoot: "",
+    trayQuotaMode: "icon_only",
+    trayQuotaPrimaryProvider: null,
+    trayQuotaPanelEnabled: true,
+    quotaOverlayEnabled: false,
+    quotaOverlayLocked: true,
+    quotaOverlayOpacity: 0.3,
+    quotaOverlayProviders: [],
+    quotaOverlayTheme: "dark",
+    quotaOverlayStyle: "compact",
   });
 
   const settingsQuery = useQuery({
@@ -208,34 +561,73 @@ function App() {
     queryFn: () => invoke<AppSettings>("get_settings"),
   });
 
+  const sessionsCachedQuery = useQuery({
+    queryKey: [
+      "sessions_cached",
+      settingsQuery.data?.showArchived ?? false,
+      settingsQuery.data?.enabledProviders ?? [],
+    ],
+    enabled: Boolean(settingsQuery.data),
+    staleTime: Infinity,
+    queryFn: () =>
+      invoke<SessionInfo[]>("get_sessions_cached", {
+        showArchived: settingsQuery.data?.showArchived,
+        enabledProviders: settingsQuery.data?.enabledProviders,
+      }),
+  });
+
   const sessionsQuery = useQuery({
     queryKey: [
       "sessions",
       settingsQuery.data?.copilotRoot ?? "",
       settingsQuery.data?.opencodeRoot ?? "",
+      settingsQuery.data?.codexRoot ?? "",
+      settingsQuery.data?.claudeRoot ?? "",
+      settingsQuery.data?.antigravityRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
-      forceFull,
     ],
     enabled: Boolean(settingsQuery.data),
-    queryFn: () =>
-      invoke<SessionInfo[]>("get_sessions", {
+    placeholderData: sessionsCachedQuery.data,
+    queryFn: () => {
+      // 讀取並立即清除全掃旗標：本次 fetch 用完即重置，不影響 queryKey。
+      const forceFull = forceFullRef.current;
+      forceFullRef.current = false;
+      return invoke<SessionInfo[]>("get_sessions", {
         rootDir: settingsQuery.data?.copilotRoot,
         opencodeRoot: settingsQuery.data?.opencodeRoot,
+        codexRoot: settingsQuery.data?.codexRoot,
+        claudeRoot: settingsQuery.data?.claudeRoot,
+        antigravityRoot: settingsQuery.data?.antigravityRoot,
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
         forceFull,
-      }).then((result) => {
-        // 全掃完成後重置 forceFull flag
-        if (forceFull) setForceFull(false);
-        return result;
-      }),
+      });
+    },
+  });
+
+  const providerQuotaQuery = useQuery({
+    queryKey: ["provider_quota"],
+    queryFn: () => invoke<ProviderQuota[]>("get_provider_quota"),
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+
+  const quotaSnapshotQuery = useQuery({
+    queryKey: ["quota_snapshots"],
+    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
+    staleTime: 60_000,
   });
 
   const activePlanSession = useMemo(
     () => sessionsQuery.data?.find((s) => s.id === activePlanSessionId) ?? null,
     [activePlanSessionId, sessionsQuery.data],
   );
+
+  // 保持 sessionsDataRef 與最新 sessions 同步，供事件 listener 讀取（避免 stale closure）
+  useEffect(() => {
+    sessionsDataRef.current = sessionsQuery.data ?? [];
+  }, [sessionsQuery.data]);
 
   const planQuery = useQuery({
     queryKey: ["plan", activePlanSession?.sessionDir ?? ""],
@@ -249,18 +641,80 @@ function App() {
       setSettingsForm({
         copilotRoot: settingsQuery.data.copilotRoot,
         opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
+        codexRoot: settingsQuery.data.codexRoot ?? "",
         terminalPath: settingsQuery.data.terminalPath ?? "",
         externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
         showArchived: settingsQuery.data.showArchived,
         pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
-        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode"],
+        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode", "codex"],
         providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
+        defaultLauncher: settingsQuery.data.defaultLauncher ?? "terminal",
         enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
         enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
+        showStatusBar: settingsQuery.data.showStatusBar ?? true,
+        analyticsRefreshInterval: settingsQuery.data.analyticsRefreshInterval ?? 30,
+        analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
+        minimizeToTray: settingsQuery.data.minimizeToTray ?? false,
+        claudeRoot: settingsQuery.data.claudeRoot ?? "",
+        antigravityRoot: settingsQuery.data.antigravityRoot ?? "",
+        hookScriptsPath: settingsQuery.data.hookScriptsPath ?? "",
+        claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
+        claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
+        claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
+        enableQuotaMonitoring: settingsQuery.data.enableQuotaMonitoring ?? true,
+        quotaEnabledProviders:
+          settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
+        allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
+        agentsSourceRoot: settingsQuery.data.agentsSourceRoot ?? "",
+        trayQuotaMode: settingsQuery.data.trayQuotaMode ?? "icon_only",
+        trayQuotaPrimaryProvider: settingsQuery.data.trayQuotaPrimaryProvider ?? null,
+        trayQuotaPanelEnabled: settingsQuery.data.trayQuotaPanelEnabled ?? true,
+        quotaOverlayEnabled: settingsQuery.data.quotaOverlayEnabled ?? false,
+        quotaOverlayLocked: settingsQuery.data.quotaOverlayLocked ?? true,
+        quotaOverlayOpacity: settingsQuery.data.quotaOverlayOpacity ?? 0.3,
+        quotaOverlayProviders: settingsQuery.data.quotaOverlayProviders ?? [],
+        quotaOverlayTheme: settingsQuery.data.quotaOverlayTheme ?? "dark",
+        quotaOverlayStyle: settingsQuery.data.quotaOverlayStyle ?? "compact",
       });
-      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePath));
+      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("agents-global-prefs");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as ProjectAgentsPrefs;
+      setGlobalAgentsPrefs({ ...DEFAULT_PROJECT_AGENTS_PREFS, ...parsed });
+    } catch {
+      setGlobalAgentsPrefs(DEFAULT_PROJECT_AGENTS_PREFS);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("agents-global-prefs", JSON.stringify(globalAgentsPrefs));
+  }, [globalAgentsPrefs]);
+
+  useEffect(() => {
+    if (!sessionsQuery.isSuccess || !settingsQuery.data?.copilotRoot) return;
+
+    const requestKey = `${settingsQuery.data.copilotRoot}:${sessionsQuery.dataUpdatedAt}`;
+    if (lastBackfillRequestRef.current === requestKey) return;
+    lastBackfillRequestRef.current = requestKey;
+
+    void triggerStatsBackfill(settingsQuery.data.copilotRoot)
+      .then((count) => {
+        if (count > 0) {
+          void queryClient.invalidateQueries({ queryKey: ["session_stats_all"] });
+        }
+      })
+      .catch((error) => console.warn("[stats-backfill] trigger failed:", error));
+  }, [
+    queryClient,
+    sessionsQuery.dataUpdatedAt,
+    sessionsQuery.isSuccess,
+    settingsQuery.data?.copilotRoot,
+  ]);
 
   // 啟動時偵測 provider integration 版本是否過期，提示使用者前往設定更新
   useEffect(() => {
@@ -287,6 +741,8 @@ function App() {
     void invoke("restart_session_watcher", {
       copilotRoot: settingsQuery.data.copilotRoot,
       opencodeRoot: settingsQuery.data.opencodeRoot,
+      codexRoot: settingsQuery.data.codexRoot,
+      hookScriptsPath: settingsQuery.data.hookScriptsPath,
       enabledProviders: settingsQuery.data.enabledProviders,
     })
       .then(() => setRealtimeStatus("active"))
@@ -304,43 +760,59 @@ function App() {
   }, [activePlanSession]);
 
   useEffect(() => {
-    let mounted = true;
+    const MAX_LOG = 100;
+    const LAST_EVENT_TTL_MS = 5 * 60 * 1000;
 
-    const onSessionsRefresh = async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      if (mounted) {
-        setRealtimeStatus("active");
-        setLastRealtimeSyncAt(new Date().toLocaleTimeString("zh-TW", { hour12: false }));
-        showToast(t("toast.sessionsUpdated"));
-      }
+    const unlisten = listen<BridgeEventLogEntry>("provider-bridge-event-logged", (event) => {
+      const entry = event.payload;
+
+      bridgeEventBufferRef.current.push(entry);
+      if (bridgeEventFlushTimerRef.current) return;
+
+      bridgeEventFlushTimerRef.current = setTimeout(() => {
+        const bufferedEntries = bridgeEventBufferRef.current;
+        bridgeEventBufferRef.current = [];
+        bridgeEventFlushTimerRef.current = null;
+        if (bufferedEntries.length === 0) return;
+
+        setBridgeEventLog((prev) => {
+          const next = [...prev, ...bufferedEntries];
+          return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next;
+        });
+
+        const latestEntry = bufferedEntries[bufferedEntries.length - 1];
+        setLastBridgeEvent({ entry: latestEntry, receivedAt: new Date() });
+
+        if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+        lastBridgeEventTimerRef.current = setTimeout(() => {
+          setLastBridgeEvent(null);
+        }, LAST_EVENT_TTL_MS);
+      }, 200);
+    });
+
+    return () => {
+      void unlisten.then((fn) => fn());
+      if (lastBridgeEventTimerRef.current) clearTimeout(lastBridgeEventTimerRef.current);
+      if (bridgeEventFlushTimerRef.current) clearTimeout(bridgeEventFlushTimerRef.current);
+      bridgeEventBufferRef.current = [];
     };
-
-    const setup = async () => {
-      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
-      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
-
-      const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
-        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
-        await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
-        if (mounted) {
-          setRealtimeStatus("active");
-          showToast(t("toast.planReloaded"));
-        }
-      });
-
-      return () => { unlistenCopilot(); unlistenOpencode(); unlistenPlan(); };
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((dispose) => { cleanup = dispose; });
-    return () => { mounted = false; cleanup?.(); };
-  }, [activePlanSession, queryClient, t]);
+  }, []);
 
   useEffect(() => {
     if (!toastMessage) return undefined;
     const timer = window.setTimeout(() => setToastMessage(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F5" || (e.ctrlKey && e.key === "r")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const showToast = (message: string) => setToastMessage(message);
 
@@ -354,6 +826,8 @@ function App() {
         await invoke("restart_session_watcher", {
           copilotRoot: settingsForm.copilotRoot.trim(),
           opencodeRoot: settingsForm.opencodeRoot.trim(),
+          codexRoot: settingsForm.codexRoot.trim(),
+          hookScriptsPath: settingsForm.hookScriptsPath?.trim() ?? "",
           enabledProviders: settingsForm.enabledProviders,
         });
         setRealtimeStatus("active");
@@ -368,7 +842,7 @@ function App() {
       invoke("archive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionArchived"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -378,7 +852,7 @@ function App() {
       invoke("unarchive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionUnarchived"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -388,7 +862,7 @@ function App() {
       invoke("delete_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
     onSuccess: async () => {
       showToast(t("toast.sessionDeleted"));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -433,11 +907,15 @@ function App() {
           ? "install_provider_integration"
           : action === "update"
             ? "update_provider_integration"
-            : "recheck_provider_integration";
+            : action === "uninstall"
+              ? "uninstall_provider_integration"
+              : "recheck_provider_integration";
 
       return invoke<ProviderIntegrationStatus>(command, {
         provider,
         copilotRoot: settingsForm.copilotRoot.trim() || null,
+        codexRoot: settingsForm.codexRoot.trim() || null,
+        hookScriptsPath: (settingsForm.hookScriptsPath ?? "").trim() || null,
       });
     },
     onSuccess: (status, variables) => {
@@ -445,6 +923,9 @@ function App() {
         status.provider,
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
+        t("settings.fields.providerCodex"),
+        t("settings.fields.providerClaude"),
+        t("settings.fields.providerAntigravity"),
       );
       setSettingsForm((current) => ({
         ...current,
@@ -470,7 +951,9 @@ function App() {
           ? t("toast.providerInstalled")
           : variables.action === "update"
             ? t("toast.providerUpdated")
-            : t("toast.providerRechecked");
+            : variables.action === "uninstall"
+              ? t("toast.providerUninstalled")
+              : t("toast.providerRechecked");
       showToast(toastMessage.replace("{provider}", providerLabel));
     },
     onError: (error, variables) => {
@@ -478,6 +961,9 @@ function App() {
         variables.provider,
         t("settings.fields.providerCopilot"),
         t("settings.fields.providerOpencode"),
+        t("settings.fields.providerCodex"),
+        t("settings.fields.providerClaude"),
+        t("settings.fields.providerAntigravity"),
       );
       showToast(
         resolveErrorMessage(
@@ -504,28 +990,101 @@ function App() {
       invoke<number>("delete_empty_sessions", { rootDir: settingsQuery.data?.copilotRoot }),
     onSuccess: async (count) => {
       showToast(t("toast.emptySessionsDeleted").replace("{count}", String(count)));
-      setForceFull(true);
+      forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
+
+  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => ({
+    copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
+    opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
+    codexRoot: (overrides.codexRoot ?? settingsForm.codexRoot).trim(),
+    terminalPath: (overrides.terminalPath ?? settingsForm.terminalPath)?.trim() || null,
+    externalEditorPath:
+      (overrides.externalEditorPath ?? settingsForm.externalEditorPath)?.trim() || null,
+    showArchived: overrides.showArchived ?? settingsForm.showArchived,
+    pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
+    enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
+    providerIntegrations: overrides.providerIntegrations ?? settingsForm.providerIntegrations ?? [],
+    defaultLauncher: overrides.defaultLauncher ?? settingsForm.defaultLauncher ?? null,
+    enableInterventionNotification:
+      overrides.enableInterventionNotification ?? settingsForm.enableInterventionNotification ?? true,
+    enableSessionEndNotification:
+      overrides.enableSessionEndNotification ?? settingsForm.enableSessionEndNotification ?? false,
+    showStatusBar: overrides.showStatusBar ?? settingsForm.showStatusBar ?? true,
+    analyticsRefreshInterval:
+      overrides.analyticsRefreshInterval ?? settingsForm.analyticsRefreshInterval ?? 30,
+    analyticsPanelCollapsed:
+      overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
+    minimizeToTray: overrides.minimizeToTray ?? settingsForm.minimizeToTray ?? false,
+    claudeRoot: overrides.claudeRoot ?? settingsForm.claudeRoot ?? "",
+    antigravityRoot: (overrides.antigravityRoot ?? settingsForm.antigravityRoot ?? "").trim(),
+    hookScriptsPath: (overrides.hookScriptsPath ?? settingsForm.hookScriptsPath ?? "").trim(),
+    claudeQuotaResetDay: overrides.claudeQuotaResetDay ?? settingsForm.claudeQuotaResetDay ?? 1,
+    claudeMonthlyLimitTokens:
+      overrides.claudeMonthlyLimitTokens ?? settingsForm.claudeMonthlyLimitTokens ?? null,
+    claudeMonthlyLimitUsd:
+      overrides.claudeMonthlyLimitUsd ?? settingsForm.claudeMonthlyLimitUsd ?? null,
+    enableQuotaMonitoring:
+      overrides.enableQuotaMonitoring ?? settingsForm.enableQuotaMonitoring ?? true,
+    quotaEnabledProviders:
+      overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
+    allowCreateProjectConfigDir:
+      overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
+    agentsSourceRoot: (overrides.agentsSourceRoot ?? settingsForm.agentsSourceRoot ?? "").trim(),
+    trayQuotaMode: overrides.trayQuotaMode ?? settingsForm.trayQuotaMode ?? "icon_only",
+    trayQuotaPrimaryProvider:
+      overrides.trayQuotaPrimaryProvider ?? settingsForm.trayQuotaPrimaryProvider ?? null,
+    trayQuotaPanelEnabled:
+      overrides.trayQuotaPanelEnabled ?? settingsForm.trayQuotaPanelEnabled ?? true,
+    quotaOverlayEnabled:
+      overrides.quotaOverlayEnabled ?? settingsForm.quotaOverlayEnabled ?? false,
+    quotaOverlayLocked:
+      overrides.quotaOverlayLocked ?? settingsForm.quotaOverlayLocked ?? true,
+    quotaOverlayOpacity:
+      overrides.quotaOverlayOpacity ?? settingsForm.quotaOverlayOpacity ?? 0.3,
+    quotaOverlayProviders:
+      overrides.quotaOverlayProviders ?? settingsForm.quotaOverlayProviders ?? [],
+    quotaOverlayTheme:
+      overrides.quotaOverlayTheme ?? settingsForm.quotaOverlayTheme ?? "dark",
+    quotaOverlayStyle:
+      overrides.quotaOverlayStyle ?? settingsForm.quotaOverlayStyle ?? "compact",
+  });
+
+  const persistSettingsSilently = async (next: AppSettings) => {
+    await invoke("save_settings", { settings: next });
+    await queryClient.invalidateQueries({ queryKey: ["settings"] });
+  };
 
   const togglePinProject = async (projectKey: string) => {
     const next = pinnedProjects.includes(projectKey)
       ? pinnedProjects.filter((k) => k !== projectKey)
       : [...pinnedProjects, projectKey];
     setPinnedProjects(next);
-    const settings: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: settingsForm.showArchived,
-      pinnedProjects: next,
-      enabledProviders: settingsForm.enabledProviders,
-    };
+    const settings = buildSettingsPayload({ pinnedProjects: next });
     await invoke("save_settings", { settings });
     await queryClient.invalidateQueries({ queryKey: ["settings"] });
   };
+
+  const clearOpenProjects = () => {
+    const nonPinned = openProjectKeys.filter((k) => !pinnedProjects.includes(k));
+    setOpenProjectKeys((v) => v.filter((k) => pinnedProjects.includes(k)));
+    if (nonPinned.includes(activeView)) setActiveView("dashboard");
+  };
+
+  const reorderOpenProjects = (newNonPinnedKeys: string[]) => {
+    setOpenProjectKeys((v) => {
+      const pinnedKeys = v.filter((k) => pinnedProjects.includes(k));
+      return [...pinnedKeys, ...newNonPinnedKeys];
+    });
+  };
+
+  const pinProjectViaDrag = async (key: string) => {
+    if (!pinnedProjects.includes(key)) {
+      await togglePinProject(key);
+    }
+  };
+
 
   const uncategorizedLabel = t("session.uncategorized");
 
@@ -554,6 +1113,7 @@ function App() {
 
     if (
       activeView !== "dashboard" &&
+      activeView !== "agents-global" &&
       activeView !== "settings" &&
       !availableProjectKeys.has(activeView)
     ) {
@@ -566,13 +1126,318 @@ function App() {
     [activeView, groupedProjects],
   );
 
-  const recentSessions = useMemo(
-    () =>
-      [...(sessionsQuery.data ?? [])]
-        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
-        .slice(0, 10),
-    [sessionsQuery.data],
+  const planSpecsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 樂觀更新期間壓制 openspec 重整，防止 watcher 觸發的 refetch 引發 UI 閃爍。
+  // handleWriteOpenspecFile 寫入 tasks.md 後設定此時間戳，期間 watcher 事件只
+  // invalidate sisyphus 快取，不碰 openspec 快取。超過時間後下一次 watcher 事件
+  // 才會正常重整 openspec，以真實掃描結果覆蓋樂觀值。
+  const openspecOptimisticUntilRef = useRef<number>(0);
+  const refreshProjectPlansSpecs = useCallback(
+    async (projectDir: string) => {
+      // 清除之前的計時器，實現去抖動
+      if (planSpecsRefreshTimerRef.current) {
+        clearTimeout(planSpecsRefreshTimerRef.current);
+      }
+
+      // 延遲 100ms 再執行掃描，避免同一批次多個檔案變更時重複掃描
+      planSpecsRefreshTimerRef.current = setTimeout(async () => {
+        const suppressOpenspec = Date.now() < openspecOptimisticUntilRef.current;
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
+          ...(!suppressOpenspec
+            ? [queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] })]
+            : []),
+        ]);
+        planSpecsRefreshTimerRef.current = null;
+      }, 100);
+    },
+    [queryClient],
   );
+
+  useEffect(() => {
+    if (!activeProject?.pathLabel) {
+      if (planSpecsRefreshTimerRef.current) clearTimeout(planSpecsRefreshTimerRef.current);
+      void invoke("stop_project_watch");
+      return undefined;
+    }
+    void invoke("watch_project_files", { projectDir: activeProject.pathLabel });
+    return () => {
+      void invoke("stop_project_watch");
+      if (planSpecsRefreshTimerRef.current) clearTimeout(planSpecsRefreshTimerRef.current);
+    };
+  }, [activeProject?.pathLabel]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const onSessionsRefresh = async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      if (mounted) {
+        setRealtimeStatus("active");
+        setLastRealtimeSyncAt(getRealtimeSyncLabel());
+      }
+    };
+
+    const setup = async () => {
+      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
+      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
+      const unlistenCodex = await listen("codex-sessions-updated", onSessionsRefresh);
+      const unlistenClaude = await listen("claude-sessions-updated", onSessionsRefresh);
+
+      const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
+        "copilot-session-targeted",
+        async (event) => {
+          const { cwd } = event.payload;
+          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
+            cwd,
+            rootDir: settingsQuery.data?.copilotRoot,
+          }).catch(() => null);
+
+          if (!mounted) return;
+
+          if (updated) {
+            queryClient.setQueriesData<SessionInfo[]>(
+              { queryKey: ["sessions"], exact: false },
+              (old) => {
+                if (!old) return old;
+                const idx = old.findIndex((s) => s.id === updated.id);
+                if (idx === -1) return [...old, updated];
+                const next = [...old];
+                next[idx] = updated;
+                return next;
+              }
+            );
+          } else {
+            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          }
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      const unlistenClaudeTargeted = await listen<SessionTargetedPayload>(
+        "claude-session-targeted",
+        async (event) => {
+          const { cwd } = event.payload;
+          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
+            cwd,
+            rootDir: settingsQuery.data?.copilotRoot,
+          }).catch(() => null);
+
+          if (!mounted) return;
+
+          if (updated) {
+            queryClient.setQueriesData<SessionInfo[]>(
+              { queryKey: ["sessions"], exact: false },
+              (old) => {
+                if (!old) return old;
+                const idx = old.findIndex((s) => s.id === updated.id);
+                if (idx === -1) return [...old, updated];
+                const next = [...old];
+                next[idx] = updated;
+                return next;
+              }
+            );
+          } else {
+            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          }
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      // copilot-activity-hint：輕量活動通知，不做任何 IPC 或 session 掃描。
+      // 只更新 activityStatusQuery 快取中對應 session 的狀態，並刷新 status bar。
+      const unlistenActivityHint = await listen<ActivityHintPayload>(
+        "copilot-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, eventType, title } = event.payload;
+          const normalizedCwd = normalizePath(cwd);
+          const session = sessionsDataRef.current.find(
+            (s) => normalizePath(s.cwd ?? "") === normalizedCwd,
+          );
+          if (!session) return;
+
+          // 依 eventType 計算 activity detail
+          let detail: SessionActivityStatus["detail"] = "tool_call";
+          if (eventType === "prompt.submitted") {
+            detail = "thinking";
+          } else if (eventType === "tool.pre" && title) {
+            const lowerTitle = title.toLowerCase();
+            if (/edit|write|patch|create/.test(lowerTitle)) {
+              detail = "file_op";
+            } else if (/task|subtask|agent/.test(lowerTitle)) {
+              detail = "sub_agent";
+            }
+          }
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id, provider: session.provider }),
+                status: "active",
+                detail,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      // claude-activity-hint：後端已計算 status/detail，直接 patch activityStatusMap
+      const unlistenClaudeActivityHint = await listen<ActivityHintPayload>(
+        "claude-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, eventType, title, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
+
+          // 優先使用後端傳來的 sessionId，否則從 cwd 查找
+          const normalizedCwd = normalizePath(cwd);
+          const session = hintSessionId
+            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
+            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
+          if (!session) return;
+
+          // 後端已提供 status 時直接使用，否則 fallback 到前端推算（向後相容）
+          let status: SessionActivityStatus["status"];
+          let detail: SessionActivityStatus["detail"];
+          if (hintStatus) {
+            status = hintStatus;
+            detail = hintDetail ?? undefined;
+          } else {
+            status = "active";
+            detail = "tool_call";
+            if (eventType === "prompt.submitted") {
+              detail = "thinking";
+            } else if (eventType === "tool.pre" && title) {
+              const lowerTitle = title.toLowerCase();
+              if (/edit|write|patch|create/.test(lowerTitle)) {
+                detail = "file_op";
+              } else if (/task|subtask|agent/.test(lowerTitle)) {
+                detail = "sub_agent";
+              }
+            }
+          }
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id }),
+                status,
+                detail,
+                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      const unlistenOpenCodeActivityHint = await listen<ActivityHintPayload>(
+        "opencode-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
+          const normalizedCwd = normalizePath(cwd);
+          const session = hintSessionId
+            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
+            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
+          if (!session || !hintStatus) return;
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id }),
+                status: hintStatus,
+                detail: hintDetail ?? undefined,
+                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
+      const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
+        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
+        await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
+        if (mounted) {
+          setRealtimeStatus("active");
+          showToast(t("toast.planReloaded"));
+        }
+      });
+
+      const unlistenProjectFiles = await listen<string>("project-files-changed", async (event) => {
+        const normalizePath = (p: string) => p.toLowerCase().replace(/\\/g, "/");
+        if (!activeProject || normalizePath(event.payload) !== normalizePath(activeProject.pathLabel)) return;
+        await refreshProjectPlansSpecs(activeProject.pathLabel);
+        if (mounted) {
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      });
+
+      const unlistenQuotaSnapshots = await listen("quota-snapshots-updated", () => {
+        if (!mounted) return;
+        void queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
+      });
+
+      const unlistenNavigateMainView = await listen<string>("navigate-main-view", (event) => {
+        if (!mounted) return;
+        setActiveView(event.payload);
+      });
+
+      return () => {
+        unlistenCopilot();
+        unlistenOpencode();
+        unlistenCodex();
+        unlistenClaude();
+        unlistenCopilotTargeted();
+        unlistenClaudeTargeted();
+        unlistenActivityHint();
+        unlistenClaudeActivityHint();
+        unlistenOpenCodeActivityHint();
+        unlistenPlan();
+        unlistenProjectFiles();
+        unlistenQuotaSnapshots();
+        unlistenNavigateMainView();
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((dispose) => { cleanup = dispose; });
+    return () => { mounted = false; cleanup?.(); };
+  }, [activePlanSession, activeProject, queryClient, refreshProjectPlansSpecs, settingsQuery.data, t]);
 
   const deletableEmptySessionCount = useMemo(
     () =>
@@ -582,27 +1447,59 @@ function App() {
     [sessionsQuery.data],
   );
 
-  const sessionStatsQueries = useQueries({
-    queries: (sessionsQuery.data ?? []).map((session) => ({
-      queryKey: ["session_stats", session.sessionDir],
-      queryFn: () => invoke<SessionStats>("get_session_stats", { sessionDir: session.sessionDir }),
-      staleTime: 60_000,
-      enabled: Boolean(session.sessionDir),
-    })),
+  const allSessionDirs = useMemo(
+    () => (sessionsQuery.data ?? [])
+      .filter((session) => session.provider !== "codex" && Boolean(session.sessionDir))
+      .map((session) => session.sessionDir)
+      .sort((left, right) => left.localeCompare(right)),
+    [sessionsQuery.data],
+  );
+
+  const sessionStatsQuery = useQuery({
+    queryKey: ["session_stats_all", allSessionDirs],
+    enabled: allSessionDirs.length > 0,
+    staleTime: 60_000,
+    queryFn: () => invoke<Record<string, SessionStats>>("get_all_session_stats", { sessionDirs: allSessionDirs }),
+    refetchInterval: (query: { state: { data?: Record<string, SessionStats> } }) =>
+      Object.values(query.state.data ?? {}).some((stats) => stats.isLive) ? 30_000 : false,
   });
 
   const sessionStatsMap = useMemo(
     () => Object.fromEntries(
-      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.data]),
+      (sessionsQuery.data ?? []).map((session) => [session.id, sessionStatsQuery.data?.[session.sessionDir]]),
     ) as Record<string, SessionStats | undefined>,
-    [sessionStatsQueries, sessionsQuery.data],
+    [sessionStatsQuery.data, sessionsQuery.data],
   );
 
   const sessionStatsLoadingMap = useMemo(
     () => Object.fromEntries(
-      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionStatsQueries[index]?.isLoading]),
+      (sessionsQuery.data ?? []).map((session) => [session.id, session.provider !== "codex" ? sessionStatsQuery.isLoading : false]),
     ) as Record<string, boolean | undefined>,
-    [sessionStatsQueries, sessionsQuery.data],
+    [sessionStatsQuery.isLoading, sessionsQuery.data],
+  );
+
+  const sessionTodoQueries = useQueries({
+    queries: (sessionsQuery.data ?? []).map((session) => ({
+      queryKey: ["session_todos", session.sessionDir],
+      queryFn: () => readSessionTodos(session.sessionDir),
+      staleTime: 60_000,
+      enabled: session.provider === "copilot" && Boolean(session.sessionDir),
+      refetchInterval: () => (sessionStatsMap[session.id]?.isLive ? 30_000 : false),
+    })),
+  });
+
+  const sessionTodosMap = useMemo(
+    () => Object.fromEntries(
+      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionTodoQueries[index]?.data ?? []]),
+    ) as Record<string, SessionTodo[]>,
+    [sessionTodoQueries, sessionsQuery.data],
+  );
+
+  const sessionTodosLoadingMap = useMemo(
+    () => Object.fromEntries(
+      (sessionsQuery.data ?? []).map((session, index) => [session.id, sessionTodoQueries[index]?.isLoading]),
+    ) as Record<string, boolean | undefined>,
+    [sessionTodoQueries, sessionsQuery.data],
   );
 
   const sisyphusQuery = useQuery({
@@ -619,9 +1516,180 @@ function App() {
     staleTime: 30_000,
   });
 
+  // 專案 agents sub-tab 啟用時，除專案 scope queries 外也啟用 global queries，
+  // 供專案分頁的「全域」分區使用（雙分區，見 agents-config-view-ux spec）。
+  const projectAgentsSubTabActive =
+    Boolean(activeProject?.pathLabel) &&
+    (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false);
+
+  const projectAgentsPrefsQuery = useQuery({
+    queryKey: ["agents-prefs", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const projectAgentsMdQuery = useQuery({
+    queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const projectAgentsSkillsQuery = useQuery({
+    queryKey: ["agents-skills", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const projectAgentsCommandsQuery = useQuery({
+    queryKey: ["agents-commands", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const globalAgentsMdQuery = useQuery({
+    queryKey: ["agents-md", "global"],
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsMdScanResult>("scan_global_agents_md"),
+  });
+
+  const globalAgentsSkillsQuery = useQuery({
+    queryKey: ["agents-skills", "global"],
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" } }),
+  });
+
+  const globalAgentsCommandsQuery = useQuery({
+    queryKey: ["agents-commands", "global"],
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" } }),
+  });
+
+  const agentsSourceRootConfigured = Boolean((settingsForm.agentsSourceRoot ?? "").trim());
+
+  const agentsRootLinkQuery = useQuery({
+    queryKey: ["agents-root-link"],
+    enabled: (activeView === "agents-global" || projectAgentsSubTabActive) && agentsSourceRootConfigured,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<AgentsRootLinkStatus>("check_agents_root_link"),
+  });
+
+  const linkAgentsRootMutation = useMutation({
+    mutationFn: () => invoke<AgentsRootLinkStatus>("link_agents_root"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agents-root-link"] });
+      void queryClient.invalidateQueries({ queryKey: ["agents-skills", "global"] });
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const globalMcpConfigsQuery = useQuery({
+    queryKey: ["mcp-configs", "global"],
+    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "global" } }),
+  });
+
+  const projectMcpConfigsQuery = useQuery({
+    queryKey: ["mcp-configs", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  });
+
+  const codexProjectTrustQuery = useQuery({
+    queryKey: ["codex-project-trust", activeProject?.pathLabel ?? ""],
+    enabled: projectAgentsSubTabActive,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: () => invoke<boolean>("check_codex_project_trust", { projectCwd: activeProject?.pathLabel }),
+  });
+
+  const invalidateMcpConfigs = async (scopeKeyForQuery: string) => {
+    await queryClient.invalidateQueries({ queryKey: ["mcp-configs", scopeKeyForQuery] });
+  };
+
+  const upsertMcpServerMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+      originalName?: string | null;
+      configJson: string;
+    }) => invoke("upsert_mcp_server", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const deleteMcpServerMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+    }) => invoke("delete_mcp_server", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const setMcpServerEnabledMutation = useMutation({
+    mutationFn: (params: {
+      scope: { kind: "global" } | { kind: "project"; projectCwd: string };
+      provider: string;
+      name: string;
+      enabled: boolean;
+    }) => invoke("set_mcp_server_enabled", params),
+    onSuccess: (_data, variables) => {
+      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    },
+    onError: (error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    },
+  });
+
+  const claudeHookInstalled = (settingsQuery.data?.providerIntegrations ?? [])
+    .some((i) => i.provider === "claude" && i.status === "installed");
+
   const activityStatusQuery = useQuery({
     queryKey: ["activity_statuses", sessionsQuery.data?.map((s) => s.id)],
     enabled: Boolean(sessionsQuery.data?.length),
+    refetchOnMount: true,
     queryFn: async () => {
       const sessions = sessionsQuery.data ?? [];
       return invoke<SessionActivityStatus[]>("get_session_activity_statuses", {
@@ -633,13 +1701,21 @@ function App() {
         opencodeRoot: settingsQuery.data?.opencodeRoot || null,
       });
     },
-   refetchInterval: 30_000,
+    refetchInterval: claudeHookInstalled ? false : 30_000,
     staleTime: 25_000,
   });
 
   const toolAvailabilityQuery = useQuery({
     queryKey: ["tool_availability"],
     queryFn: () => invoke<ToolAvailability>("check_tool_availability"),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const jqAvailableQuery = useQuery({
+    queryKey: ["jq_available"],
+    enabled: activeView === "settings",
+    queryFn: () => invoke<boolean>("check_jq_available"),
     staleTime: Infinity,
     gcTime: Infinity,
   });
@@ -708,20 +1784,192 @@ function App() {
     return invoke<string>("read_plan_content", { filePath });
   };
 
+  const handleReadAgentsFile = async (filePath: string): Promise<string> => {
+    return invoke<string>("read_agents_file", { filePath });
+  };
+
   const handleReadOpenspecFile = async (projectCwd: string, relativePath: string): Promise<string> => {
     return invoke<string>("read_openspec_file", { projectCwd, relativePath });
   };
 
-  const handleOpenInTool = async (session: SessionInfo, toolType: IdeLauncherType) => {
+  const handleWriteOpenspecFile = async (
+    projectCwd: string,
+    relativePath: string,
+    content: string,
+  ): Promise<void> => {
+    // 樂觀更新：若寫入的是某個 change 的 tasks.md，立即以前端解析的進度更新
+    // openspecQuery 快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
+    // 真實數字覆蓋此處的樂觀值。
+    const projectKey = activeProject?.pathLabel ?? "";
+    const normalizedPath = relativePath.replace(/\\/g, "/");
+    const tasksMatch = /^changes\/(?:archive\/)?([^/]+)\/tasks\.md$/.exec(normalizedPath);
+    let previousData: OpenSpecData | undefined;
+    if (projectKey && tasksMatch) {
+      const changeName = tasksMatch[1];
+      const nextProgress = parseTaskProgress(content);
+      const snapshot = queryClient.getQueryData<OpenSpecData>(["project_specs", projectKey]);
+      if (snapshot) {
+        previousData = snapshot;
+        const applyProgress = (changes: OpenSpecData["activeChanges"]) =>
+          changes.map((change) =>
+            change.name === changeName ? { ...change, taskProgress: nextProgress } : change,
+          );
+        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], {
+          ...snapshot,
+          activeChanges: applyProgress(snapshot.activeChanges),
+          archivedChanges: applyProgress(snapshot.archivedChanges),
+        });
+        // 壓制接下來 2 秒內 watcher 觸發的 openspec invalidate，避免 refetch 閃爍。
+        // 2 秒後下一次 watcher 事件才會以真實掃描結果覆蓋樂觀值。
+        openspecOptimisticUntilRef.current = Date.now() + 2000;
+      }
+    }
+
+    try {
+      await invoke("write_openspec_file", { projectCwd, relativePath, content });
+    } catch (error) {
+      // 寫入失敗：回滾樂觀更新
+      if (projectKey && previousData) {
+        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], previousData);
+      }
+      showToast(resolveErrorMessage(error, t("toast.openspecWriteFailed")));
+      throw error;
+    }
+  };
+
+  const handleRefreshPlansSpecs = async (): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
+    setRealtimeStatus("active");
+    setLastRealtimeSyncAt(getRealtimeSyncLabel());
+  };
+
+  const refreshAgentsQueries = async (scopeKey: string) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["agents-md", scopeKey] }),
+      queryClient.invalidateQueries({ queryKey: ["agents-skills", scopeKey] }),
+      queryClient.invalidateQueries({ queryKey: ["agents-commands", scopeKey] }),
+    ]);
+  };
+
+  const handleWriteProjectAgentsFile = async (filePath: string, content: string): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await invoke("write_agents_file", {
+      scopeRoot: activeProject.pathLabel,
+      filePath,
+      content,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["agents-md", activeProject.pathLabel] });
+  };
+
+  const handleWriteGlobalAgentsFile = async (filePath: string, content: string): Promise<void> => {
+    await invoke("write_agents_file", {
+      scopeRoot: getDirectoryPath(filePath),
+      filePath,
+      content,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["agents-md", "global"] });
+  };
+
+  const handleRefreshProjectAgents = async (): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    await refreshAgentsQueries(activeProject.pathLabel);
+  };
+
+  const handleRefreshGlobalAgents = async (): Promise<void> => {
+    await refreshAgentsQueries("global");
+  };
+
+  const handlePreviewAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
+    return invoke<SyncReport>("sync_agents_items", { request });
+  };
+
+  const handleApplyAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
+    const report = await invoke<SyncReport>("sync_agents_items", { request });
+    const conflicts = report.actions.filter((action) => action.action === "conflict");
+    if (conflicts.length > 0) {
+      setSyncConflictDialog({
+        conflicts,
+        canRememberChoice: Boolean(request.projectCwd),
+        onResolve: ({ items, rememberChoice, rememberedChoice }) => {
+          setSyncConflictDialog(null);
+          void (async () => {
+            if (rememberChoice && rememberedChoice && request.projectCwd) {
+              const nextPrefs = {
+                ...(projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS),
+                conflictChoice: rememberedChoice,
+              };
+              const saveResult = await invoke<SaveProjectAgentsPrefsResult>("save_project_agents_prefs", {
+                projectCwd: request.projectCwd,
+                prefs: nextPrefs,
+              });
+              if (saveResult.createdProjectConfigDir) {
+                showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
+              }
+              await queryClient.invalidateQueries({ queryKey: ["agents-prefs", request.projectCwd] });
+            }
+
+            const nextReport = await invoke<SyncReport>("sync_agents_items", {
+              request: {
+                ...request,
+                dryRun: false,
+                items,
+              },
+            });
+            showToast(formatAgentsReportToast(nextReport, t("agents.report.toast")));
+            await refreshAgentsQueries(request.projectCwd ?? "global");
+          })().catch((error) => {
+            showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+          });
+        },
+      });
+      return report;
+    }
+
+    showToast(formatAgentsReportToast(report, t("agents.report.toast")));
+    await refreshAgentsQueries(request.projectCwd ?? "global");
+    return report;
+  };
+
+  const handleUpdateProjectAgentsPrefs = async (prefs: ProjectAgentsPrefs): Promise<void> => {
+    if (!activeProject?.pathLabel) return;
+    const saveResult = await invoke<SaveProjectAgentsPrefsResult>("save_project_agents_prefs", {
+      projectCwd: activeProject.pathLabel,
+      prefs,
+    });
+    if (saveResult.createdProjectConfigDir) {
+      showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
+    }
+    await queryClient.invalidateQueries({ queryKey: ["agents-prefs", activeProject.pathLabel] });
+  };
+
+  const handleResumeSession = async (session: SessionInfo) => {
     if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
     const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
     if (!exists) { showToast(t("toast.cwdMissing")); return; }
     try {
-      await invoke("open_in_tool", {
-        toolType,
+      await invoke("resume_session_in_terminal", {
+        provider: session.provider,
+        sessionId: session.id,
         cwd: session.cwd,
         terminalPath: settingsQuery.data?.terminalPath || null,
-        sessionId: session.id,
+      });
+      showToast(t("toast.toolOpened"));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    }
+  };
+
+  const handleOpenProjectInTool = async (project: ProjectGroup, toolType: IdeLauncherType) => {
+    if (!project.pathLabel) { showToast(t("toast.cwdMissing")); return; }
+    const exists = await invoke<boolean>("check_directory_exists", { path: project.pathLabel });
+    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    try {
+      await invoke("open_in_tool", {
+        toolType,
+        cwd: project.pathLabel,
+        terminalPath: settingsQuery.data?.terminalPath || null,
+        sessionId: null,
       });
       showToast(t("toast.toolOpened"));
     } catch (error) {
@@ -740,26 +1988,61 @@ function App() {
 
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
   const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
+  const [dashboardAnalyticsData, setDashboardAnalyticsData] = useState<AnalyticsDataPoint[]>([]);
+  const [dashboardAnalyticsLoading, setDashboardAnalyticsLoading] = useState(false);
+  const [dashboardAnalyticsRefreshing, setDashboardAnalyticsRefreshing] = useState(false);
+  const [dashboardAnalyticsError, setDashboardAnalyticsError] = useState<string | null>(null);
+  const [dashboardAnalyticsFetchedAt, setDashboardAnalyticsFetchedAt] = useState<number | null>(null);
+
+  const dashboardPeriodStart = useMemo(
+    () => getDashboardPeriodStart(dashboardPeriod),
+    [dashboardPeriod],
+  );
+
+  const filteredDashboardSessions = useMemo(
+    () => (sessionsQuery.data ?? []).filter((session) => isSessionInUpdatedRange(session, dashboardPeriodStart)),
+    [dashboardPeriodStart, sessionsQuery.data],
+  );
+
+  // 狀態列統計範圍與看板目前選定的週期(本周/本月)一致，避免顯示歷史全部 session 造成數字落差。
+  const { activeSessions, waitingSessions, idleSessions, doneSessions } = useMemo(() => {
+    let active = 0;
+    let waiting = 0;
+    let idle = 0;
+    let done = 0;
+    for (const s of filteredDashboardSessions) {
+      if (s.isArchived) {
+        done++;
+        continue;
+      }
+      const activityStatus = activityStatusMap.get(s.id)?.status;
+      if (activityStatus === "active") {
+        active++;
+      } else if (activityStatus === "waiting") {
+        waiting++;
+      } else if (activityStatus === "idle") {
+        idle++;
+      }
+    }
+    return { activeSessions: active, waitingSessions: waiting, idleSessions: idle, doneSessions: done };
+  }, [filteredDashboardSessions, activityStatusMap]);
+
+  const filteredDashboardProjects = useMemo(
+    () => buildProjectGroups(filteredDashboardSessions, uncategorizedLabel, locale),
+    [filteredDashboardSessions, locale, uncategorizedLabel],
+  );
+
+  const filteredRecentSessions = useMemo(
+    () =>
+      [...filteredDashboardSessions]
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+        .slice(0, 10),
+    [filteredDashboardSessions],
+  );
 
   const filteredDashboardTotals = useMemo(() => {
-    const now = new Date();
-    let periodStart: Date;
-    if (dashboardPeriod === "week") {
-      // 週一 00:00:00（ISO week）
-      periodStart = new Date(now);
-      periodStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-      periodStart.setHours(0, 0, 0, 0);
-    } else {
-      // 當月 1 日 00:00:00
-      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    }
-    const periodStartTime = periodStart.getTime();
-
-    return (sessionsQuery.data ?? []).reduce(
+    return filteredDashboardSessions.reduce(
       (acc, session) => {
-        if (!session.updatedAt) return acc;
-        const updatedAtTime = Date.parse(session.updatedAt);
-        if (Number.isNaN(updatedAtTime) || updatedAtTime < periodStartTime) return acc;
         const stats = sessionStatsMap[session.id];
         if (!stats) return acc;
         acc.totalOutputTokens += stats.outputTokens;
@@ -772,7 +2055,75 @@ function App() {
       },
       { totalOutputTokens: 0, totalInteractions: 0, totalCost: 0 },
     );
-  }, [dashboardPeriod, sessionsQuery.data, sessionStatsMap]);
+  }, [filteredDashboardSessions, sessionStatsMap]);
+
+  const dashboardProjectSlices = useMemo(() => {
+    const palette = ["#6366f1", "#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
+    return filteredDashboardProjects
+      .map((project, index) => {
+        const total = project.sessions.reduce((sum, session) => {
+          const stats = sessionStatsMap[session.id];
+          return sum + (stats?.outputTokens ?? 0) + (stats?.inputTokens ?? 0);
+        }, 0);
+        return {
+          label: project.title,
+          value: total,
+          color: palette[index % palette.length],
+        };
+      })
+      .filter((slice) => slice.value > 0);
+  }, [filteredDashboardProjects, sessionStatsMap]);
+
+  const fetchAnalyticsData = useCallback(
+    async (
+      cwd: string | null,
+      startDate: string,
+      endDate: string,
+      groupBy: AnalyticsGroupBy,
+    ): Promise<AnalyticsDataPoint[] | null> => {
+      try {
+        return await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
+          cwd,
+          startDate,
+          endDate,
+          groupBy,
+        });
+      } catch (error) {
+        showToast(resolveErrorMessage(error, t("analytics.error.loadFailed")));
+        return null;
+      }
+    },
+    [t],
+  );
+
+  const fetchDashboardAnalytics = useCallback(async () => {
+    const startDate = formatDateInput(new Date(dashboardPeriodStart));
+    const endDate = formatDateInput(new Date());
+    const hasExistingData = dashboardAnalyticsData.length > 0;
+
+    setDashboardAnalyticsError(null);
+    if (hasExistingData) {
+      setDashboardAnalyticsRefreshing(true);
+    } else {
+      setDashboardAnalyticsLoading(true);
+    }
+
+    try {
+      const result = await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
+        cwd: null,
+        startDate,
+        endDate,
+        groupBy: "day",
+      });
+      setDashboardAnalyticsData(result);
+      setDashboardAnalyticsFetchedAt(Date.now());
+    } catch (error) {
+      setDashboardAnalyticsError(resolveErrorMessage(error, t("analytics.error.loadFailed")));
+    } finally {
+      setDashboardAnalyticsLoading(false);
+      setDashboardAnalyticsRefreshing(false);
+    }
+  }, [dashboardAnalyticsData.length, dashboardPeriodStart, t]);
 
   const planPreviewHtml = useMemo(
     () =>
@@ -793,19 +2144,11 @@ function App() {
   };
 
   const handleSaveSettings = async () => {
-    const next: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: settingsForm.showArchived,
-      pinnedProjects,
-      enabledProviders: settingsForm.enabledProviders,
-      defaultLauncher: settingsForm.defaultLauncher ?? null,
-    };
+    const next = buildSettingsPayload();
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
     const requiresOpencodeRoot = next.enabledProviders.includes("opencode");
+    const requiresCodexRoot = next.enabledProviders.includes("codex");
 
     if (requiresCopilotRoot && !next.copilotRoot) {
       showToast(t("toast.settingsRootRequired"));
@@ -813,6 +2156,11 @@ function App() {
     }
 
     if (requiresOpencodeRoot && !next.opencodeRoot) {
+      showToast(t("toast.settingsRootRequired"));
+      return;
+    }
+
+    if (requiresCodexRoot && !next.codexRoot) {
       showToast(t("toast.settingsRootRequired"));
       return;
     }
@@ -828,7 +2176,7 @@ function App() {
     settingsMutation.mutate(next);
   };
 
-  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot") => {
+  const handleBrowseDirectory = async (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "agentsSourceRoot") => {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
@@ -839,33 +2187,18 @@ function App() {
   };
 
   const handleToggleArchived = async (nextValue: boolean) => {
-    const next: AppSettings = {
-      copilotRoot: settingsForm.copilotRoot.trim(),
-      opencodeRoot: settingsForm.opencodeRoot.trim(),
-      terminalPath: settingsForm.terminalPath?.trim() || null,
-      externalEditorPath: settingsForm.externalEditorPath?.trim() || null,
-      showArchived: nextValue,
-      pinnedProjects,
-      enabledProviders: settingsForm.enabledProviders,
-    };
+    const next = buildSettingsPayload({ showArchived: nextValue });
     setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
     settingsMutation.mutate(next);
   };
 
-  const handleOpenTerminal = async (session: SessionInfo) => {
-    if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
-    const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
-    if (!exists) { showToast(t("toast.cwdMissing")); return; }
-    if (!settingsQuery.data?.terminalPath) { showToast(t("toast.terminalInvalid")); return; }
-    try {
-      await invoke("open_terminal", {
-        terminalPath: settingsQuery.data.terminalPath,
-        cwd: session.cwd,
-        sessionId: session.id,
-      });
-      showToast(t("toast.terminalOpened"));
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t("toast.terminalOpenFailed"));
+  const handleToggleAnalyticsPanel = async () => {
+    const nextCollapsed = !(settingsForm.analyticsPanelCollapsed ?? false);
+    setSettingsForm((current) => ({ ...current, analyticsPanelCollapsed: nextCollapsed }));
+    await persistSettingsSilently(buildSettingsPayload({ analyticsPanelCollapsed: nextCollapsed }));
+    const refreshIntervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
+    if (!nextCollapsed && (!dashboardAnalyticsFetchedAt || Date.now() - dashboardAnalyticsFetchedAt >= refreshIntervalMs)) {
+      await fetchDashboardAnalytics();
     }
   };
 
@@ -911,16 +2244,18 @@ function App() {
   };
 
   const handleCopyCommand = async (session: SessionInfo) => {
-    const command =
-      session.provider === "opencode"
-        ? `opencode session ${session.id}`
-        : `copilot --resume=${session.id}`;
+    const command = getSessionOpenCommand(session.provider, session.id);
+    if (!command) {
+      showToast(t("toast.commandUnavailable"));
+      return;
+    }
     await navigator.clipboard.writeText(command);
     showToast(t("toast.commandCopied"));
   };
 
   const handleEditNotes = (session: SessionInfo) => {
     setEditDialog({
+      key: `notes:${session.id}:${session.updatedAt ?? ""}`,
       title: t("session.actions.editNotes"),
       message: t("session.prompt.notes"),
       actionLabel: t("session.actions.editNotes"),
@@ -937,13 +2272,46 @@ function App() {
 
   const handleEditTags = (session: SessionInfo) => {
     setEditDialog({
+      key: `tags:${session.id}:${session.updatedAt ?? ""}`,
       title: t("session.actions.editTags"),
       message: t("session.prompt.tags"),
       actionLabel: t("session.actions.editTags"),
       initialValue: session.tags.join(", "),
       onConfirm: (nextValue) => {
-        const tags = nextValue.split(",").map((v) => v.trim()).filter(Boolean);
+        const tags = normalizeTags(nextValue.split(","));
         saveMetaMutation.mutate({ sessionId: session.id, notes: session.notes ?? null, tags });
+      },
+    });
+  };
+
+  const handleEditSingleTag = (session: SessionInfo, tag: string, tagIndex: number) => {
+    setEditDialog({
+      key: `tag:${session.id}:${tagIndex}:${tag}:${session.updatedAt ?? ""}`,
+      title: t("session.actions.editTags"),
+      message: t("session.prompt.singleTag"),
+      actionLabel: t("session.actions.editTags"),
+      secondaryActionLabel: t("session.actions.deleteTag"),
+      secondaryActionTone: "danger",
+      initialValue: tag,
+      onConfirm: (nextValue) => {
+        const normalized = nextValue.trim();
+        const nextTags = session.tags.flatMap((currentTag, currentIndex) => {
+          if (currentIndex !== tagIndex) return [currentTag];
+          return normalized ? [normalized] : [];
+        });
+        saveMetaMutation.mutate({
+          sessionId: session.id,
+          notes: session.notes ?? null,
+          tags: normalizeTags(nextTags),
+        });
+      },
+      onSecondaryAction: () => {
+        const nextTags = session.tags.filter((_, currentIndex) => currentIndex !== tagIndex);
+        saveMetaMutation.mutate({
+          sessionId: session.id,
+          notes: session.notes ?? null,
+          tags: normalizeTags(nextTags),
+        });
       },
     });
   };
@@ -961,6 +2329,18 @@ function App() {
     setPendingProviderAction(`${provider}:${action}`);
     providerIntegrationMutation.mutate({ provider, action });
   };
+
+  const handleRefreshQuota = useCallback((provider?: string) => {
+    void invoke<QuotaSnapshot[]>("refresh_quota", { provider: provider ?? null })
+      .then((snapshots) => {
+        const rateLimited = snapshots.find((s) => s.status === "rate_limited");
+        if (rateLimited) {
+          showToast(rateLimited.errorMessage ?? t("quota.rateLimited"));
+        }
+        return queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
+      })
+      .catch(() => null);
+  }, [queryClient]);
 
   const handleOpenProviderPath = async (integration: ProviderIntegrationStatus) => {
     const targetPath = resolveProviderTargetPath(integration);
@@ -1021,6 +2401,82 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return;
+    void fetchDashboardAnalytics();
+  }, [activeView, dashboardPeriod, settingsForm.analyticsPanelCollapsed, fetchDashboardAnalytics]);
+
+  useEffect(() => {
+    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return undefined;
+    const intervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
+    const timer = window.setInterval(() => {
+      void fetchDashboardAnalytics();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [
+    activeView,
+    settingsForm.analyticsPanelCollapsed,
+    settingsForm.analyticsRefreshInterval,
+    fetchDashboardAnalytics,
+  ]);
+
+  const handleOpenPathExternal = (path: string) => {
+    openPath(path).catch((error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    });
+  };
+
+  const handleRevealPathInDir = (path: string) => {
+    revealItemInDir(path).catch((error) => {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    });
+  };
+
+  // 全域 Agents 資料集合：供全域 Agents 頁（獨立元件）與專案分頁的 globalData prop 共用。
+  const globalAgentsData: AgentsScopeDataBundle = {
+    scope: { kind: "global" },
+    agentsMdData: globalAgentsMdQuery.data,
+    skillsData: globalAgentsSkillsQuery.data,
+    commandsData: globalAgentsCommandsQuery.data,
+    prefs: globalAgentsPrefs,
+    isAgentsMdLoading: globalAgentsMdQuery.isLoading,
+    isSkillsLoading: globalAgentsSkillsQuery.isLoading,
+    isCommandsLoading: globalAgentsCommandsQuery.isLoading,
+    isPrefsLoading: false,
+    onRefreshAgentsMd: handleRefreshGlobalAgents,
+    onRefreshSkills: handleRefreshGlobalAgents,
+    onRefreshCommands: handleRefreshGlobalAgents,
+    onPreviewSync: handlePreviewAgentsSync,
+    onApplySync: handleApplyAgentsSync,
+    onUpdatePrefs: async (prefs) => {
+      setGlobalAgentsPrefs(prefs);
+    },
+    agentsRootLinkStatus: agentsSourceRootConfigured ? (agentsRootLinkQuery.data ?? null) : null,
+    onCreateAgentsRootLink: async () => {
+      await linkAgentsRootMutation.mutateAsync();
+    },
+    mcpProviders: globalMcpConfigsQuery.data ?? [],
+    mcpLoading: globalMcpConfigsQuery.isLoading,
+    onRefreshMcp: async () => { await globalMcpConfigsQuery.refetch(); },
+    onUpsertMcpServer: (provider, name, originalName, configJson) =>
+      upsertMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name, originalName, configJson }),
+    onDeleteMcpServer: (provider, name) =>
+      deleteMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name }),
+    onSetMcpServerEnabled: (provider, name, enabled) =>
+      setMcpServerEnabledMutation.mutateAsync({ scope: { kind: "global" }, provider, name, enabled }),
+  };
+
+  // 全域 Agents 檢視（含 MCP 頁籤）：獨立元件，供全域 Agents 頁（agents-global）渲染。
+  const globalAgentsView = (
+    <AgentsConfigView
+      {...globalAgentsData}
+      onReadFile={handleReadAgentsFile}
+      onWriteFile={handleWriteGlobalAgentsFile}
+      onOpenExternal={handleOpenPathExternal}
+      onRevealPath={handleRevealPathInDir}
+    />
+  );
+
   return (
     <main className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Sidebar
@@ -1031,8 +2487,13 @@ function App() {
         sessionsIsFetching={sessionsQuery.isFetching}
         pinnedProjects={pinnedProjects}
         projectGroups={groupedProjects}
+        openProjectKeys={openProjectKeys}
         onNavigate={(view) => setActiveView(view)}
         onOpenProject={openProjectTab}
+        onCloseProject={closeProjectTab}
+        onClearOpenProjects={clearOpenProjects}
+        onReorderOpenProjects={reorderOpenProjects}
+        onPinProject={(key) => void pinProjectViaDrag(key)}
         onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
         onRefresh={() => sessionsQuery.refetch()}
         onConfigurePath={() => setActiveView("settings")}
@@ -1041,16 +2502,25 @@ function App() {
       <section className="workspace">
         <header className="workspace-header">
             <div>
-              <h2 className="workspace-title">
-                {activeView === "dashboard"
-                  ? t("tabs.dashboard")
-                  : activeView === "settings"
-                    ? t("settings.title")
-                    : activeProject?.title ?? ""}
-              </h2>
+              <div className="workspace-title-row">
+                <h2 className="workspace-title">
+                  {activeView === "dashboard"
+                    ? t("tabs.dashboard")
+                    : activeView === "agents-global"
+                      ? t("agents.nav")
+                    : activeView === "settings"
+                      ? t("settings.title")
+                      : activeProject?.title ?? ""}
+                </h2>
+                {activeView !== "dashboard" && activeView !== "agents-global" && activeView !== "settings" && activeProject?.branchLabel ? (
+                  <span className="project-branch-badge">{activeProject.branchLabel}</span>
+                ) : null}
+              </div>
               <p className="workspace-subtitle">
                 {activeView === "dashboard"
                   ? t("dashboard.subtitle")
+                  : activeView === "agents-global"
+                    ? t("agents.globalSubtitle")
                   : activeView === "settings"
                     ? t("settings.subtitle")
                     : activeProject?.pathLabel ?? ""}
@@ -1058,53 +2528,6 @@ function App() {
             </div>
           </header>
 
-        {activeView !== "settings" ? (
-          <section className="tabbar">
-            <button
-              type="button"
-              className={`tab-item ${activeView === "dashboard" ? "active" : ""}`}
-              onClick={() => setActiveView("dashboard")}
-            >
-              {t("tabs.dashboard")}
-            </button>
-
-            {[
-              ...openProjectKeys.filter((k) => pinnedProjects.includes(k)),
-              ...openProjectKeys.filter((k) => !pinnedProjects.includes(k)),
-            ].map((projectKey) => {
-              const project = groupedProjects.find((p) => p.key === projectKey);
-              if (!project) return null;
-                const isPinned = pinnedProjects.includes(projectKey);
-                return (
-                  <div
-                    key={project.key}
-                    className={`tab-item tab-item-project ${isPinned ? "tab-item--pinned" : ""} ${activeView === project.key ? "active" : ""}`}
-                  >
-                  <button
-                    type="button"
-                    className="tab-label"
-                    onClick={() => setActiveView(project.key)}
-                  >
-                    {isPinned ? (
-                      <span className="tab-pin-indicator">
-                        <PinIcon size={11} />
-                      </span>
-                    ) : null}
-                    {project.title}
-                  </button>
-                  <button
-                    type="button"
-                    className="tab-close"
-                    onClick={() => closeProjectTab(project.key)}
-                    aria-label={`${t("tabs.close")} ${project.title}`}
-                  >
-                    ×
-                  </button>
-                  </div>
-              );
-            })}
-          </section>
-        ) : null}
 
         <div className="workspace-content">
           {activeView === "dashboard" ? (
@@ -1113,8 +2536,8 @@ function App() {
               sessionsIsFetching={sessionsQuery.isFetching}
               sessionsIsError={sessionsQuery.isError}
               sessionsError={sessionsQuery.error}
-              groupedProjects={groupedProjects}
-              recentSessions={recentSessions}
+              groupedProjects={filteredDashboardProjects}
+              recentSessions={filteredRecentSessions}
               dashboardPeriod={dashboardPeriod}
               onPeriodChange={setDashboardPeriod}
               filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
@@ -1125,12 +2548,22 @@ function App() {
                 openProjectTab(getProjectKey(session, uncategorizedLabel))
               }
               activityStatusMap={activityStatusMap}
-              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onResumeSession={(session) => void handleResumeSession(session)}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
-              defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
-              toolAvailability={toolAvailabilityQuery.data ?? null}
               viewMode={dashboardViewMode}
               onViewModeChange={setDashboardViewMode}
+              analyticsData={dashboardAnalyticsData}
+              analyticsError={dashboardAnalyticsError}
+              analyticsLoading={dashboardAnalyticsLoading}
+              analyticsRefreshing={dashboardAnalyticsRefreshing}
+              analyticsProjectSlices={dashboardProjectSlices}
+              analyticsCollapsed={settingsForm.analyticsPanelCollapsed ?? false}
+              onAnalyticsRetry={() => void fetchDashboardAnalytics()}
+              onAnalyticsToggleCollapsed={() => void handleToggleAnalyticsPanel()}
+              quotaSnapshots={quotaSnapshotQuery.data ?? []}
+              enableQuotaMonitoring={settingsForm.enableQuotaMonitoring ?? true}
+              quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
+              onRefreshQuota={handleRefreshQuota}
             />
           ) : null}
 
@@ -1139,16 +2572,21 @@ function App() {
               settingsForm={settingsForm}
               onFormChange={setSettingsForm}
               onSave={() => void handleSaveSettings()}
-              onBrowseDirectory={(field) => void handleBrowseDirectory(field)}
-              onBrowseFile={(field) => void handleBrowseFile(field)}
+              onBrowseDirectory={handleBrowseDirectory}
+              onBrowseFile={handleBrowseFile}
               onDetectTerminal={() => detectTerminalMutation.mutate()}
               onDetectVscode={() => detectVscodeMutation.mutate()}
               onProviderAction={handleProviderAction}
               onOpenProviderPath={(integration) => void handleOpenProviderPath(integration)}
               onEditProviderPath={(integration) => void handleEditProviderPath(integration)}
               pendingProviderAction={pendingProviderAction}
+              onOpenEventMonitor={() => setShowEventMonitor(true)}
+              jqAvailable={jqAvailableQuery.data ?? null}
+              onRefreshQuota={handleRefreshQuota}
             />
           ) : null}
+
+          {activeView === "agents-global" ? globalAgentsView : null}
 
           {activeProject ? (
             <ProjectView
@@ -1158,10 +2596,10 @@ function App() {
               onHideEmptySessionsChange={setHideEmptySessions}
               totalEmptySessions={deletableEmptySessionCount}
               onToggleArchived={(v) => void handleToggleArchived(v)}
-              onOpenTerminal={(s) => void handleOpenTerminal(s)}
               onCopyCommand={(s) => void handleCopyCommand(s)}
               onEditNotes={handleEditNotes}
               onEditTags={handleEditTags}
+              onEditTag={handleEditSingleTag}
               onOpenPlan={handleOpenPlan}
               onArchive={handleArchiveSession}
               onUnarchive={handleUnarchiveSession}
@@ -1171,12 +2609,72 @@ function App() {
               onTogglePin={() => void togglePinProject(activeProject.key)}
               sessionStats={sessionStatsMap}
               sessionStatsLoading={sessionStatsLoadingMap}
+              sessionTodos={sessionTodosMap}
+              sessionTodosLoading={sessionTodosLoadingMap}
               sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecQuery.data}
+              agentsMdData={projectAgentsMdQuery.data}
+              skillsData={projectAgentsSkillsQuery.data}
+              commandsData={projectAgentsCommandsQuery.data}
+              projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
+              plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
+              agentsMdLoading={projectAgentsMdQuery.isLoading}
+              skillsLoading={projectAgentsSkillsQuery.isLoading}
+              commandsLoading={projectAgentsCommandsQuery.isLoading}
+              agentsPrefsLoading={projectAgentsPrefsQuery.isLoading}
               onReadFileContent={handleReadFileContent}
               onReadOpenspecFile={handleReadOpenspecFile}
+              onWriteOpenspecFile={handleWriteOpenspecFile}
+              onWriteAgentsFile={handleWriteProjectAgentsFile}
+              onRefreshPlansSpecs={handleRefreshPlansSpecs}
+              onRefreshAgentsMd={handleRefreshProjectAgents}
+              onRefreshAgentsSkills={handleRefreshProjectAgents}
+              onRefreshAgentsCommands={handleRefreshProjectAgents}
+              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              onOpenAgentsExternal={(path) => {
+                openPath(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onRevealAgentsPath={(path) => {
+                revealItemInDir(path).catch((error) => {
+                  showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+                });
+              }}
+              onPreviewAgentsSync={handlePreviewAgentsSync}
+              onApplyAgentsSync={handleApplyAgentsSync}
+              onUpdateProjectAgentsPrefs={handleUpdateProjectAgentsPrefs}
+              mcpProviders={projectMcpConfigsQuery.data ?? []}
+              mcpLoading={projectMcpConfigsQuery.isLoading}
+              onRefreshMcp={async () => { await projectMcpConfigsQuery.refetch(); }}
+              onUpsertMcpServer={(provider, name, originalName, configJson) =>
+                upsertMcpServerMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                  originalName,
+                  configJson,
+                })
+              }
+              onDeleteMcpServer={(provider, name) =>
+                deleteMcpServerMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                })
+              }
+              onSetMcpServerEnabled={(provider, name, enabled) =>
+                setMcpServerEnabledMutation.mutateAsync({
+                  scope: { kind: "project", projectCwd: activeProject.pathLabel },
+                  provider,
+                  name,
+                  enabled,
+                })
+              }
+              codexTrusted={codexProjectTrustQuery.data ?? false}
+              globalAgentsData={globalAgentsData}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}
               planDraft={planDraft}
@@ -1184,17 +2682,37 @@ function App() {
               onPlanDraftChange={setPlanDraft}
               onSavePlan={handleSavePlan}
               onOpenPlanExternal={(s) => void handleOpenPlanExternal(s)}
-              openPlanKeys={getProjectSubTabState(activeProject.key).openPlanKeys}
+              openDetailKeys={getProjectSubTabState(activeProject.key).openDetailKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
+              onFetchAnalytics={(cwd, startDate, endDate, groupBy) =>
+                fetchAnalyticsData(cwd, startDate, endDate, groupBy)
+              }
               activityStatusMap={activityStatusMap}
-              onOpenInTool={(session, tool) => void handleOpenInTool(session, tool)}
+              onResumeSession={(session) => void handleResumeSession(session)}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
+              onOpenProjectInTool={(project, tool) => void handleOpenProjectInTool(project, tool)}
               defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
               toolAvailability={toolAvailabilityQuery.data ?? null}
             />
           ) : null}
         </div>
+
+        {(settingsForm.showStatusBar ?? true) ? (
+          <StatusBar
+            lastBridgeEvent={lastBridgeEvent}
+            onOpenEventMonitor={() => setShowEventMonitor(true)}
+            activeSessions={activeSessions}
+            waitingSessions={waitingSessions}
+            idleSessions={idleSessions}
+            doneSessions={doneSessions}
+            isLoadingSessions={sessionsQuery.isLoading}
+            providerQuotas={providerQuotaQuery.data ?? []}
+            quotaSnapshots={quotaSnapshotQuery.data ?? []}
+            quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
+            onRefreshQuota={handleRefreshQuota}
+          />
+        ) : null}
       </section>
 
       {confirmDialog ? (
@@ -1203,6 +2721,7 @@ function App() {
 
       {editDialog ? (
         <EditDialog
+          key={editDialog.key ?? editDialog.title}
           dialog={editDialog}
           onCancel={() => setEditDialog(null)}
           onConfirm={(value) => {
@@ -1212,9 +2731,38 @@ function App() {
         />
       ) : null}
 
+      {showEventMonitor ? (
+        <BridgeEventMonitorDialog
+          events={bridgeEventLog}
+          onClose={() => setShowEventMonitor(false)}
+          onClear={() => setBridgeEventLog([])}
+        />
+      ) : null}
+
+      {syncConflictDialog ? (
+        <SyncConflictDialog
+          conflicts={syncConflictDialog.conflicts}
+          canRememberChoice={syncConflictDialog.canRememberChoice}
+          onResolve={syncConflictDialog.onResolve}
+          onCancel={() => setSyncConflictDialog(null)}
+        />
+      ) : null}
+
       {toastMessage ? <div className="toast-banner">{toastMessage}</div> : null}
     </main>
   );
 }
 
-export default App;
+function RoutedApp() {
+  if (EMBEDDED_VIEW === "quota-overlay") {
+    return <EmbeddedQuotaOverlayApp />;
+  }
+
+  if (EMBEDDED_VIEW === "tray-panel") {
+    return <EmbeddedTrayPanelApp />;
+  }
+
+  return <App />;
+}
+
+export default RoutedApp;

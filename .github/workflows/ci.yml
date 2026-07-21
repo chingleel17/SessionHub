@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: Build & Test (Windows)
@@ -13,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # ── Rust ────────────────────────────────────────────────────────────────
       - name: Setup Rust (stable)
@@ -31,10 +34,53 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # ── Checks ──────────────────────────────────────────────────────────────
+       # ── Checks ──────────────────────────────────────────────────────────────
+      - name: Frontend lint
+        run: bun run lint
+
       - name: TypeScript type-check & frontend build
         run: bun run build
 
       - name: Rust unit tests
         working-directory: src-tauri
         run: cargo test
+
+      - name: Rust format report
+        working-directory: src-tauri
+        run: cargo fmt -- --check
+        continue-on-error: true
+
+      - name: Rust Clippy report
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features
+        continue-on-error: true
+
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository history
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

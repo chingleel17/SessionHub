@@ -2,8 +2,8 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, SetForegroundWindow,
-    ShowWindow, SW_RESTORE,
+    EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, SetForegroundWindow, ShowWindow,
+    SW_RESTORE,
 };
 
 pub struct FocusState {
@@ -29,8 +29,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         .to_string_lossy()
         .to_lowercase();
 
-    let is_terminal =
-        class.contains("windowsterminal") || class.contains("pseudoconsolewindow");
+    let is_terminal = class.contains("windowsterminal") || class.contains("pseudoconsolewindow");
 
     let target_lower = state.target.to_lowercase();
     if is_terminal && title.contains(&target_lower) {
@@ -48,7 +47,10 @@ pub fn focus_window_by_title(title_hint: &str) -> Result<(), String> {
         found: std::ptr::null_mut(),
     };
     unsafe {
-        EnumWindows(Some(enum_proc), &mut state as *mut FocusState as usize as LPARAM);
+        EnumWindows(
+            Some(enum_proc),
+            &mut state as *mut FocusState as usize as LPARAM,
+        );
         if !state.found.is_null() {
             ShowWindow(state.found, SW_RESTORE);
             SetForegroundWindow(state.found);

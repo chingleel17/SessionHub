@@ -2,12 +2,34 @@
 
 ### Requirement: Provider integration 安裝與狀態管理
 
-系統 SHALL 能檢測 Copilot 與 OpenCode 的 bridge integration 狀態，並允許使用者由 SessionHub 自動安裝、更新或重新安裝整合檔案；系統 SHALL 同時追蹤已安裝插件的版本號，並在版本落差時提示使用者更新。
+系統 SHALL 能檢測 Copilot、OpenCode、Codex 與 Claude 的 bridge integration 狀態，並允許使用者由 SessionHub 自動安裝、更新或重新安裝整合檔案；系統 SHALL 同時追蹤已安裝 integration 的版本號，並在版本落差時提示使用者更新。
+
+安裝 Codex 或 Copilot integration 時，系統 SHALL 同時確保對應的 hook 腳本已安裝至 bundled 路徑，並在 hook 設定中以腳本路徑取代內嵌命令字串。
 
 #### Scenario: 安裝 OpenCode integration
 
 - **WHEN** 使用者在設定頁對 OpenCode 點擊「安裝整合」
 - **THEN** 系統建立或更新 OpenCode plugin 檔案到偵測到的 plugin 設定位置
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Codex integration
+
+- **WHEN** 使用者在設定頁對 Codex 點擊「安裝整合」
+- **THEN** 系統先確保 Codex hook 腳本已安裝至 bundled 路徑
+- **AND** 系統建立或更新 `~/.codex/hooks.json`，hook command 引用腳本路徑
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Copilot integration
+
+- **WHEN** 使用者在設定頁對 Copilot CLI 點擊「安裝整合」
+- **THEN** 系統先確保 Copilot hook 腳本已安裝至 bundled 路徑
+- **AND** 系統建立或更新 `~/.copilot/settings.json`，hook command 引用腳本路徑（Windows 用 `.ps1`，Unix 用 `.sh`）
+- **AND** 狀態更新為 `installed` 或顯示具體錯誤
+
+#### Scenario: 安裝 Claude integration
+
+- **WHEN** 使用者在設定頁對 Claude 點擊「安裝整合」
+- **THEN** 系統讀取並 merge 更新 `~/.claude/settings.json` 的 `hooks.Stop` 陣列
 - **AND** 狀態更新為 `installed` 或顯示具體錯誤
 
 #### Scenario: provider 路徑不可寫入
@@ -43,3 +65,68 @@
 - **WHEN** Copilot hook 發出 session 結束事件
 - **THEN** SessionHub 接收的 bridge record 包含 provider=`copilot`
 - **AND** 系統可依該事件重新驗證並更新對應 session 清單
+
+#### Scenario: Codex hook 發送 session 更新
+
+- **WHEN** Codex hook 發出 session 更新或等效事件
+- **THEN** SessionHub 接收的 bridge record 包含 provider=`codex`
+- **AND** 系統可依該事件重新驗證並更新對應 session 清單
+
+### Requirement: Hook 命令以 Node 主軌、sh fallback 產生
+
+各 provider（claude / codex / copilot）的整合安裝流程 SHALL 產生以 `node <script.js>` 為主軌、sh 腳本為 fallback 的 hook 命令；SHALL NOT 再產生 PowerShell 命令或 `powershell` / `commandWindows` 欄位。Rust 端 `render_*_hook_command` 系列函式 SHALL 改為輸出 node 主軌命令，並移除 PowerShell 命令產生分支。
+
+#### Scenario: Copilot 安裝產生 node 主軌命令
+
+- **WHEN** 使用者安裝或更新 Copilot 整合
+- **THEN** Copilot 設定檔中各 hook 事件的主命令為 `node <script.js> --bridge-path ... --provider copilot`
+- **AND** 設定檔不含 `powershell` 欄位
+
+#### Scenario: 設定檔保留 sh fallback 命令
+
+- **WHEN** 任一 provider 安裝或更新整合
+- **THEN** 設定檔中各 hook 事件保留指向 `.sh` 腳本的 fallback 命令欄位
+
+#### Scenario: 移除 PowerShell 命令產生
+
+- **WHEN** 檢視 `render_*_hook_command` 系列函式的輸出
+- **THEN** 不再產生任何 PowerShell 指令字串，亦不寫出 `.ps1` 腳本至 provider 目錄
+
+### Requirement: Node hook 主軌相依與退路
+
+主軌 hook 命令 SHALL 依賴執行環境的 Node.js；當 Node.js 不可用時，整合機制 SHALL 透過設定檔的 sh fallback 欄位提供退路，避免 hook 完全失效。
+
+#### Scenario: 無 node 時退回 sh fallback
+
+- **WHEN** provider 執行 hook 主軌 `node <script.js>` 但環境無 node
+- **THEN** provider 依設定檔的 fallback 欄位改以 sh 腳本執行 hook（依各 provider hook schema 的雙欄機制）
+
+### Requirement: Provider integration 腳本分離管理
+
+系統 SHALL 以 provider-specific 的腳本或模板資產管理 Copilot、OpenCode 與 Codex 的 integration 內容，不得將三個 provider 的 hook / plugin 內容混寫在同一份受管理產物中。
+
+#### Scenario: 管理 Copilot integration 內容
+- **WHEN** 系統安裝或更新 Copilot integration
+- **THEN** 系統僅寫入與 Copilot 相關的 hook 內容
+- **AND** 不影響 OpenCode 或 Codex 的受管理腳本資產
+
+#### Scenario: 管理 Codex integration 內容
+- **WHEN** 系統安裝或更新 Codex integration
+- **THEN** 系統僅寫入與 Codex 相關的 hook 內容
+- **AND** 不重用混雜其他 provider 事件映射的模板內容
+
+### Requirement: Provider integration 顯示 quota 診斷資訊
+
+系統 SHALL 在 provider integration 管理區塊中顯示與 quota monitoring 相關的診斷資訊，例如 quota source、auth 狀態、最後刷新結果與手動刷新入口。
+
+#### Scenario: 顯示 quota source 與狀態
+
+- **WHEN** 使用者開啟設定頁的 provider integration 區塊
+- **THEN** 系統可顯示該 provider quota 的資料來源與目前狀態
+- **AND** 不要求使用者離開 SessionHub 才能查看 quota 診斷
+
+#### Scenario: 手動刷新 provider quota
+
+- **WHEN** 使用者在 provider integration 卡片點擊 quota refresh
+- **THEN** 系統重新查詢該 provider 或相關 quota provider 的 snapshot
+- **AND** 更新畫面中的最後刷新時間與錯誤訊息

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::Datelike;
 use rusqlite::{params, Connection};
 
 use crate::settings::{legacy_session_cache_path, metadata_db_path};
@@ -23,20 +24,28 @@ pub(crate) fn open_db_connection() -> Result<Connection, String> {
     Connection::open(db_path).map_err(|error| format!("failed to open metadata db: {error}"))
 }
 
-/// 全域旗標：DB schema 是否已初始化過（`init_db` 只需執行一次）
-static DB_SCHEMA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+pub(crate) struct DbState {
+    pub(crate) conn: Mutex<Connection>,
+}
 
-/// 開啟 DB 連線，並在第一次呼叫時執行 `init_db` 初始化 schema。
-pub(crate) fn open_db_connection_and_init() -> Result<Connection, String> {
-    let conn = open_db_connection()?;
-    if !DB_SCHEMA_INITIALIZED.load(Ordering::Acquire) {
+impl DbState {
+    pub(crate) fn new() -> Result<Self, String> {
+        let db_path = metadata_db_path()?;
+        ensure_parent_dir(&db_path)?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("failed to open metadata db: {e}"))?;
         init_db(&conn)?;
-        DB_SCHEMA_INITIALIZED.store(true, Ordering::Release);
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
-    Ok(conn)
 }
 
 pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL;")
+        .map_err(|e| format!("failed to set WAL mode: {e}"))?;
+
     connection
         .execute(
             "
@@ -78,6 +87,9 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
                 session_id TEXT NOT NULL,
                 provider TEXT NOT NULL DEFAULT 'copilot',
                 cwd TEXT,
+                repo_root TEXT,
+                repo_name TEXT,
+                git_branch TEXT,
                 summary TEXT,
                 summary_count INTEGER,
                 created_at TEXT,
@@ -142,10 +154,254 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
         }
     }
 
+    for (column_name, sql_type) in [
+        ("repo_root", "TEXT"),
+        ("repo_name", "TEXT"),
+        ("git_branch", "TEXT"),
+    ] {
+        if let Err(error) = connection.execute(
+            &format!("ALTER TABLE sessions_cache ADD COLUMN {column_name} {sql_type}"),
+            [],
+        ) {
+            let error_message = error.to_string();
+            if !error_message.contains("duplicate column name") {
+                eprintln!("Warning: failed to add {column_name} column: {error}");
+            }
+        }
+    }
+
+    // provider_quota: 各 provider 每個帳單週期的累計用量
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS provider_quota (
+                provider TEXT NOT NULL,
+                billing_period TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0.0,
+                PRIMARY KEY (provider, billing_period)
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize provider_quota table: {error}"))?;
+
+    // provider_quota_settings: 各 provider 的方案上限設定
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS provider_quota_settings (
+                provider TEXT NOT NULL PRIMARY KEY,
+                monthly_limit_tokens INTEGER,
+                monthly_limit_usd REAL,
+                reset_day INTEGER NOT NULL DEFAULT 1
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize provider_quota_settings table: {error}"))?;
+
+    // quota_snapshots: 從訂閱服務查回的剩餘額度快照
+    connection
+        .execute(
+            "
+            CREATE TABLE IF NOT EXISTS quota_snapshots (
+                provider TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize quota_snapshots table: {error}"))?;
+
     if let Err(error) = migrate_legacy_session_cache(connection) {
         eprintln!("Warning: failed to migrate legacy session cache: {error}");
     }
 
+    Ok(())
+}
+
+pub(crate) fn load_quota_snapshots_from_db(
+    connection: &Connection,
+) -> Result<Vec<crate::types::QuotaSnapshot>, String> {
+    let mut statement = connection
+        .prepare("SELECT snapshot_json FROM quota_snapshots")
+        .map_err(|e| format!("failed to prepare quota_snapshots query: {e}"))?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("failed to query quota_snapshots: {e}"))?;
+
+    let mut snapshots = Vec::new();
+    for row_result in rows {
+        let json = row_result.map_err(|e| format!("failed to read quota_snapshots row: {e}"))?;
+        if let Ok(snapshot) = serde_json::from_str::<crate::types::QuotaSnapshot>(&json) {
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
+}
+
+pub(crate) fn save_quota_snapshot_to_db(
+    connection: &Connection,
+    snapshot: &crate::types::QuotaSnapshot,
+) -> Result<(), String> {
+    let json = serde_json::to_string(snapshot)
+        .map_err(|e| format!("failed to serialize quota snapshot: {e}"))?;
+    connection
+        .execute(
+            "INSERT INTO quota_snapshots (provider, snapshot_json, fetched_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(provider) DO UPDATE SET snapshot_json = excluded.snapshot_json, fetched_at = excluded.fetched_at",
+            params![snapshot.provider, json, snapshot.fetched_at],
+        )
+        .map_err(|e| format!("failed to save quota snapshot: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn delete_quota_snapshots_for_provider(
+    connection: &Connection,
+    provider: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM quota_snapshots WHERE provider = ?1",
+            params![provider],
+        )
+        .map_err(|e| format!("failed to delete quota snapshot: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn billing_period_for(reset_day: u8, now: &chrono::NaiveDate) -> String {
+    let day = reset_day.max(1).min(28) as u32;
+    if now.day() >= day {
+        format!("{}-{:02}", now.format("%Y-%m"), day)
+    } else {
+        let prev = if now.month() == 1 {
+            chrono::NaiveDate::from_ymd_opt(now.year() - 1, 12, day).unwrap_or(*now)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(now.year(), now.month() - 1, day).unwrap_or(*now)
+        };
+        format!("{}-{:02}", prev.format("%Y-%m"), day)
+    }
+}
+
+pub(crate) fn next_reset_date_for(reset_day: u8, now: &chrono::NaiveDate) -> String {
+    let day = reset_day.max(1).min(28) as u32;
+    if now.day() < day {
+        chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), day)
+            .map(|d| d.to_string())
+            .unwrap_or_default()
+    } else {
+        let (year, month) = if now.month() == 12 {
+            (now.year() + 1, 1)
+        } else {
+            (now.year(), now.month() + 1)
+        };
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .map(|d| d.to_string())
+            .unwrap_or_default()
+    }
+}
+
+pub(crate) fn upsert_provider_quota(
+    connection: &Connection,
+    provider: &str,
+    billing_period: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    cost_usd: f64,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO provider_quota (provider, billing_period, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(provider, billing_period) DO UPDATE SET
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cache_creation_tokens = excluded.cache_creation_tokens,
+                cache_read_tokens = excluded.cache_read_tokens,
+                cost_usd = excluded.cost_usd
+            ",
+            rusqlite::params![provider, billing_period, input_tokens as i64, output_tokens as i64, cache_creation_tokens as i64, cache_read_tokens as i64, cost_usd],
+        )
+        .map_err(|e| format!("failed to upsert provider quota: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn get_provider_quota_from_db(
+    connection: &Connection,
+    provider: &str,
+    billing_period: &str,
+) -> Result<Option<(u64, u64, u64, u64, f64)>, String> {
+    let mut stmt = connection
+        .prepare("SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd FROM provider_quota WHERE provider = ?1 AND billing_period = ?2")
+        .map_err(|e| format!("failed to prepare quota query: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params![provider, billing_period])
+        .map_err(|e| format!("failed to query provider quota: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("failed to read quota row: {e}"))?
+    {
+        Ok(Some((
+            row.get::<_, i64>(0).unwrap_or(0) as u64,
+            row.get::<_, i64>(1).unwrap_or(0) as u64,
+            row.get::<_, i64>(2).unwrap_or(0) as u64,
+            row.get::<_, i64>(3).unwrap_or(0) as u64,
+            row.get::<_, f64>(4).unwrap_or(0.0),
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn get_provider_quota_settings_from_db(
+    connection: &Connection,
+    provider: &str,
+) -> Result<(Option<u64>, Option<f64>, u8), String> {
+    let mut stmt = connection
+        .prepare("SELECT monthly_limit_tokens, monthly_limit_usd, reset_day FROM provider_quota_settings WHERE provider = ?1")
+        .map_err(|e| format!("failed to prepare quota settings query: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params![provider])
+        .map_err(|e| format!("failed to query provider quota settings: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("failed to read quota settings row: {e}"))?
+    {
+        let limit_tokens: Option<i64> = row.get(0).ok();
+        let limit_usd: Option<f64> = row.get(1).ok();
+        let reset_day: i64 = row.get(2).unwrap_or(1);
+        Ok((
+            limit_tokens.map(|v| v as u64),
+            limit_usd,
+            (reset_day.max(1).min(28)) as u8,
+        ))
+    } else {
+        Ok((None, None, 1))
+    }
+}
+
+pub(crate) fn set_provider_quota_settings_in_db(
+    connection: &Connection,
+    provider: &str,
+    monthly_limit_tokens: Option<u64>,
+    monthly_limit_usd: Option<f64>,
+    reset_day: u8,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO provider_quota_settings (provider, monthly_limit_tokens, monthly_limit_usd, reset_day) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(provider) DO UPDATE SET monthly_limit_tokens=excluded.monthly_limit_tokens, monthly_limit_usd=excluded.monthly_limit_usd, reset_day=excluded.reset_day",
+            rusqlite::params![provider, monthly_limit_tokens.map(|v| v as i64), monthly_limit_usd, reset_day as i64],
+        )
+        .map_err(|e| format!("failed to set provider quota settings: {e}"))?;
     Ok(())
 }
 
@@ -183,6 +439,9 @@ pub(crate) fn load_sessions_cache_from_db(
         session_id: String,
         provider: String,
         cwd: Option<String>,
+        repo_root: Option<String>,
+        repo_name: Option<String>,
+        git_branch: Option<String>,
         summary: Option<String>,
         summary_count: Option<u32>,
         created_at: Option<String>,
@@ -196,12 +455,12 @@ pub(crate) fn load_sessions_cache_from_db(
 
     let mut sessions = Vec::new();
     let query = if provider.is_some() {
-        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+        "SELECT session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at, \
                 session_dir, parse_error, is_archived, has_plan, has_events \
          FROM sessions_cache \
          WHERE provider = ?1"
     } else {
-        "SELECT session_id, provider, cwd, summary, summary_count, created_at, updated_at, \
+        "SELECT session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at, \
                 session_dir, parse_error, is_archived, has_plan, has_events \
          FROM sessions_cache"
     };
@@ -218,15 +477,18 @@ pub(crate) fn load_sessions_cache_from_db(
                     session_id: row.get(0)?,
                     provider: row.get(1)?,
                     cwd: row.get(2)?,
-                    summary: row.get(3)?,
-                    summary_count: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    session_dir: row.get(7)?,
-                    parse_error: row.get(8)?,
-                    is_archived: row.get(9)?,
-                    has_plan: row.get(10)?,
-                    has_events: row.get(11)?,
+                    repo_root: row.get(3)?,
+                    repo_name: row.get(4)?,
+                    git_branch: row.get(5)?,
+                    summary: row.get(6)?,
+                    summary_count: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    session_dir: row.get(10)?,
+                    parse_error: row.get(11)?,
+                    is_archived: row.get(12)?,
+                    has_plan: row.get(13)?,
+                    has_events: row.get(14)?,
                 })
             })
             .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
@@ -243,15 +505,18 @@ pub(crate) fn load_sessions_cache_from_db(
                     session_id: row.get(0)?,
                     provider: row.get(1)?,
                     cwd: row.get(2)?,
-                    summary: row.get(3)?,
-                    summary_count: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    session_dir: row.get(7)?,
-                    parse_error: row.get(8)?,
-                    is_archived: row.get(9)?,
-                    has_plan: row.get(10)?,
-                    has_events: row.get(11)?,
+                    repo_root: row.get(3)?,
+                    repo_name: row.get(4)?,
+                    git_branch: row.get(5)?,
+                    summary: row.get(6)?,
+                    summary_count: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    session_dir: row.get(10)?,
+                    parse_error: row.get(11)?,
+                    is_archived: row.get(12)?,
+                    has_plan: row.get(13)?,
+                    has_events: row.get(14)?,
                 })
             })
             .map_err(|error| format!("failed to query sessions_cache: {error}"))?;
@@ -273,6 +538,9 @@ pub(crate) fn load_sessions_cache_from_db(
             id: row.session_id,
             provider: row.provider,
             cwd: row.cwd,
+            repo_root: row.repo_root,
+            repo_name: row.repo_name,
+            git_branch: row.git_branch,
             summary: row.summary,
             summary_count: row.summary_count,
             created_at: row.created_at,
@@ -305,10 +573,10 @@ pub(crate) fn save_sessions_cache_to_db(
         .prepare(
             "
             INSERT INTO sessions_cache (
-                session_id, provider, cwd, summary, summary_count, created_at, updated_at,
+                session_id, provider, cwd, repo_root, repo_name, git_branch, summary, summary_count, created_at, updated_at,
                 session_dir, parse_error, is_archived, has_plan, has_events
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ",
         )
         .map_err(|error| format!("failed to prepare sessions_cache insert: {error}"))?;
@@ -322,6 +590,9 @@ pub(crate) fn save_sessions_cache_to_db(
                 session.id,
                 session.provider,
                 session.cwd,
+                session.repo_root,
+                session.repo_name,
+                session.git_branch,
                 session.summary,
                 session.summary_count,
                 session.created_at,

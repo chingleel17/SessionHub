@@ -1,40 +1,35 @@
 schema: spec-driven
 
 context: |
-  App: SessionHub — Windows 桌面應用程式，管理 GitHub Copilot CLI 與 OpenCode 的 AI coding sessions
+  App: SessionHub — Windows 桌面應用程式，統一管理多家 AI coding CLI/IDE 的 sessions、用量配額與 hook 整合
+  （目前支援 providers：copilot、opencode、codex、claude、antigravity；完整清單見 `types.rs` 的 `*_PROVIDER` 常數）
   Tech stack: React 19 + TypeScript + Vite (frontend) · Rust + Tauri 2 (backend) · SQLite (rusqlite)
 
-  ## Architecture
-  - All Tauri IPC calls are centralized in `src/App.tsx` (no invoke() in child components)
-  - Child components are pure display components driven by props
-  - `src-tauri/src/lib.rs` is the single Rust backend file (~1700 lines)
-  - SQLite `metadata.db` stores: session_meta (notes/tags), session_stats (stats cache), session_cache (startup cache)
-  - ScanCache is in-memory in AppState: Copilot uses mtime diff, OpenCode uses cursor-based scan
+  ## Architecture（模組概觀，細節以原始碼為準）
+  - 前端：所有 Tauri IPC 呼叫集中在 `src/App.tsx`（子元件不得直接 invoke()）；子元件為純顯示元件，由 props 驅動
+  - 後端 `src-tauri/src/` 已模組化：
+    - `sessions/` — 各 provider 的 session 掃描（每個 provider 一個檔案 + `git.rs` 補強）
+    - `quota/` — 各 provider 的 QuotaAdapter 與快取
+    - `provider/` — hook/整合的安裝、偵測、解除安裝
+    - `commands/` — Tauri command 入口（依領域分檔）
+    - `types.rs` / `settings.rs` — 共用型別（如 AppSettings、SessionInfo）與設定解析
+    - `lib.rs` — 組裝與 AppState（非唯一後端檔案）
+  - SQLite `metadata.db`（`db.rs`）：session 中繼資料、stats 快取、session 列表快取、增量掃描狀態
+  - 新增 provider 時的慣例：sessions/quota/provider 各加一個 `<provider>.rs`，並在各自 `mod.rs` 與泛用分派函式註冊分支
+  - 型別欄位（AppSettings、SessionInfo、SessionStats 等）會隨功能演進，propose/design 前先讀 `types.rs` 確認現況，勿依賴本檔記憶
 
-  ## Key Rust Types
-  - SessionInfo: { id, provider, cwd, summary, summary_count, created_at, updated_at, session_dir, parse_error, is_archived, notes, tags, has_plan, has_events }
-  - AppSettings: { copilot_root, opencode_root, terminal_path, external_editor_path, show_archived, pinned_projects, enabled_providers, provider_integrations }
-  - SessionStats: { output_tokens, input_tokens, interaction_count, tool_call_count, duration_minutes, models_used, reasoning_count, tool_breakdown, is_live }
-  - ScanCache: { copilot: Mutex<Option<ProviderCache>>, opencode: Mutex<Option<ProviderCache>> }
+  ## Conventions（穩定慣例）
+  - Rust structs 使用 #[serde(rename_all = "camelCase")] → TypeScript 端為 camelCase
+  - 所有 Rust command 回傳 Result<T, String>；前端 catch 後呼叫 showToast
+  - CSS：plain BEM-like class names（不用 Tailwind/CSS Modules）；視覺樣式遵循 sessionhub-minimal-ui skill 的設計 token
+  - 翻譯：所有文案透過 t("key")，JSX 中不得硬編中文
+  - activeView routing: "dashboard" | "settings" | {projectKey}；plan 編輯器是 ProjectView 內的 sub-tab
 
-  ## Conventions
-  - Rust structs use #[serde(rename_all = "camelCase")] → TypeScript uses camelCase
-  - All Rust commands return Result<T, String>; frontend catches and calls showToast
-  - CSS: plain BEM-like class names (no Tailwind/CSS Modules)
-  - Translations: all text via t("key"), no hardcoded Chinese in JSX
-  - activeView routing: "dashboard" | "settings" | {projectKey}; plan editors are sub-tabs inside ProjectView
-
-  ## Provider Data Sources
-  - Copilot sessions: ~/.copilot/session-state/<session-id>/workspace.yaml
-  - OpenCode sessions: <opencodeRoot>/session/<projectID>/ses_*.json
-  - OpenCode stats: <opencodeRoot>/message/<sessionID>/msg_*.json + part/<messageID>/prt_*.json
+  ## Provider Data Sources（各 provider 的資料來源根目錄可於設定覆寫）
+  - Copilot: ~/.copilot/session-state/ · OpenCode: <root>/session|message|part/ · Claude: ~/.claude/
+  - Antigravity: ~/.gemini/（brain roots + agyhub_summaries_proto.pb；quota 走本機 language_server RPC）
   - App data: %APPDATA%\SessionHub\ (settings.json, metadata.db)
-
-  ## Session Stats Cache (SQLite)
-  - session_stats table: keyed by session_id, invalidated by events.jsonl mtime (Copilot) or message mtime (OpenCode)
-  - sessions_cache table: session list cache replacing session_cache.json
-  - scan_state table: per-provider last_full_scan_at, last_cursor
-  - session_mtimes table: per-session mtime for incremental scan
+  - 精確路徑與解析格式以 `sessions/<provider>.rs` 為準
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

@@ -42,8 +42,7 @@ pub(crate) fn send_intervention_notification(
     session_id: String,
     project_name: String,
     summary: String,
-    #[allow(dead_code)]
-    notification_type: Option<String>,
+    #[allow(dead_code)] notification_type: Option<String>,
 ) -> Result<(), String> {
     let ntype = notification_type.as_deref().unwrap_or("waiting");
     send_intervention_notification_internal(&app, &session_id, &project_name, &summary, ntype)
