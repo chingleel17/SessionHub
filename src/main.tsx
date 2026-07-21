@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import App from "./App";
+import RoutedApp from "./app/RoutedApp";
 import "./App.css";
 import { I18nProvider } from "./i18n/I18nProvider";
 import { ThemeProvider } from "./theme/ThemeProvider";
@@ -14,7 +14,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <I18nProvider>
-          <App />
+          <RoutedApp />
         </I18nProvider>
       </ThemeProvider>
     </QueryClientProvider>

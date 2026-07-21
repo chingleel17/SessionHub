@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
@@ -10,7 +9,6 @@ import { marked } from "marked";
 
 import { useI18n } from "./i18n/I18nProvider";
 import type {
-  ActivityHintPayload,
   AgentsMdScanResult,
   AgentsRootLinkStatus,
   AnalyticsDataPoint,
@@ -34,7 +32,6 @@ import type {
   SessionInfo,
   SessionStats,
   SessionTodo,
-  SessionTargetedPayload,
   SkillsScanResult,
   SisyphusData,
   SyncActionResult,
@@ -42,9 +39,11 @@ import type {
   SyncRequest,
   ToolAvailability,
 } from "./types";
-import { DEFAULT_APP_SETTINGS, mergeAppSettings } from "./utils/appSettingsDefaults";
 import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
+import { resolveErrorMessage } from "./utils/resolveErrorMessage";
+import { useSessionRealtimeEvents } from "./hooks/useSessionRealtimeEvents";
+import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useAppSettingsForm";
 
 import { AgentsConfigView, type AgentsScopeDataBundle } from "./components/AgentsConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -52,163 +51,10 @@ import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog"
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
 import { ProjectView } from "./components/ProjectView";
-import { QuotaOverlay } from "./components/QuotaOverlay";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { SyncConflictDialog } from "./components/SyncConflictDialog";
-import { TrayQuotaPanel } from "./components/TrayQuotaPanel";
 import { StatusBar } from "./components/StatusBar";
-
-const EMBEDDED_VIEW = new URLSearchParams(window.location.search).get("view");
-
-if (EMBEDDED_VIEW) {
-  document.documentElement.classList.add("embedded-quota-view");
-}
-
-function EmbeddedQuotaOverlayApp() {
-  const queryClient = useQueryClient();
-  const [overlayRevision, setOverlayRevision] = useState(0);
-  const settingsQuery = useQuery({
-    queryKey: ["embedded_settings", "quota_overlay"],
-    queryFn: () => invoke<AppSettings>("get_settings"),
-    // Overlay 是獨立動態 webview；輪詢本機設定避免建立時機造成事件遺漏。
-    refetchInterval: 1_000,
-  });
-  const quotaSnapshotQuery = useQuery({
-    queryKey: ["embedded_quota_snapshots", "quota_overlay"],
-    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
-    staleTime: 60_000,
-    refetchInterval: 15_000,
-  });
-
-  useEffect(() => {
-    let mounted = true;
-
-    const setup = async () => {
-      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
-        if (mounted) {
-          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
-          void queryClient.refetchQueries({ queryKey: ["embedded_quota_snapshots", "quota_overlay"] });
-        }
-      });
-      const unlistenSettings = await listen<AppSettings>("quota-overlay-settings-changed", (event) => {
-        if (mounted) {
-          queryClient.setQueryData(["embedded_settings", "quota_overlay"], event.payload);
-          // 重新讀取持久化設定，並重新掛載透明 overlay 以確保樣式立即套用。
-          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
-          void queryClient.refetchQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
-          setOverlayRevision((revision) => revision + 1);
-        }
-      });
-      const unlistenLock = await listen<boolean>("quota-overlay-locked-changed", (event) => {
-        if (mounted) {
-          queryClient.setQueryData<AppSettings>(["embedded_settings", "quota_overlay"], (current) =>
-            current ? { ...current, quotaOverlayLocked: event.payload } : current,
-          );
-        }
-      });
-
-      return () => {
-        unlistenSnapshots();
-        unlistenSettings();
-        unlistenLock();
-      };
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((dispose) => {
-      cleanup = dispose;
-    });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
-  }, [queryClient]);
-
-  const settings = settingsQuery.data;
-
-  return (
-    <QuotaOverlay
-      key={overlayRevision}
-      snapshots={quotaSnapshotQuery.data ?? []}
-      enabledProviders={settings?.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"]}
-      selectedProviders={settings?.quotaOverlayProviders ?? []}
-      opacity={settings?.quotaOverlayOpacity ?? 0.3}
-      locked={settings?.quotaOverlayLocked ?? true}
-      theme={settings?.quotaOverlayTheme ?? "dark"}
-      styleMode={settings?.quotaOverlayStyle ?? "compact"}
-      onLockToggle={() => {
-        if (!settings) return;
-        void invoke("save_settings", {
-          settings: { ...settings, quotaOverlayLocked: !settings.quotaOverlayLocked },
-        }).then(() => {
-          void queryClient.invalidateQueries({ queryKey: ["embedded_settings", "quota_overlay"] });
-        });
-      }}
-    />
-  );
-}
-
-function EmbeddedTrayPanelApp() {
-  const queryClient = useQueryClient();
-  const quotaSnapshotQuery = useQuery({
-    queryKey: ["embedded_quota_snapshots", "tray_panel"],
-    queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
-    staleTime: 60_000,
-  });
-
-  useEffect(() => {
-    let mounted = true;
-
-    const setup = async () => {
-      const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
-        if (mounted) {
-          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
-        }
-      });
-
-      return () => {
-        unlistenSnapshots();
-      };
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((dispose) => {
-      cleanup = dispose;
-    });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
-  }, [queryClient]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        void getCurrentWindow().hide();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  return (
-    <TrayQuotaPanel
-      snapshots={quotaSnapshotQuery.data ?? []}
-      onRefresh={() => {
-        void invoke<QuotaSnapshot[]>("refresh_quota", { provider: null }).then(() => {
-          void queryClient.invalidateQueries({ queryKey: ["embedded_quota_snapshots", "tray_panel"] });
-        });
-      }}
-      onOpenSettings={() => {
-        void invoke("show_main_window", { view: "settings" }).then(() => getCurrentWindow().close());
-      }}
-    />
-  );
-}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -339,32 +185,6 @@ function buildProjectGroups(sessions: SessionInfo[], uncategorizedLabel: string,
     .sort((a, b) => b.sessions.length - a.sessions.length);
 }
 
-type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
-
-function getProviderLabel(
-  provider: string,
-  copilotLabel: string,
-  opencodeLabel: string,
-  codexLabel: string,
-  claudeLabel?: string,
-  antigravityLabel?: string,
-): string {
-  switch (provider) {
-    case "copilot":
-      return copilotLabel;
-    case "opencode":
-      return opencodeLabel;
-    case "codex":
-      return codexLabel;
-    case "claude":
-      return claudeLabel ?? provider;
-    case "antigravity":
-      return antigravityLabel ?? provider;
-    default:
-      return provider;
-  }
-}
-
 function resolveProviderTargetPath(integration: ProviderIntegrationStatus): string | null {
   const configPath = integration.configPath?.trim();
   if (configPath) return configPath;
@@ -386,48 +206,6 @@ function getSessionOpenCommand(provider: string, sessionId: string): string {
     default:
       return "";
   }
-}
-
-function upsertProviderIntegrationStatus(
-  integrations: ProviderIntegrationStatus[] | undefined,
-  nextStatus: ProviderIntegrationStatus,
-): ProviderIntegrationStatus[] {
-  const nextIntegrations = [...(integrations ?? [])];
-  const existingIndex = nextIntegrations.findIndex(
-    (integration) => integration.provider === nextStatus.provider,
-  );
-
-  if (existingIndex === -1) {
-    nextIntegrations.push(nextStatus);
-  } else {
-    nextIntegrations[existingIndex] = nextStatus;
-  }
-
-  const providerOrder = ["copilot", "opencode"];
-  nextIntegrations.sort((left, right) => {
-    const leftIndex = providerOrder.indexOf(left.provider);
-    const rightIndex = providerOrder.indexOf(right.provider);
-    const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-    const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-    return normalizedLeft - normalizedRight || left.provider.localeCompare(right.provider);
-  });
-
-  return nextIntegrations;
-}
-
-function resolveErrorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "string" && error.trim()) return error;
-  if (error instanceof Error && error.message.trim()) return error.message;
-  if (
-    typeof error === "object" &&
-    error &&
-    "message" in error &&
-    typeof error.message === "string" &&
-    error.message.trim()
-  ) {
-    return error.message;
-  }
-  return fallback;
 }
 
 const DEFAULT_PROJECT_AGENTS_PREFS: ProjectAgentsPrefs = {
@@ -520,14 +298,6 @@ function App() {
   const lastBackfillRequestRef = useRef<string | null>(null);
   // sessionsDataRef 讓事件 listener 不因 stale closure 而讀到舊的 sessionsQuery.data
   const sessionsDataRef = useRef<SessionInfo[]>([]);
-  const [settingsForm, setSettingsForm] = useState<AppSettings>({
-    copilotRoot: "",
-    opencodeRoot: "",
-    codexRoot: "",
-    showArchived: false,
-    enabledProviders: ["copilot", "opencode", "codex"],
-    ...DEFAULT_APP_SETTINGS,
-  });
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -611,14 +381,6 @@ function App() {
 
   useEffect(() => {
     if (settingsQuery.data) {
-      setSettingsForm({
-        copilotRoot: settingsQuery.data.copilotRoot,
-        opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
-        codexRoot: settingsQuery.data.codexRoot ?? "",
-        showArchived: settingsQuery.data.showArchived,
-        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode", "codex"],
-        ...mergeAppSettings(settingsQuery.data),
-      });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
   }, [settingsQuery.data]);
@@ -759,24 +521,35 @@ function App() {
 
   const showToast = (message: string) => setToastMessage(message);
 
-  const settingsMutation = useMutation({
-    mutationFn: (next: AppSettings) => invoke("save_settings", { settings: next }),
-    onSuccess: async () => {
-      showToast(t("toast.settingsSaved"));
-      await queryClient.invalidateQueries({ queryKey: ["settings"] });
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      try {
-        await invoke("restart_session_watcher", {
-          copilotRoot: settingsForm.copilotRoot.trim(),
-          opencodeRoot: settingsForm.opencodeRoot.trim(),
-          codexRoot: settingsForm.codexRoot.trim(),
-          hookScriptsPath: settingsForm.hookScriptsPath?.trim() ?? "",
-          enabledProviders: settingsForm.enabledProviders,
-        });
-        setRealtimeStatus("active");
-      } catch {
-        setRealtimeStatus("error");
-      }
+  const {
+    settingsForm,
+    setSettingsForm,
+    buildSettingsPayload,
+    persistSettingsSilently,
+    settingsMutation,
+    detectTerminalMutation,
+    detectVscodeMutation,
+    providerIntegrationMutation,
+  } = useAppSettingsForm({
+    settingsQuery,
+    pinnedProjects,
+    showToast,
+    t,
+    onSettingsSaved: () => {
+      void (async () => {
+        try {
+          await invoke("restart_session_watcher", {
+            copilotRoot: settingsForm.copilotRoot.trim(),
+            opencodeRoot: settingsForm.opencodeRoot.trim(),
+            codexRoot: settingsForm.codexRoot.trim(),
+            hookScriptsPath: settingsForm.hookScriptsPath?.trim() ?? "",
+            enabledProviders: settingsForm.enabledProviders,
+          });
+          setRealtimeStatus("active");
+        } catch {
+          setRealtimeStatus("error");
+        }
+      })();
     },
   });
 
@@ -819,105 +592,6 @@ function App() {
     },
   });
 
-  const detectTerminalMutation = useMutation({
-    mutationFn: () => invoke<string | null>("detect_terminal"),
-    onSuccess: (terminalPath) => {
-      if (terminalPath) {
-        setSettingsForm((v) => ({ ...v, terminalPath }));
-        showToast(t("toast.terminalDetected"));
-      } else {
-        showToast(t("toast.terminalMissing"));
-      }
-    },
-  });
-
-  const detectVscodeMutation = useMutation({
-    mutationFn: () => invoke<string | null>("detect_vscode"),
-    onSuccess: (editorPath) => {
-      if (editorPath) {
-        setSettingsForm((v) => ({ ...v, externalEditorPath: editorPath }));
-        showToast(t("toast.editorDetected"));
-      } else {
-        showToast(t("toast.editorMissing"));
-      }
-    },
-  });
-
-  const providerIntegrationMutation = useMutation({
-    mutationFn: ({ provider, action }: { provider: string; action: ProviderIntegrationAction }) => {
-      const command =
-        action === "install"
-          ? "install_provider_integration"
-          : action === "update"
-            ? "update_provider_integration"
-            : action === "uninstall"
-              ? "uninstall_provider_integration"
-              : "recheck_provider_integration";
-
-      return invoke<ProviderIntegrationStatus>(command, {
-        provider,
-        copilotRoot: settingsForm.copilotRoot.trim() || null,
-        codexRoot: settingsForm.codexRoot.trim() || null,
-        hookScriptsPath: (settingsForm.hookScriptsPath ?? "").trim() || null,
-      });
-    },
-    onSuccess: (status, variables) => {
-      const providerLabel = getProviderLabel(
-        status.provider,
-        t("settings.fields.providerCopilot"),
-        t("settings.fields.providerOpencode"),
-        t("settings.fields.providerCodex"),
-        t("settings.fields.providerClaude"),
-        t("settings.fields.providerAntigravity"),
-      );
-      setSettingsForm((current) => ({
-        ...current,
-        providerIntegrations: upsertProviderIntegrationStatus(
-          current.providerIntegrations,
-          status,
-        ),
-      }));
-
-      if (
-        (variables.action === "install" || variables.action === "update") &&
-        status.status !== "installed"
-      ) {
-        showToast(
-          status.lastError ||
-            t("toast.providerActionIncomplete").replace("{provider}", providerLabel),
-        );
-        return;
-      }
-
-      const toastMessage =
-        variables.action === "install"
-          ? t("toast.providerInstalled")
-          : variables.action === "update"
-            ? t("toast.providerUpdated")
-            : variables.action === "uninstall"
-              ? t("toast.providerUninstalled")
-              : t("toast.providerRechecked");
-      showToast(toastMessage.replace("{provider}", providerLabel));
-    },
-    onError: (error, variables) => {
-      const providerLabel = getProviderLabel(
-        variables.provider,
-        t("settings.fields.providerCopilot"),
-        t("settings.fields.providerOpencode"),
-        t("settings.fields.providerCodex"),
-        t("settings.fields.providerClaude"),
-        t("settings.fields.providerAntigravity"),
-      );
-      showToast(
-        resolveErrorMessage(
-          error,
-          t("toast.providerActionFailed").replace("{provider}", providerLabel),
-        ),
-      );
-    },
-    onSettled: () => setPendingProviderAction(null),
-  });
-
   const savePlanMutation = useMutation({
     mutationFn: ({ sessionDir, content }: { sessionDir: string; content: string }) =>
       invoke("write_plan", { sessionDir, content }),
@@ -937,29 +611,6 @@ function App() {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
-
-  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => {
-    const merged = mergeAppSettings({ ...settingsForm, ...overrides });
-    return {
-      copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
-      opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
-      codexRoot: (overrides.codexRoot ?? settingsForm.codexRoot).trim(),
-      showArchived: overrides.showArchived ?? settingsForm.showArchived,
-      enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
-      ...merged,
-      terminalPath: merged.terminalPath?.trim() || null,
-      externalEditorPath: merged.externalEditorPath?.trim() || null,
-      pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
-      antigravityRoot: merged.antigravityRoot.trim(),
-      hookScriptsPath: merged.hookScriptsPath.trim(),
-      agentsSourceRoot: merged.agentsSourceRoot.trim(),
-    };
-  };
-
-  const persistSettingsSilently = async (next: AppSettings) => {
-    await invoke("save_settings", { settings: next });
-    await queryClient.invalidateQueries({ queryKey: ["settings"] });
-  };
 
   const togglePinProject = async (projectKey: string) => {
     const next = pinnedProjects.includes(projectKey)
@@ -1072,277 +723,19 @@ function App() {
     };
   }, [activeProject?.pathLabel]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    const onSessionsRefresh = async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      if (mounted) {
-        setRealtimeStatus("active");
-        setLastRealtimeSyncAt(getRealtimeSyncLabel());
-      }
-    };
-
-    const setup = async () => {
-      const unlistenCopilot = await listen("copilot-sessions-updated", onSessionsRefresh);
-      const unlistenOpencode = await listen("opencode-sessions-updated", onSessionsRefresh);
-      const unlistenCodex = await listen("codex-sessions-updated", onSessionsRefresh);
-      const unlistenClaude = await listen("claude-sessions-updated", onSessionsRefresh);
-
-      const unlistenCopilotTargeted = await listen<SessionTargetedPayload>(
-        "copilot-session-targeted",
-        async (event) => {
-          const { cwd } = event.payload;
-          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
-            cwd,
-            rootDir: settingsQuery.data?.copilotRoot,
-          }).catch(() => null);
-
-          if (!mounted) return;
-
-          if (updated) {
-            queryClient.setQueriesData<SessionInfo[]>(
-              { queryKey: ["sessions"], exact: false },
-              (old) => {
-                if (!old) return old;
-                const idx = old.findIndex((s) => s.id === updated.id);
-                if (idx === -1) return [...old, updated];
-                const next = [...old];
-                next[idx] = updated;
-                return next;
-              }
-            );
-          } else {
-            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          }
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      );
-
-      const unlistenClaudeTargeted = await listen<SessionTargetedPayload>(
-        "claude-session-targeted",
-        async (event) => {
-          const { cwd } = event.payload;
-          const updated = await invoke<SessionInfo | null>("get_session_by_cwd", {
-            cwd,
-            rootDir: settingsQuery.data?.copilotRoot,
-          }).catch(() => null);
-
-          if (!mounted) return;
-
-          if (updated) {
-            queryClient.setQueriesData<SessionInfo[]>(
-              { queryKey: ["sessions"], exact: false },
-              (old) => {
-                if (!old) return old;
-                const idx = old.findIndex((s) => s.id === updated.id);
-                if (idx === -1) return [...old, updated];
-                const next = [...old];
-                next[idx] = updated;
-                return next;
-              }
-            );
-          } else {
-            await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          }
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      );
-
-      // copilot-activity-hint：輕量活動通知，不做任何 IPC 或 session 掃描。
-      // 只更新 activityStatusQuery 快取中對應 session 的狀態，並刷新 status bar。
-      const unlistenActivityHint = await listen<ActivityHintPayload>(
-        "copilot-activity-hint",
-        (event) => {
-          if (!mounted) return;
-          const { cwd, eventType, title } = event.payload;
-          const normalizedCwd = normalizePath(cwd);
-          const session = sessionsDataRef.current.find(
-            (s) => normalizePath(s.cwd ?? "") === normalizedCwd,
-          );
-          if (!session) return;
-
-          // 依 eventType 計算 activity detail
-          let detail: SessionActivityStatus["detail"] = "tool_call";
-          if (eventType === "prompt.submitted") {
-            detail = "thinking";
-          } else if (eventType === "tool.pre" && title) {
-            const lowerTitle = title.toLowerCase();
-            if (/edit|write|patch|create/.test(lowerTitle)) {
-              detail = "file_op";
-            } else if (/task|subtask|agent/.test(lowerTitle)) {
-              detail = "sub_agent";
-            }
-          }
-
-          queryClient.setQueriesData<SessionActivityStatus[]>(
-            { queryKey: ["activity_statuses"], exact: false },
-            (old) => {
-              if (!old) return old;
-              const idx = old.findIndex((s) => s.sessionId === session.id);
-              const updated: SessionActivityStatus = {
-                ...(old[idx] ?? { sessionId: session.id, provider: session.provider }),
-                status: "active",
-                detail,
-              };
-              if (idx === -1) return [...old, updated];
-              const next = [...old];
-              next[idx] = updated;
-              return next;
-            },
-          );
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      );
-
-      // claude-activity-hint：後端已計算 status/detail，直接 patch activityStatusMap
-      const unlistenClaudeActivityHint = await listen<ActivityHintPayload>(
-        "claude-activity-hint",
-        (event) => {
-          if (!mounted) return;
-          const { cwd, eventType, title, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
-
-          // 優先使用後端傳來的 sessionId，否則從 cwd 查找
-          const normalizedCwd = normalizePath(cwd);
-          const session = hintSessionId
-            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
-            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
-          if (!session) return;
-
-          // 後端已提供 status 時直接使用，否則 fallback 到前端推算（向後相容）
-          let status: SessionActivityStatus["status"];
-          let detail: SessionActivityStatus["detail"];
-          if (hintStatus) {
-            status = hintStatus;
-            detail = hintDetail ?? undefined;
-          } else {
-            status = "active";
-            detail = "tool_call";
-            if (eventType === "prompt.submitted") {
-              detail = "thinking";
-            } else if (eventType === "tool.pre" && title) {
-              const lowerTitle = title.toLowerCase();
-              if (/edit|write|patch|create/.test(lowerTitle)) {
-                detail = "file_op";
-              } else if (/task|subtask|agent/.test(lowerTitle)) {
-                detail = "sub_agent";
-              }
-            }
-          }
-
-          queryClient.setQueriesData<SessionActivityStatus[]>(
-            { queryKey: ["activity_statuses"], exact: false },
-            (old) => {
-              if (!old) return old;
-              const idx = old.findIndex((s) => s.sessionId === session.id);
-              const updated: SessionActivityStatus = {
-                ...(old[idx] ?? { sessionId: session.id }),
-                status,
-                detail,
-                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
-              };
-              if (idx === -1) return [...old, updated];
-              const next = [...old];
-              next[idx] = updated;
-              return next;
-            },
-          );
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      );
-
-      const unlistenOpenCodeActivityHint = await listen<ActivityHintPayload>(
-        "opencode-activity-hint",
-        (event) => {
-          if (!mounted) return;
-          const { cwd, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
-          const normalizedCwd = normalizePath(cwd);
-          const session = hintSessionId
-            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
-            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
-          if (!session || !hintStatus) return;
-
-          queryClient.setQueriesData<SessionActivityStatus[]>(
-            { queryKey: ["activity_statuses"], exact: false },
-            (old) => {
-              if (!old) return old;
-              const idx = old.findIndex((s) => s.sessionId === session.id);
-              const updated: SessionActivityStatus = {
-                ...(old[idx] ?? { sessionId: session.id }),
-                status: hintStatus,
-                detail: hintDetail ?? undefined,
-                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
-              };
-              if (idx === -1) return [...old, updated];
-              const next = [...old];
-              next[idx] = updated;
-              return next;
-            },
-          );
-
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      );
-
-      const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
-        if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
-        await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
-        if (mounted) {
-          setRealtimeStatus("active");
-          showToast(t("toast.planReloaded"));
-        }
-      });
-
-      const unlistenProjectFiles = await listen<string>("project-files-changed", async (event) => {
-        const normalizePath = (p: string) => p.toLowerCase().replace(/\\/g, "/");
-        if (!activeProject || normalizePath(event.payload) !== normalizePath(activeProject.pathLabel)) return;
-        await refreshProjectPlansSpecs(activeProject.pathLabel);
-        if (mounted) {
-          setRealtimeStatus("active");
-          setLastRealtimeSyncAt(getRealtimeSyncLabel());
-        }
-      });
-
-      const unlistenQuotaSnapshots = await listen("quota-snapshots-updated", () => {
-        if (!mounted) return;
-        void queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
-      });
-
-      const unlistenNavigateMainView = await listen<string>("navigate-main-view", (event) => {
-        if (!mounted) return;
-        setActiveView(event.payload);
-      });
-
-      return () => {
-        unlistenCopilot();
-        unlistenOpencode();
-        unlistenCodex();
-        unlistenClaude();
-        unlistenCopilotTargeted();
-        unlistenClaudeTargeted();
-        unlistenActivityHint();
-        unlistenClaudeActivityHint();
-        unlistenOpenCodeActivityHint();
-        unlistenPlan();
-        unlistenProjectFiles();
-        unlistenQuotaSnapshots();
-        unlistenNavigateMainView();
-      };
-    };
-
-    let cleanup: (() => void) | undefined;
-    void setup().then((dispose) => { cleanup = dispose; });
-    return () => { mounted = false; cleanup?.(); };
-  }, [activePlanSession, activeProject, queryClient, refreshProjectPlansSpecs, settingsQuery.data, t]);
+  useSessionRealtimeEvents({
+    activePlanSession,
+    activeProject,
+    copilotRoot: settingsQuery.data?.copilotRoot,
+    queryClient,
+    sessionsDataRef,
+    refreshProjectPlansSpecs,
+    setRealtimeStatus,
+    setLastRealtimeSyncAt,
+    setActiveView,
+    showToast,
+    planReloadedToast: t("toast.planReloaded"),
+  });
 
   const deletableEmptySessionCount = useMemo(
     () =>
@@ -2232,7 +1625,10 @@ function App() {
 
   const handleProviderAction = (provider: string, action: ProviderIntegrationAction) => {
     setPendingProviderAction(`${provider}:${action}`);
-    providerIntegrationMutation.mutate({ provider, action });
+    providerIntegrationMutation.mutate(
+      { provider, action },
+      { onSettled: () => setPendingProviderAction(null) },
+    );
   };
 
   const handleRefreshQuota = useCallback((provider?: string) => {
@@ -2658,16 +2054,4 @@ function App() {
   );
 }
 
-function RoutedApp() {
-  if (EMBEDDED_VIEW === "quota-overlay") {
-    return <EmbeddedQuotaOverlayApp />;
-  }
-
-  if (EMBEDDED_VIEW === "tray-panel") {
-    return <EmbeddedTrayPanelApp />;
-  }
-
-  return <App />;
-}
-
-export default RoutedApp;
+export default App;
