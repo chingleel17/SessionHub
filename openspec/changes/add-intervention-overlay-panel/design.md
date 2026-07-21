@@ -70,11 +70,13 @@ overlay 在獨立 webview，點擊需跨視窗觸發主視窗導航。發一個 
 
 - **替代方案**：overlay 直接 invoke 導航 command。否決 —— 導航是主視窗 React state（activeView），須由主視窗處理；overlay 只負責發意圖事件。
 
-### 決策 5：waiting Toast 改為獨立設定項
+### 決策 5：沿用既有 `enable_intervention_notification` 當總開關，不新增設定項
 
-`App.tsx:1743` 的 Toast 觸發改讀新設定 `enable_waiting_toast`（預設 `true`），與 overlay 提醒解耦。overlay 提醒是否顯示只取決於 quota overlay 是否開啟 + 是否有 waiting，不受此開關影響。
+overlay 提醒與 waiting Toast 講的是同一件事的兩種呈現（Toast=瞬間、overlay=常駐）。因此 overlay 提醒是否顯示 SHALL 沿用既有 `enable_intervention_notification`：關閉時 Toast 與 overlay 皆不出，作為「waiting 介入提醒」的統一總開關。`App.tsx:1743` 的 Toast 觸發維持不動，overlay render 加上同一開關判斷。
 
-- **相容**：現行 `enable_intervention_notification` 語意保留（是否啟用整個 waiting 提醒機制）；新開關只細分「是否額外發 Toast」。預設 `true` 使現有行為不變。
+- **替代方案 A**：新增獨立 `enable_waiting_toast`，讓使用者只關 Toast 保留 overlay。否決 —— 多一個與 `enable_intervention_notification` 語意重疊的設定項，違反既有 `add-opencode-permission-notification` 的「不新增設定項」精神，且使用者實際需求是「要不要 waiting 提醒」而非「用哪種呈現」。
+- **替代方案 B**：overlay 完全獨立於通知開關（只看 quota overlay 開否 + 有無 waiting）。否決 —— 使用者關掉介入通知卻仍看到 overlay 提醒，語意矛盾。
+- main 合併後現況已有 `enable_intervention_notification`（waiting，預設 true）與 `enable_session_end_notification`（done，預設 false）；本 change 不動兩者，僅讓 overlay 一併受前者控制。
 
 ## Risks / Trade-offs
 

@@ -42,6 +42,7 @@ import type {
   SyncRequest,
   ToolAvailability,
 } from "./types";
+import { DEFAULT_APP_SETTINGS, mergeAppSettings } from "./utils/appSettingsDefaults";
 import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 
@@ -523,37 +524,9 @@ function App() {
     copilotRoot: "",
     opencodeRoot: "",
     codexRoot: "",
-    terminalPath: "",
-    externalEditorPath: "",
     showArchived: false,
     enabledProviders: ["copilot", "opencode", "codex"],
-    providerIntegrations: [],
-    defaultLauncher: "terminal",
-    enableInterventionNotification: true,
-    enableSessionEndNotification: false,
-    showStatusBar: true,
-    analyticsRefreshInterval: 30,
-    analyticsPanelCollapsed: false,
-    minimizeToTray: false,
-    claudeRoot: "",
-    antigravityRoot: "",
-    hookScriptsPath: "",
-    claudeQuotaResetDay: 1,
-    claudeMonthlyLimitTokens: null,
-    claudeMonthlyLimitUsd: null,
-    enableQuotaMonitoring: true,
-    quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
-    allowCreateProjectConfigDir: false,
-    agentsSourceRoot: "",
-    trayQuotaMode: "icon_only",
-    trayQuotaPrimaryProvider: null,
-    trayQuotaPanelEnabled: true,
-    quotaOverlayEnabled: false,
-    quotaOverlayLocked: true,
-    quotaOverlayOpacity: 0.3,
-    quotaOverlayProviders: [],
-    quotaOverlayTheme: "dark",
-    quotaOverlayStyle: "compact",
+    ...DEFAULT_APP_SETTINGS,
   });
 
   const settingsQuery = useQuery({
@@ -642,39 +615,9 @@ function App() {
         copilotRoot: settingsQuery.data.copilotRoot,
         opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
         codexRoot: settingsQuery.data.codexRoot ?? "",
-        terminalPath: settingsQuery.data.terminalPath ?? "",
-        externalEditorPath: settingsQuery.data.externalEditorPath ?? "",
         showArchived: settingsQuery.data.showArchived,
-        pinnedProjects: settingsQuery.data.pinnedProjects ?? [],
         enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode", "codex"],
-        providerIntegrations: settingsQuery.data.providerIntegrations ?? [],
-        defaultLauncher: settingsQuery.data.defaultLauncher ?? "terminal",
-        enableInterventionNotification: settingsQuery.data.enableInterventionNotification ?? true,
-        enableSessionEndNotification: settingsQuery.data.enableSessionEndNotification ?? false,
-        showStatusBar: settingsQuery.data.showStatusBar ?? true,
-        analyticsRefreshInterval: settingsQuery.data.analyticsRefreshInterval ?? 30,
-        analyticsPanelCollapsed: settingsQuery.data.analyticsPanelCollapsed ?? false,
-        minimizeToTray: settingsQuery.data.minimizeToTray ?? false,
-        claudeRoot: settingsQuery.data.claudeRoot ?? "",
-        antigravityRoot: settingsQuery.data.antigravityRoot ?? "",
-        hookScriptsPath: settingsQuery.data.hookScriptsPath ?? "",
-        claudeQuotaResetDay: settingsQuery.data.claudeQuotaResetDay ?? 1,
-        claudeMonthlyLimitTokens: settingsQuery.data.claudeMonthlyLimitTokens ?? null,
-        claudeMonthlyLimitUsd: settingsQuery.data.claudeMonthlyLimitUsd ?? null,
-        enableQuotaMonitoring: settingsQuery.data.enableQuotaMonitoring ?? true,
-        quotaEnabledProviders:
-          settingsQuery.data.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
-        allowCreateProjectConfigDir: settingsQuery.data.allowCreateProjectConfigDir ?? false,
-        agentsSourceRoot: settingsQuery.data.agentsSourceRoot ?? "",
-        trayQuotaMode: settingsQuery.data.trayQuotaMode ?? "icon_only",
-        trayQuotaPrimaryProvider: settingsQuery.data.trayQuotaPrimaryProvider ?? null,
-        trayQuotaPanelEnabled: settingsQuery.data.trayQuotaPanelEnabled ?? true,
-        quotaOverlayEnabled: settingsQuery.data.quotaOverlayEnabled ?? false,
-        quotaOverlayLocked: settingsQuery.data.quotaOverlayLocked ?? true,
-        quotaOverlayOpacity: settingsQuery.data.quotaOverlayOpacity ?? 0.3,
-        quotaOverlayProviders: settingsQuery.data.quotaOverlayProviders ?? [],
-        quotaOverlayTheme: settingsQuery.data.quotaOverlayTheme ?? "dark",
-        quotaOverlayStyle: settingsQuery.data.quotaOverlayStyle ?? "compact",
+        ...mergeAppSettings(settingsQuery.data),
       });
       setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
     }
@@ -995,61 +938,23 @@ function App() {
     },
   });
 
-  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => ({
-    copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
-    opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
-    codexRoot: (overrides.codexRoot ?? settingsForm.codexRoot).trim(),
-    terminalPath: (overrides.terminalPath ?? settingsForm.terminalPath)?.trim() || null,
-    externalEditorPath:
-      (overrides.externalEditorPath ?? settingsForm.externalEditorPath)?.trim() || null,
-    showArchived: overrides.showArchived ?? settingsForm.showArchived,
-    pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
-    enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
-    providerIntegrations: overrides.providerIntegrations ?? settingsForm.providerIntegrations ?? [],
-    defaultLauncher: overrides.defaultLauncher ?? settingsForm.defaultLauncher ?? null,
-    enableInterventionNotification:
-      overrides.enableInterventionNotification ?? settingsForm.enableInterventionNotification ?? true,
-    enableSessionEndNotification:
-      overrides.enableSessionEndNotification ?? settingsForm.enableSessionEndNotification ?? false,
-    showStatusBar: overrides.showStatusBar ?? settingsForm.showStatusBar ?? true,
-    analyticsRefreshInterval:
-      overrides.analyticsRefreshInterval ?? settingsForm.analyticsRefreshInterval ?? 30,
-    analyticsPanelCollapsed:
-      overrides.analyticsPanelCollapsed ?? settingsForm.analyticsPanelCollapsed ?? false,
-    minimizeToTray: overrides.minimizeToTray ?? settingsForm.minimizeToTray ?? false,
-    claudeRoot: overrides.claudeRoot ?? settingsForm.claudeRoot ?? "",
-    antigravityRoot: (overrides.antigravityRoot ?? settingsForm.antigravityRoot ?? "").trim(),
-    hookScriptsPath: (overrides.hookScriptsPath ?? settingsForm.hookScriptsPath ?? "").trim(),
-    claudeQuotaResetDay: overrides.claudeQuotaResetDay ?? settingsForm.claudeQuotaResetDay ?? 1,
-    claudeMonthlyLimitTokens:
-      overrides.claudeMonthlyLimitTokens ?? settingsForm.claudeMonthlyLimitTokens ?? null,
-    claudeMonthlyLimitUsd:
-      overrides.claudeMonthlyLimitUsd ?? settingsForm.claudeMonthlyLimitUsd ?? null,
-    enableQuotaMonitoring:
-      overrides.enableQuotaMonitoring ?? settingsForm.enableQuotaMonitoring ?? true,
-    quotaEnabledProviders:
-      overrides.quotaEnabledProviders ?? settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"],
-    allowCreateProjectConfigDir:
-      overrides.allowCreateProjectConfigDir ?? settingsForm.allowCreateProjectConfigDir ?? false,
-    agentsSourceRoot: (overrides.agentsSourceRoot ?? settingsForm.agentsSourceRoot ?? "").trim(),
-    trayQuotaMode: overrides.trayQuotaMode ?? settingsForm.trayQuotaMode ?? "icon_only",
-    trayQuotaPrimaryProvider:
-      overrides.trayQuotaPrimaryProvider ?? settingsForm.trayQuotaPrimaryProvider ?? null,
-    trayQuotaPanelEnabled:
-      overrides.trayQuotaPanelEnabled ?? settingsForm.trayQuotaPanelEnabled ?? true,
-    quotaOverlayEnabled:
-      overrides.quotaOverlayEnabled ?? settingsForm.quotaOverlayEnabled ?? false,
-    quotaOverlayLocked:
-      overrides.quotaOverlayLocked ?? settingsForm.quotaOverlayLocked ?? true,
-    quotaOverlayOpacity:
-      overrides.quotaOverlayOpacity ?? settingsForm.quotaOverlayOpacity ?? 0.3,
-    quotaOverlayProviders:
-      overrides.quotaOverlayProviders ?? settingsForm.quotaOverlayProviders ?? [],
-    quotaOverlayTheme:
-      overrides.quotaOverlayTheme ?? settingsForm.quotaOverlayTheme ?? "dark",
-    quotaOverlayStyle:
-      overrides.quotaOverlayStyle ?? settingsForm.quotaOverlayStyle ?? "compact",
-  });
+  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => {
+    const merged = mergeAppSettings({ ...settingsForm, ...overrides });
+    return {
+      copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
+      opencodeRoot: (overrides.opencodeRoot ?? settingsForm.opencodeRoot).trim(),
+      codexRoot: (overrides.codexRoot ?? settingsForm.codexRoot).trim(),
+      showArchived: overrides.showArchived ?? settingsForm.showArchived,
+      enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
+      ...merged,
+      terminalPath: merged.terminalPath?.trim() || null,
+      externalEditorPath: merged.externalEditorPath?.trim() || null,
+      pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
+      antigravityRoot: merged.antigravityRoot.trim(),
+      hookScriptsPath: merged.hookScriptsPath.trim(),
+      agentsSourceRoot: merged.agentsSourceRoot.trim(),
+    };
+  };
 
   const persistSettingsSilently = async (next: AppSettings) => {
     await invoke("save_settings", { settings: next });
