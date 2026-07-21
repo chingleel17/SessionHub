@@ -17,6 +17,10 @@ src-tauri\gen
 target
 .tauri
 
+# Python 編譯產物
+__pycache__/
+*.pyc
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
