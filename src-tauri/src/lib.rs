@@ -632,7 +632,7 @@ mod tests {
         read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
     };
     use crate::provider::bridge::{
-        build_opencode_watch_snapshot, provider_refresh_event_name,
+        build_opencode_watch_snapshot, derive_activity_status, provider_refresh_event_name,
         resolve_copilot_integration_path, should_emit_opencode_refresh,
         should_emit_provider_refresh_at,
     };
@@ -655,6 +655,7 @@ mod tests {
     use crate::sessions::opencode::{
         scan_opencode_incremental_internal, scan_opencode_sessions_internal,
     };
+    use crate::sessions::{configure_msys_stackdump_suppression, merge_msys_options};
     use crate::sisyphus::scan_sisyphus_internal;
     use crate::stats::{
         calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal,
@@ -863,6 +864,141 @@ mod tests {
         assert!(
             register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
                 .expect("record with different error should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_adds_error_start_when_missing() {
+        assert_eq!(merge_msys_options(None), "error_start:");
+        assert_eq!(
+            merge_msys_options(Some("winsymlinks:nativestrict")),
+            "winsymlinks:nativestrict error_start:"
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_preserves_existing_error_start_case_insensitively() {
+        assert_eq!(
+            merge_msys_options(Some("winsymlinks:nativestrict ERROR_START:debugger")),
+            "winsymlinks:nativestrict ERROR_START:debugger"
+        );
+        assert_eq!(
+            merge_msys_options(Some("error_start=debugger")),
+            "error_start=debugger"
+        );
+    }
+
+    #[test]
+    fn merge_msys_options_handles_empty_values_and_is_idempotent() {
+        assert_eq!(merge_msys_options(Some("")), "error_start:");
+
+        let configured = merge_msys_options(Some("winsymlinks:nativestrict"));
+        assert_eq!(merge_msys_options(Some(&configured)), configured);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn msys_stackdump_suppression_is_inherited_by_child_process() {
+        let _guard = test_lock().lock().expect("lock");
+        let previous = env::var_os("MSYS");
+        unsafe {
+            env::set_var("MSYS", "winsymlinks:nativestrict");
+        }
+
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "echo %MSYS%"]);
+        configure_msys_stackdump_suppression(&mut command);
+        let output = command.output().expect("start child process");
+
+        unsafe {
+            match previous {
+                Some(previous) => env::set_var("MSYS", previous),
+                None => env::remove_var("MSYS"),
+            }
+        }
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "winsymlinks:nativestrict error_start:"
+        );
+    }
+
+    #[test]
+    fn opencode_permission_records_with_distinct_timestamps_are_not_deduplicated() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let mut record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "permission.updated".to_string(),
+            timestamp: "2026-04-01T09:00:00.001Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: None,
+            source_path: None,
+            title: Some("Access external directory".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first permission record should register")
+        );
+
+        record.timestamp = "2026-04-01T09:00:01.001Z".to_string();
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("new permission record should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn opencode_v2_permission_records_with_distinct_request_ids_are_not_deduplicated() {
+        let bridge_records = Arc::new(Mutex::new(HashMap::new()));
+        let mut record = ProviderBridgeRecord {
+            version: PROVIDER_INTEGRATION_VERSION,
+            provider: OPENCODE_PROVIDER.to_string(),
+            event_type: "permission.v2.asked".to_string(),
+            timestamp: "2026-07-20T09:00:00.001Z".to_string(),
+            session_id: Some("session-001".to_string()),
+            cwd: None,
+            source_path: None,
+            title: Some("bash [permission-001]".to_string()),
+            error: None,
+        };
+
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("first v2 permission record should register")
+        );
+
+        record.title = Some("bash [permission-002]".to_string());
+        assert!(
+            register_provider_bridge_record(&bridge_records, OPENCODE_PROVIDER, &record)
+                .expect("new v2 request id should not be deduplicated")
+        );
+    }
+
+    #[test]
+    fn derive_activity_status_maps_opencode_permission_events() {
+        assert_eq!(
+            derive_activity_status("permission.updated", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.asked", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.replied", None),
+            ("active".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.v2.asked", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("permission.v2.replied", None),
+            ("active".to_string(), None)
         );
     }
 
@@ -2810,6 +2946,16 @@ mod tests {
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains(OPENCODE_PLUGIN_METADATA_PREFIX));
         assert!(content.contains("\"session.updated\""));
+        assert!(content.contains("\"permission.updated\""));
+        assert!(content.contains("\"permission.asked\""));
+        assert!(content.contains("\"permission.replied\""));
+        assert!(content.contains("\"permission.v2.asked\""));
+        assert!(content.contains("\"permission.v2.replied\""));
+        assert!(content.contains(
+            "props.title ?? props.permission ?? props.type ?? props.action ?? \"permission\""
+        ));
+        assert!(content.contains("props.id ?? props.requestID ?? props.permissionID ?? null"));
+        assert!(!content.contains("props.resources"));
         assert!(content.contains("appendFile"));
 
         fs::remove_dir_all(&user_profile).expect("cleanup user profile");

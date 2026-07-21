@@ -56,7 +56,9 @@ mod platform {
         let matched_line = stdout
             .lines()
             .find(|line| line.contains("language_server.exe"))
-            .ok_or_else(|| "找不到執行中的 language_server.exe，Antigravity IDE／agy 可能未啟動".to_string())?;
+            .ok_or_else(|| {
+                "找不到執行中的 language_server.exe，Antigravity IDE／agy 可能未啟動".to_string()
+            })?;
 
         let pid = matched_line
             .split(',')
@@ -273,7 +275,11 @@ impl QuotaAdapter for AntigravityAdapter {
                         source: "local_scan".to_string(),
                         fetched_at: current_timestamp(),
                         error_message: None,
-                        windows: if windows.is_empty() { None } else { Some(windows) },
+                        windows: if windows.is_empty() {
+                            None
+                        } else {
+                            Some(windows)
+                        },
                         local_tokens: None,
                         extra_credits: None,
                         reset_credits: None,
@@ -390,11 +396,17 @@ mod tests {
             );
         }
 
-        assert_eq!(snapshot.status, "ok", "expected live language_server.exe to answer successfully");
+        assert_eq!(
+            snapshot.status, "ok",
+            "expected live language_server.exe to answer successfully"
+        );
         let groups: std::collections::HashSet<_> =
             windows.iter().filter_map(|w| w.group.clone()).collect();
         println!("distinct groups: {groups:?}");
-        assert!(groups.len() >= 2, "expected at least Gemini + Claude/GPT groups");
+        assert!(
+            groups.len() >= 2,
+            "expected at least Gemini + Claude/GPT groups"
+        );
         for w in &windows {
             assert!(
                 w.utilization >= 0.0 && w.utilization <= 1.0,
@@ -431,6 +443,9 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].utilization, 0.25);
         assert_eq!(windows[0].group.as_deref(), Some("Gemini Models"));
-        assert_eq!(windows[0].resets_at.as_deref(), Some("2026-07-13T00:00:00Z"));
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-07-13T00:00:00Z")
+        );
     }
 }

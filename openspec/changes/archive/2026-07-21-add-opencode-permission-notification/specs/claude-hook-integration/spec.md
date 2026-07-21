@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Claude hook 設定注入
 
@@ -43,14 +43,3 @@
 - **WHEN** 既有 Claude integration 包含其他 managed hooks，但缺少 `PermissionRequest`
 - **THEN** 整合狀態不得顯示為 installed
 - **AND** 應提示使用者更新整合
-
-### Requirement: Claude hook bridge 事件格式
-
-Claude stop hook 寫入的 bridge record SHALL 符合現有的 bridge 事件標準格式，包含 `provider`、`eventType`、`timestamp`，並在可取得時包含 `sessionId` 與 `cwd`。
-
-#### Scenario: bridge 事件包含完整欄位
-
-- **WHEN** Claude Code CLI stop hook 執行
-- **THEN** bridge JSON 包含 `provider: "claude"`、`eventType: "session.stop"`
-- **AND** `timestamp` 為 ISO 8601 格式
-- **AND** `sessionId` 對應 JSONL 檔案名稱（不含副檔名）

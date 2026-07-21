@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Instant;
 
 use rusqlite::Connection;
@@ -27,6 +28,42 @@ pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use git::*;
 pub(crate) use opencode::*;
+
+pub(crate) fn merge_msys_options(existing: Option<&str>) -> String {
+    let existing = existing.unwrap_or_default();
+    let has_error_start = existing.split_ascii_whitespace().any(|token| {
+        token
+            .find([':', '='])
+            .is_some_and(|index| token[..index].eq_ignore_ascii_case("error_start"))
+    });
+
+    if has_error_start {
+        return existing.to_string();
+    }
+
+    if existing.is_empty() {
+        "error_start:".to_string()
+    } else if existing
+        .chars()
+        .last()
+        .is_some_and(|character| character.is_ascii_whitespace())
+    {
+        format!("{existing}error_start:")
+    } else {
+        format!("{existing} error_start:")
+    }
+}
+
+pub(crate) fn configure_msys_stackdump_suppression(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    command.env(
+        "MSYS",
+        merge_msys_options(std::env::var("MSYS").ok().as_deref()),
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = command;
+}
 
 pub(crate) fn get_sessions_internal(
     root_dir: Option<String>,

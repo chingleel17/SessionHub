@@ -9,7 +9,7 @@ use tauri::{Emitter, Manager, State};
 use crate::openspec_scan::{
     read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
 };
-use crate::sessions::open_terminal_internal;
+use crate::sessions::{configure_msys_stackdump_suppression, open_terminal_internal};
 use crate::sisyphus::scan_sisyphus_internal;
 use crate::types::*;
 use crate::watcher::watch_project_files_internal;
@@ -79,6 +79,7 @@ pub(crate) fn open_in_tool_internal(
             cmd.current_dir(cwd);
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
+            configure_msys_stackdump_suppression(&mut cmd);
             cmd.spawn()
                 .map_err(|e| format!("failed to open opencode: {e}"))?;
             Ok(())
@@ -100,6 +101,7 @@ pub(crate) fn open_in_tool_internal(
             }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
+            configure_msys_stackdump_suppression(&mut cmd);
             cmd.spawn()
                 .map_err(|e| format!("failed to open claude: {e}"))?;
             Ok(())
@@ -121,6 +123,7 @@ pub(crate) fn open_in_tool_internal(
             }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
+            configure_msys_stackdump_suppression(&mut cmd);
             cmd.spawn()
                 .map_err(|e| format!("failed to open codex: {e}"))?;
             Ok(())
@@ -142,6 +145,7 @@ pub(crate) fn open_in_tool_internal(
             }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
+            configure_msys_stackdump_suppression(&mut cmd);
             cmd.spawn()
                 .map_err(|e| format!("failed to open copilot: {e}"))?;
             Ok(())
@@ -169,6 +173,7 @@ pub(crate) fn open_in_tool_internal(
             }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
+            configure_msys_stackdump_suppression(&mut cmd);
             cmd.spawn()
                 .map_err(|e| format!("failed to open gemini: {e}"))?;
             Ok(())
@@ -257,6 +262,7 @@ pub(crate) fn resume_session_in_terminal_internal(
     }
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);
+    configure_msys_stackdump_suppression(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("failed to resume session: {e}"))?;
     Ok(())

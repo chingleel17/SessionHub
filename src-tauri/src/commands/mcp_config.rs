@@ -32,10 +32,16 @@ pub async fn upsert_mcp_server(
 }
 
 #[tauri::command]
-pub async fn delete_mcp_server(scope: McpScope, provider: String, name: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || delete_mcp_server_internal(&scope, &provider, &name))
-        .await
-        .map_err(|error| format!("failed to join delete MCP server task: {error}"))?
+pub async fn delete_mcp_server(
+    scope: McpScope,
+    provider: String,
+    name: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_mcp_server_internal(&scope, &provider, &name)
+    })
+    .await
+    .map_err(|error| format!("failed to join delete MCP server task: {error}"))?
 }
 
 #[tauri::command]

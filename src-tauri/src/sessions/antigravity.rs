@@ -301,7 +301,10 @@ fn parse_conversation(
 
     let cwd = summary_entry.and_then(|entry| entry.workspace.clone());
 
-    let created_at = transcript.created_at.clone().or_else(|| fallback_mtime.clone());
+    let created_at = transcript
+        .created_at
+        .clone()
+        .or_else(|| fallback_mtime.clone());
     let updated_at = transcript
         .updated_at
         .clone()
@@ -425,7 +428,8 @@ pub(crate) fn scan_antigravity_incremental_internal(
 ) -> Result<(), String> {
     // 每個 conversation 目錄可能含多個檔案（transcript/metadata），逐一比對 mtime 成本不低於重新掃描全部 flavor，
     // 因此以整體重掃 + 快取比對取代逐檔比對，維持與其他 provider 相同的介面。
-    let fresh_sessions = scan_antigravity_sessions_internal(antigravity_root, show_archived, connection)?;
+    let fresh_sessions =
+        scan_antigravity_sessions_internal(antigravity_root, show_archived, connection)?;
     let mut current_ids: HashSet<String> = HashSet::new();
 
     for mut session in fresh_sessions {
@@ -448,7 +452,9 @@ pub(crate) fn scan_antigravity_incremental_internal(
         }
     }
 
-    cache.sessions.retain(|session| current_ids.contains(&session.id));
+    cache
+        .sessions
+        .retain(|session| current_ids.contains(&session.id));
     let current_dirs: HashSet<String> = cache
         .sessions
         .iter()
@@ -480,7 +486,10 @@ mod tests {
     #[test]
     fn url_decode_handles_percent_encoding() {
         let decoded = url_decode("file:///h:/Code/DIY/Sketchup%20extension/Style%20Engine");
-        assert_eq!(decoded, "file:///h:/Code/DIY/Sketchup extension/Style Engine");
+        assert_eq!(
+            decoded,
+            "file:///h:/Code/DIY/Sketchup extension/Style Engine"
+        );
     }
 
     #[test]
@@ -517,6 +526,9 @@ mod tests {
                 s.id, s.summary, s.cwd, s.updated_at, s.parse_error
             );
         }
-        assert!(!sessions.is_empty(), "expected to find antigravity sessions");
+        assert!(
+            !sessions.is_empty(),
+            "expected to find antigravity sessions"
+        );
     }
 }

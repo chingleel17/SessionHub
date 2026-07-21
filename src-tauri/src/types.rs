@@ -261,7 +261,7 @@ pub(crate) struct AppSettings {
     pub(crate) quota_overlay_style: OverlayStyle,
 }
 
-pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 4;
+pub(crate) const PROVIDER_INTEGRATION_VERSION: u32 = 6;
 pub(crate) const COPILOT_PROVIDER: &str = "copilot";
 pub(crate) const OPENCODE_PROVIDER: &str = "opencode";
 pub(crate) const CODEX_PROVIDER: &str = "codex";

@@ -53,7 +53,9 @@ fn blend_pixel(dst: &mut RgbaImage, x: u32, y: u32, src: Rgba<u8>) {
         (src.0[0] as f64 * a + bg[0] as f64 * (1.0 - a)).round() as u8,
         (src.0[1] as f64 * a + bg[1] as f64 * (1.0 - a)).round() as u8,
         (src.0[2] as f64 * a + bg[2] as f64 * (1.0 - a)).round() as u8,
-        ((src.0[3] as f64) + (bg[3] as f64) * (1.0 - a)).round().min(255.0) as u8,
+        ((src.0[3] as f64) + (bg[3] as f64) * (1.0 - a))
+            .round()
+            .min(255.0) as u8,
     ];
     dst.put_pixel(x, y, Rgba(out));
 }
@@ -266,7 +268,9 @@ pub(crate) fn build_tooltip(snapshots: &[QuotaSnapshot]) -> String {
                 } else if let Some(windows) = &snap.windows {
                     let parts: Vec<String> = windows
                         .iter()
-                        .map(|w| format!("{}% ({})", (w.utilization * 100.0).round() as i64, w.label))
+                        .map(|w| {
+                            format!("{}% ({})", (w.utilization * 100.0).round() as i64, w.label)
+                        })
                         .collect();
                     if !parts.is_empty() {
                         lines.push(format!("{name}: {}", parts.join(" · ")));
@@ -299,10 +303,7 @@ pub(crate) fn update_tray_from_cache(app: &AppHandle, settings: &AppSettings) {
     let hidden = !settings.enable_quota_monitoring
         || matches!(settings.tray_quota_mode, TrayQuotaMode::Hidden);
 
-    let pct = compute_primary_pct(
-        &snapshots,
-        settings.tray_quota_primary_provider.as_deref(),
-    );
+    let pct = compute_primary_pct(&snapshots, settings.tray_quota_primary_provider.as_deref());
 
     let png = if hidden {
         BASE_ICON_BYTES.to_vec()
@@ -353,13 +354,19 @@ mod tests {
 
     #[test]
     fn compute_primary_pct_auto_picks_global_max() {
-        let snaps = vec![ok_snapshot("claude", &[0.3, 0.72]), ok_snapshot("copilot", &[0.55])];
+        let snaps = vec![
+            ok_snapshot("claude", &[0.3, 0.72]),
+            ok_snapshot("copilot", &[0.55]),
+        ];
         assert!((compute_primary_pct(&snaps, None) - 0.72).abs() < 1e-9);
     }
 
     #[test]
     fn compute_primary_pct_respects_target_provider() {
-        let snaps = vec![ok_snapshot("claude", &[0.9]), ok_snapshot("copilot", &[0.4])];
+        let snaps = vec![
+            ok_snapshot("claude", &[0.9]),
+            ok_snapshot("copilot", &[0.4]),
+        ];
         assert!((compute_primary_pct(&snaps, Some("copilot")) - 0.4).abs() < 1e-9);
     }
 

@@ -1,8 +1,8 @@
 use std::env;
 
 use crate::types::{
-    AppSettings, LocalTokenUsage, QuotaSnapshot, QuotaWindow, ResetCreditEntry,
-    ResetCredits, CODEX_PROVIDER,
+    AppSettings, LocalTokenUsage, QuotaSnapshot, QuotaWindow, ResetCreditEntry, ResetCredits,
+    CODEX_PROVIDER,
 };
 
 use super::QuotaAdapter;
@@ -516,8 +516,14 @@ mod tests {
         assert_eq!(parsed.available_count, 2);
         assert_eq!(parsed.credits.len(), 1);
         assert_eq!(parsed.credits[0].status, "active");
-        assert_eq!(parsed.credits[0].granted_at.as_deref(), Some("2024-07-03T09:46:40Z"));
-        assert_eq!(parsed.credits[0].expires_at.as_deref(), Some("2024-07-04T09:46:40Z"));
+        assert_eq!(
+            parsed.credits[0].granted_at.as_deref(),
+            Some("2024-07-03T09:46:40Z")
+        );
+        assert_eq!(
+            parsed.credits[0].expires_at.as_deref(),
+            Some("2024-07-04T09:46:40Z")
+        );
     }
 
     #[test]
@@ -534,8 +540,14 @@ mod tests {
         }));
 
         assert_eq!(parsed.available_count, 1);
-        assert_eq!(parsed.credits[0].granted_at.as_deref(), Some("2026-07-14T08:00:00Z"));
-        assert_eq!(parsed.credits[0].expires_at.as_deref(), Some("2026-07-21T15:59:00Z"));
+        assert_eq!(
+            parsed.credits[0].granted_at.as_deref(),
+            Some("2026-07-14T08:00:00Z")
+        );
+        assert_eq!(
+            parsed.credits[0].expires_at.as_deref(),
+            Some("2026-07-21T15:59:00Z")
+        );
     }
 
     #[test]
@@ -552,7 +564,10 @@ mod tests {
         assert_eq!(parsed.credits[0].status, "expired");
         assert_eq!(parsed.credits[0].granted_at, None);
         assert_eq!(parsed.credits[1].status, "");
-        assert_eq!(parsed.credits[1].expires_at.as_deref(), Some("2024-07-04T09:46:40Z"));
+        assert_eq!(
+            parsed.credits[1].expires_at.as_deref(),
+            Some("2024-07-04T09:46:40Z")
+        );
     }
 
     #[test]

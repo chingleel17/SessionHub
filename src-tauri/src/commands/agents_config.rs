@@ -1,11 +1,10 @@
 use crate::agents_config::{
-    check_agents_root_link_internal, link_agents_root_internal,
-    load_project_agents_prefs_internal, read_agents_file_internal,
-    save_project_agents_prefs_internal, scan_agents_commands_internal, scan_agents_md_internal,
-    scan_agents_skills_internal, scan_global_agents_md_internal, sync_agents_items_internal,
-    write_agents_file_internal, AgentsMdScanResult, AgentsRootLinkStatus, AgentsScope,
-    CommandsScanResult, ProjectAgentsPrefs, SaveProjectAgentsPrefsResult, SkillsScanResult,
-    SyncReport, SyncRequest,
+    check_agents_root_link_internal, link_agents_root_internal, load_project_agents_prefs_internal,
+    read_agents_file_internal, save_project_agents_prefs_internal, scan_agents_commands_internal,
+    scan_agents_md_internal, scan_agents_skills_internal, scan_global_agents_md_internal,
+    sync_agents_items_internal, write_agents_file_internal, AgentsMdScanResult,
+    AgentsRootLinkStatus, AgentsScope, CommandsScanResult, ProjectAgentsPrefs,
+    SaveProjectAgentsPrefsResult, SkillsScanResult, SyncReport, SyncRequest,
 };
 use crate::commands::settings::get_settings_internal;
 

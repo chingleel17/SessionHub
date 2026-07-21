@@ -81,10 +81,13 @@ pub(crate) fn install_or_update_antigravity_integration() -> ProviderIntegration
         }
     };
 
-    let group = config.entry(ANTIGRAVITY_HOOK_GROUP_NAME.to_string()).or_default();
-    group
-        .events
-        .insert(ANTIGRAVITY_MANAGED_EVENT.to_string(), vec![managed_matcher()]);
+    let group = config
+        .entry(ANTIGRAVITY_HOOK_GROUP_NAME.to_string())
+        .or_default();
+    group.events.insert(
+        ANTIGRAVITY_MANAGED_EVENT.to_string(),
+        vec![managed_matcher()],
+    );
 
     if let Err(error) = write_antigravity_hooks(&scope, &config) {
         return build_provider_integration_status(
@@ -237,10 +240,13 @@ mod tests {
         let mut config = AntigravityHookConfig::new();
         assert!(!has_managed_group(&config));
 
-        let group = config.entry(ANTIGRAVITY_HOOK_GROUP_NAME.to_string()).or_default();
-        group
-            .events
-            .insert(ANTIGRAVITY_MANAGED_EVENT.to_string(), vec![managed_matcher()]);
+        let group = config
+            .entry(ANTIGRAVITY_HOOK_GROUP_NAME.to_string())
+            .or_default();
+        group.events.insert(
+            ANTIGRAVITY_MANAGED_EVENT.to_string(),
+            vec![managed_matcher()],
+        );
 
         assert!(has_managed_group(&config));
     }
@@ -258,8 +264,9 @@ mod manual_smoke_tests {
 
         // 起始狀態不假設（可能已由使用者透過 UI 安裝），先強制清乾淨再驗證完整循環
         let _ = uninstall_antigravity_integration();
-        let before = crate::antigravity_hooks::read_antigravity_hooks(&AntigravityHookScope::Global)
-            .expect("read before");
+        let before =
+            crate::antigravity_hooks::read_antigravity_hooks(&AntigravityHookScope::Global)
+                .expect("read before");
         assert!(
             !before.contains_key(ANTIGRAVITY_HOOK_GROUP_NAME),
             "marker group should not exist before install"

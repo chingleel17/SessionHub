@@ -11,15 +11,16 @@ use super::bridge::read_bridge_diagnostics;
 use super::{build_install_failure_status, build_provider_integration_status};
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "3";
+const HOOK_SCRIPT_VERSION: &str = "4";
 
-const CLAUDE_MANAGED_EVENTS: [&str; 6] = [
+const CLAUDE_MANAGED_EVENTS: [&str; 7] = [
     "SessionStart",
     "PreToolUse",
     "PostToolUse",
     "UserPromptSubmit",
     "Stop",
     "Notification",
+    "PermissionRequest",
 ];
 
 // Node.js 主軌（.cjs，強制 CommonJS）。record-event.cjs 自帶 retry，
@@ -36,6 +37,8 @@ const SCRIPT_ON_USER_PROMPT_SUBMIT_JS: &str =
     include_str!("../../../.claude/hooks/on-user-prompt-submit.cjs");
 const SCRIPT_ON_STOP_JS: &str = include_str!("../../../.claude/hooks/on-stop.cjs");
 const SCRIPT_ON_NOTIFICATION_JS: &str = include_str!("../../../.claude/hooks/on-notification.cjs");
+const SCRIPT_ON_PERMISSION_REQUEST_JS: &str =
+    include_str!("../../../.claude/hooks/on-permission-request.cjs");
 
 // sh fallback（無 node 環境時的手動退路）
 const MODULE_DB_OPS_SH: &str = include_str!("../../../.claude/hooks/modules/db-ops.sh");
@@ -48,7 +51,7 @@ const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
     include_str!("../../../.claude/hooks/on-user-prompt-submit.sh");
 const SCRIPT_ON_STOP_SH: &str = include_str!("../../../.claude/hooks/on-stop.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 16] {
+fn hook_script_entries() -> [(&'static str, &'static str); 17] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
         ("modules/notify.cjs", MODULE_NOTIFY_JS),
@@ -58,6 +61,7 @@ fn hook_script_entries() -> [(&'static str, &'static str); 16] {
         ("on-user-prompt-submit.cjs", SCRIPT_ON_USER_PROMPT_SUBMIT_JS),
         ("on-stop.cjs", SCRIPT_ON_STOP_JS),
         ("on-notification.cjs", SCRIPT_ON_NOTIFICATION_JS),
+        ("on-permission-request.cjs", SCRIPT_ON_PERMISSION_REQUEST_JS),
         ("modules/db-ops.sh", MODULE_DB_OPS_SH),
         ("modules/task-queue.sh", MODULE_TASK_QUEUE_SH),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
@@ -186,6 +190,7 @@ fn render_claude_integration(
             "on-notification.cjs",
             Some("permission_prompt|idle_prompt"),
         ),
+        ("PermissionRequest", "on-permission-request.cjs", None),
     ];
 
     for (event_name, script_cjs, matcher) in managed_groups {
@@ -249,6 +254,13 @@ fn has_any_managed_claude_event(root: &Value) -> bool {
 
 fn effective_hook_status_path(hook_scripts_path: Option<&str>) -> Option<PathBuf> {
     resolve_effective_hook_scripts_root(hook_scripts_path).ok()
+}
+
+fn hook_scripts_are_current(hook_scripts_path: Option<&str>) -> bool {
+    resolve_effective_hook_scripts_root(hook_scripts_path)
+        .ok()
+        .and_then(|root| fs::read_to_string(root.join(".version")).ok())
+        .is_some_and(|version| version.trim() == HOOK_SCRIPT_VERSION)
 }
 
 pub(crate) fn detect_claude_integration_status(
@@ -316,7 +328,7 @@ pub(crate) fn detect_claude_integration_status(
         }
     };
 
-    if has_all_managed_claude_events(&root) {
+    if has_all_managed_claude_events(&root) && hook_scripts_are_current(hook_scripts_path) {
         build_provider_integration_status(
             CLAUDE_PROVIDER,
             ProviderIntegrationState::Installed,
@@ -332,7 +344,7 @@ pub(crate) fn detect_claude_integration_status(
             status_path,
             diagnostics,
             None,
-            Some("缺少部分 Claude hook 事件，請重新安裝以完整支援所有事件。".to_string()),
+            Some("Claude hook 事件或腳本版本不完整，請重新安裝以套用最新整合。".to_string()),
         )
     } else {
         build_provider_integration_status(
@@ -621,6 +633,68 @@ mod tests {
         assert!(result.contains("node "));
         assert!(result.contains("on-session-start.cjs"));
         assert!(result.contains("on-post-tool-use.cjs"));
+        assert!(result.contains("on-permission-request.cjs"));
+    }
+
+    #[test]
+    fn notification_and_permission_request_hooks_have_expected_matchers() {
+        let bridge = fake_bridge_path();
+        let result =
+            render_claude_integration(&bridge, &fake_hook_root(), None, Path::new("settings.json"))
+                .unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+
+        let notification = v["hooks"]["Notification"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| is_sessionhub_hook_group(group))
+            .unwrap();
+        assert_eq!(notification["matcher"], "permission_prompt|idle_prompt");
+
+        let permission_request = v["hooks"]["PermissionRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| is_sessionhub_hook_group(group))
+            .unwrap();
+        assert!(permission_request.get("matcher").is_none());
+    }
+
+    #[test]
+    fn uninstall_preserves_user_permission_request_hook() {
+        let bridge = fake_bridge_path();
+        let existing = r#"{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"node user-hook.cjs"}]}]}}"#;
+        let installed = render_claude_integration(
+            &bridge,
+            &fake_hook_root(),
+            Some(existing),
+            Path::new("settings.json"),
+        )
+        .unwrap();
+        let removed =
+            remove_claude_integration_from_content(&installed, Path::new("settings.json")).unwrap();
+        let v: Value = serde_json::from_str(&removed).unwrap();
+        let hooks = v["hooks"]["PermissionRequest"].as_array().unwrap();
+
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["hooks"][0]["command"], "node user-hook.cjs");
+    }
+
+    #[test]
+    fn hook_script_version_detects_outdated_install() {
+        let root = std::env::temp_dir().join(format!(
+            "sessionhub-claude-hook-version-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".version"), "3").unwrap();
+        let root_string = root.to_string_lossy().to_string();
+        assert!(!hook_scripts_are_current(Some(&root_string)));
+
+        fs::write(root.join(".version"), HOOK_SCRIPT_VERSION).unwrap();
+        assert!(hook_scripts_are_current(Some(&root_string)));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

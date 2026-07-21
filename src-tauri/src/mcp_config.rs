@@ -10,10 +10,16 @@ use crate::agents_config::atomic_write_file;
 use crate::settings::{
     default_app_data_dir, default_opencode_config_root, resolve_codex_root, resolve_copilot_root,
 };
-use crate::types::{AppSettings, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER};
+use crate::types::{
+    AppSettings, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
+};
 
-pub(crate) const MCP_PROVIDERS: &[&str] =
-    &[CLAUDE_PROVIDER, CODEX_PROVIDER, OPENCODE_PROVIDER, COPILOT_PROVIDER];
+pub(crate) const MCP_PROVIDERS: &[&str] = &[
+    CLAUDE_PROVIDER,
+    CODEX_PROVIDER,
+    OPENCODE_PROVIDER,
+    COPILOT_PROVIDER,
+];
 
 const MCP_DISABLED_FILE_NAME: &str = "mcp-disabled.json";
 
@@ -105,9 +111,8 @@ pub(crate) fn mcp_config_path(provider: &str, scope: &McpScope) -> Result<PathBu
                     Ok(resolve_codex_root(Some(settings.codex_root.as_str()))?.join("config.toml"))
                 }
                 OPENCODE_PROVIDER => Ok(default_opencode_config_root()?.join("opencode.json")),
-                COPILOT_PROVIDER => Ok(
-                    resolve_copilot_root(Some(settings.copilot_root.as_str()))?.join("mcp-config.json"),
-                ),
+                COPILOT_PROVIDER => Ok(resolve_copilot_root(Some(settings.copilot_root.as_str()))?
+                    .join("mcp-config.json")),
                 _ => Err(format!("unknown MCP provider: {provider}")),
             }
         }
@@ -274,9 +279,7 @@ fn toml_value_to_json(value: &TomlValue) -> Value {
         TomlValue::Boolean(b) => Value::Bool(*b.value()),
         // datetime→string：TOML 原生 datetime 無對應 JSON 型別，序列化為字串保留資訊（D2）。
         TomlValue::Datetime(dt) => Value::String(dt.value().to_string()),
-        TomlValue::Array(array) => {
-            Value::Array(array.iter().map(toml_value_to_json).collect())
-        }
+        TomlValue::Array(array) => Value::Array(array.iter().map(toml_value_to_json).collect()),
         TomlValue::InlineTable(table) => {
             let mut map = Map::new();
             for (key, value) in table.iter() {
@@ -324,7 +327,9 @@ fn json_to_toml_item(value: &Value) -> Result<Item, String> {
 
 // ---------- List ----------
 
-pub(crate) fn list_mcp_configs_internal(scope: &McpScope) -> Result<Vec<McpProviderConfig>, String> {
+pub(crate) fn list_mcp_configs_internal(
+    scope: &McpScope,
+) -> Result<Vec<McpProviderConfig>, String> {
     let disabled_store = load_disabled_store()?;
     let mut results = Vec::with_capacity(MCP_PROVIDERS.len());
     for &provider in MCP_PROVIDERS {
@@ -537,7 +542,10 @@ pub(crate) fn delete_mcp_server_internal(
         }
         ConfigFormat::Toml => {
             let mut document = read_toml_document(&write_path)?;
-            if let Some(section) = document.get_mut(spec.section_key).and_then(Item::as_table_mut) {
+            if let Some(section) = document
+                .get_mut(spec.section_key)
+                .and_then(Item::as_table_mut)
+            {
                 if section.remove(name).is_some() {
                     write_toml_document(&write_path, &document)?;
                 }
@@ -668,13 +676,13 @@ fn set_store_backed_enabled(
 
 pub(crate) fn is_codex_project_trusted(project_cwd: &str) -> Result<bool, String> {
     let settings = load_mcp_settings()?;
-    let codex_config_path = resolve_codex_root(Some(settings.codex_root.as_str()))?.join("config.toml");
+    let codex_config_path =
+        resolve_codex_root(Some(settings.codex_root.as_str()))?.join("config.toml");
     if !codex_config_path.is_file() {
         return Ok(false);
     }
-    let content = fs::read_to_string(&codex_config_path).map_err(|error| {
-        format!("failed to read {}: {error}", codex_config_path.display())
-    })?;
+    let content = fs::read_to_string(&codex_config_path)
+        .map_err(|error| format!("failed to read {}: {error}", codex_config_path.display()))?;
     let document = content
         .parse::<DocumentMut>()
         .map_err(|error| format!("failed to parse {}: {error}", codex_config_path.display()))?;
@@ -751,7 +759,11 @@ mod tests {
                 "COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE",
                 app_data.parent().unwrap(),
             );
-            Self { _lock: lock, temp_dir, saved_vars }
+            Self {
+                _lock: lock,
+                temp_dir,
+                saved_vars,
+            }
         }
 
         fn home(&self) -> PathBuf {
@@ -815,7 +827,10 @@ mod tests {
         assert!(!content.contains("enabled = false"));
 
         let configs = list_mcp_configs_internal(&McpScope::Global).unwrap();
-        let codex = configs.iter().find(|c| c.provider_id == CODEX_PROVIDER).unwrap();
+        let codex = configs
+            .iter()
+            .find(|c| c.provider_id == CODEX_PROVIDER)
+            .unwrap();
         assert_eq!(codex.servers.len(), 2);
     }
 
@@ -836,7 +851,10 @@ mod tests {
         assert_eq!(value.get("otherSetting"), Some(&Value::Bool(true)));
 
         let configs = list_mcp_configs_internal(&McpScope::Global).unwrap();
-        let claude = configs.iter().find(|c| c.provider_id == CLAUDE_PROVIDER).unwrap();
+        let claude = configs
+            .iter()
+            .find(|c| c.provider_id == CLAUDE_PROVIDER)
+            .unwrap();
         let entry = claude.servers.iter().find(|s| s.name == "srv").unwrap();
         assert!(!entry.enabled);
 
@@ -853,7 +871,11 @@ mod tests {
         let config_root = env.home().join(".config").join("opencode");
         fs::create_dir_all(&config_root).unwrap();
         let config_path = config_root.join("opencode.json");
-        fs::write(&config_path, r#"{"mcp": {"old-name": {"command": ["run"]}}}"#).unwrap();
+        fs::write(
+            &config_path,
+            r#"{"mcp": {"old-name": {"command": ["run"]}}}"#,
+        )
+        .unwrap();
 
         upsert_mcp_server_internal(
             &McpScope::Global,
@@ -891,8 +913,14 @@ mod tests {
         let err = upsert_mcp_server_internal(&scope, COPILOT_PROVIDER, "  ", None, "{}");
         assert!(err.is_err());
 
-        upsert_mcp_server_internal(&scope, COPILOT_PROVIDER, "srv", None, r#"{"url": "http://x"}"#)
-            .unwrap();
+        upsert_mcp_server_internal(
+            &scope,
+            COPILOT_PROVIDER,
+            "srv",
+            None,
+            r#"{"url": "http://x"}"#,
+        )
+        .unwrap();
         let written_path = project_dir.join(".github").join("mcp.json");
         assert!(written_path.is_file());
     }
@@ -940,11 +968,19 @@ mod tests {
     fn project_scope_and_global_disabled_store_are_isolated() {
         let env = EnvGuard::new("scope-isolation");
         let claude_json = env.home().join(".claude.json");
-        fs::write(&claude_json, r#"{"mcpServers": {"srv": {"command": "global"}}}"#).unwrap();
+        fs::write(
+            &claude_json,
+            r#"{"mcpServers": {"srv": {"command": "global"}}}"#,
+        )
+        .unwrap();
 
         let project_dir = env.project_dir();
         let project_mcp = project_dir.join(".mcp.json");
-        fs::write(&project_mcp, r#"{"mcpServers": {"srv": {"command": "project"}}}"#).unwrap();
+        fs::write(
+            &project_mcp,
+            r#"{"mcpServers": {"srv": {"command": "project"}}}"#,
+        )
+        .unwrap();
         let scope = McpScope::Project {
             project_cwd: project_dir.to_string_lossy().to_string(),
         };
@@ -957,14 +993,28 @@ mod tests {
             .iter()
             .find(|c| c.provider_id == CLAUDE_PROVIDER)
             .unwrap();
-        assert!(!global_claude.servers.iter().find(|s| s.name == "srv").unwrap().enabled);
+        assert!(
+            !global_claude
+                .servers
+                .iter()
+                .find(|s| s.name == "srv")
+                .unwrap()
+                .enabled
+        );
 
         let project_configs = list_mcp_configs_internal(&scope).unwrap();
         let project_claude = project_configs
             .iter()
             .find(|c| c.provider_id == CLAUDE_PROVIDER)
             .unwrap();
-        assert!(!project_claude.servers.iter().find(|s| s.name == "srv").unwrap().enabled);
+        assert!(
+            !project_claude
+                .servers
+                .iter()
+                .find(|s| s.name == "srv")
+                .unwrap()
+                .enabled
+        );
 
         set_mcp_server_enabled_internal(&McpScope::Global, CLAUDE_PROVIDER, "srv", true).unwrap();
         let project_configs = list_mcp_configs_internal(&scope).unwrap();
@@ -972,18 +1022,32 @@ mod tests {
             .iter()
             .find(|c| c.provider_id == CLAUDE_PROVIDER)
             .unwrap();
-        assert!(!project_claude.servers.iter().find(|s| s.name == "srv").unwrap().enabled);
+        assert!(
+            !project_claude
+                .servers
+                .iter()
+                .find(|s| s.name == "srv")
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
     fn delete_is_idempotent() {
         let env = EnvGuard::new("delete-idempotent");
         let claude_json = env.home().join(".claude.json");
-        fs::write(&claude_json, r#"{"mcpServers": {"srv": {"command": "foo"}}}"#).unwrap();
+        fs::write(
+            &claude_json,
+            r#"{"mcpServers": {"srv": {"command": "foo"}}}"#,
+        )
+        .unwrap();
         delete_mcp_server_internal(&McpScope::Global, CLAUDE_PROVIDER, "srv").unwrap();
         delete_mcp_server_internal(&McpScope::Global, CLAUDE_PROVIDER, "srv").unwrap();
         let configs = list_mcp_configs_internal(&McpScope::Global).unwrap();
-        let claude = configs.iter().find(|c| c.provider_id == CLAUDE_PROVIDER).unwrap();
+        let claude = configs
+            .iter()
+            .find(|c| c.provider_id == CLAUDE_PROVIDER)
+            .unwrap();
         assert!(claude.servers.is_empty());
     }
 }

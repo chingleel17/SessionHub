@@ -10,6 +10,7 @@ use std::os::windows::process::CommandExt;
 use rusqlite::Connection;
 
 use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_meta};
+use crate::sessions::configure_msys_stackdump_suppression;
 use crate::settings::detect_vscode_path;
 use crate::types::*;
 
@@ -413,6 +414,8 @@ pub(crate) fn open_terminal_internal(terminal_path: &str, cwd: &str) -> Result<(
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+    configure_msys_stackdump_suppression(&mut cmd);
 
     cmd.spawn()
         .map_err(|error| format!("failed to open terminal: {error}"))?;

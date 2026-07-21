@@ -11,7 +11,9 @@ use crate::settings::resolve_antigravity_root;
 pub(crate) enum AntigravityHookScope {
     Global,
     #[serde(rename_all = "camelCase")]
-    Project { project_cwd: String },
+    Project {
+        project_cwd: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,11 +45,15 @@ pub(crate) struct AntigravityHookGroup {
 pub(crate) type AntigravityHookConfig = BTreeMap<String, AntigravityHookGroup>;
 
 fn global_hooks_path() -> Result<PathBuf, String> {
-    Ok(resolve_antigravity_root(None)?.join("config").join("hooks.json"))
+    Ok(resolve_antigravity_root(None)?
+        .join("config")
+        .join("hooks.json"))
 }
 
 fn project_hooks_path(project_cwd: &str) -> PathBuf {
-    PathBuf::from(project_cwd).join(".agents").join("hooks.json")
+    PathBuf::from(project_cwd)
+        .join(".agents")
+        .join("hooks.json")
 }
 
 pub(crate) fn resolve_hooks_path(scope: &AntigravityHookScope) -> Result<PathBuf, String> {
@@ -151,7 +157,8 @@ mod tests {
                 ]
             }
         }"#;
-        let parsed: AntigravityHookConfig = serde_json::from_str(sample).expect("parse sample schema");
+        let parsed: AntigravityHookConfig =
+            serde_json::from_str(sample).expect("parse sample schema");
         let group = parsed.get("群組名").expect("group present");
         assert_eq!(group.enabled, Some(true));
         let matchers = group.events.get("PreToolUse").expect("event present");

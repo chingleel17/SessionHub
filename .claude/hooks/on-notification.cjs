@@ -14,39 +14,55 @@ const {
 } = require(path.join(__dirname, "modules", "record-event.cjs"));
 const { sendNotification } = require(path.join(__dirname, "modules", "notify.cjs"));
 
-try {
-    const { bridgePath, provider } = parseHookArgs(process.argv.slice(2), "claude");
-    if (!bridgePath) process.exit(0);
-
-    const payload = readHookPayload();
-    if (!payload) process.exit(0);
-
-    const matcher = getHookStringValue(payload, ["matcher", "event"]);
+function handleNotification({
+    payload,
+    bridgePath,
+    provider,
+    recordEvent = writeBridgeEventRecord,
+    notify = sendNotification,
+}) {
+    const notificationType = getHookStringValue(payload, ["notification_type"]);
     const sessionId = getHookStringValue(payload, ["session_id", "sessionId"]);
 
-    writeBridgeEventRecord({
+    recordEvent({
         bridgePath,
         provider,
         eventType: "notification",
         payload,
-        title: matcher,
+        title: notificationType,
     });
 
-    if (matcher === "permission_prompt") {
-        sendNotification({
+    if (notificationType === "permission_prompt") {
+        notify({
             sessionId,
             title: "SessionHub — 需要您授權",
             body: "Claude 需要您確認工具使用授權",
             kind: "intervention",
         });
-    } else if (matcher === "idle_prompt") {
-        sendNotification({
+    } else if (notificationType === "idle_prompt") {
+        notify({
             sessionId,
             title: "SessionHub — 等待您回應",
             body: "Claude 正在等待您的決策或回覆",
             kind: "intervention",
         });
     }
-} catch (err) {
-    writeHookErrorLog(err.message, "notification");
+
+    return notificationType;
 }
+
+if (require.main === module) {
+    try {
+        const { bridgePath, provider } = parseHookArgs(process.argv.slice(2), "claude");
+        if (bridgePath) {
+            const payload = readHookPayload();
+            if (payload) {
+                handleNotification({ payload, bridgePath, provider });
+            }
+        }
+    } catch (err) {
+        writeHookErrorLog(err.message, "notification");
+    }
+}
+
+module.exports = { handleNotification };

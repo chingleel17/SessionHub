@@ -207,7 +207,9 @@ fn parse_scoped_weekly_windows(
 
         let window_key = format!("seven_day_{}", display_name.to_lowercase());
         if existing_keys.iter().any(|k| k == &window_key)
-            || windows.iter().any(|w: &QuotaWindow| w.window_key == window_key)
+            || windows
+                .iter()
+                .any(|w: &QuotaWindow| w.window_key == window_key)
         {
             continue;
         }
@@ -366,8 +368,7 @@ impl QuotaAdapter for ClaudeAdapter {
         }
 
         // 追加 limits[] 中依模型範圍的每週視窗（如 Fable），頂層 key 為 null 故只在此出現
-        let existing_keys: Vec<String> =
-            windows.iter().map(|w| w.window_key.clone()).collect();
+        let existing_keys: Vec<String> = windows.iter().map(|w| w.window_key.clone()).collect();
         windows.extend(parse_scoped_weekly_windows(&body, &existing_keys));
 
         // Parse extra_usage

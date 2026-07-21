@@ -295,7 +295,10 @@ fn is_activity_only_event(event_type: &str) -> bool {
 }
 
 /// 依 hook eventType 計算前端需要的 (status, detail)。
-fn derive_activity_status(event_type: &str, stop_reason: Option<&str>) -> (String, Option<String>) {
+pub(crate) fn derive_activity_status(
+    event_type: &str,
+    stop_reason: Option<&str>,
+) -> (String, Option<String>) {
     match event_type {
         "session.started" | "prompt.submitted" => {
             ("active".to_string(), Some("thinking".to_string()))
@@ -310,6 +313,10 @@ fn derive_activity_status(event_type: &str, stop_reason: Option<&str>) -> (Strin
                 ("waiting".to_string(), None)
             }
         }
+        "permission.updated" | "permission.asked" | "permission.v2.asked" => {
+            ("waiting".to_string(), None)
+        }
+        "permission.replied" | "permission.v2.replied" => ("active".to_string(), None),
         _ => ("idle".to_string(), None),
     }
 }
@@ -538,6 +545,33 @@ pub(crate) fn process_provider_bridge_event(
             emit_event_log(app, make_log_entry(&record, "targeted"));
             return Ok(true);
         }
+    }
+
+    if provider == OPENCODE_PROVIDER
+        && matches!(
+            record.event_type.as_str(),
+            "permission.updated"
+                | "permission.asked"
+                | "permission.v2.asked"
+                | "permission.replied"
+                | "permission.v2.replied"
+        )
+    {
+        let (status, detail) = derive_activity_status(&record.event_type, None);
+        let payload = ActivityHintPayload {
+            cwd: String::new(),
+            event_type: record.event_type.clone(),
+            title: record.title.clone(),
+            error: record.error.clone(),
+            session_id: record.session_id.clone(),
+            status: Some(status),
+            detail,
+            last_activity_at: Some(current_timestamp_iso()),
+        };
+        app.emit("opencode-activity-hint", &payload)
+            .map_err(|error| format!("failed to emit opencode-activity-hint: {error}"))?;
+        emit_event_log(app, make_log_entry(&record, "activity_hint"));
+        return Ok(true);
     }
 
     let rate_ok = emit_provider_refresh(app, refresh_state, provider)?;

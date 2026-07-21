@@ -1354,6 +1354,40 @@ function App() {
         }
       );
 
+      const unlistenOpenCodeActivityHint = await listen<ActivityHintPayload>(
+        "opencode-activity-hint",
+        (event) => {
+          if (!mounted) return;
+          const { cwd, sessionId: hintSessionId, status: hintStatus, detail: hintDetail, lastActivityAt } = event.payload;
+          const normalizedCwd = normalizePath(cwd);
+          const session = hintSessionId
+            ? sessionsDataRef.current.find((s) => s.id === hintSessionId)
+            : sessionsDataRef.current.find((s) => normalizePath(s.cwd ?? "") === normalizedCwd);
+          if (!session || !hintStatus) return;
+
+          queryClient.setQueriesData<SessionActivityStatus[]>(
+            { queryKey: ["activity_statuses"], exact: false },
+            (old) => {
+              if (!old) return old;
+              const idx = old.findIndex((s) => s.sessionId === session.id);
+              const updated: SessionActivityStatus = {
+                ...(old[idx] ?? { sessionId: session.id }),
+                status: hintStatus,
+                detail: hintDetail ?? undefined,
+                lastActivityAt: lastActivityAt ?? old[idx]?.lastActivityAt ?? null,
+              };
+              if (idx === -1) return [...old, updated];
+              const next = [...old];
+              next[idx] = updated;
+              return next;
+            },
+          );
+
+          setRealtimeStatus("active");
+          setLastRealtimeSyncAt(getRealtimeSyncLabel());
+        }
+      );
+
       const unlistenPlan = await listen<string>("plan-file-changed", async (event) => {
         if (!activePlanSession || event.payload !== activePlanSession.sessionDir) return;
         await queryClient.invalidateQueries({ queryKey: ["plan", activePlanSession.sessionDir] });
@@ -1392,6 +1426,7 @@ function App() {
         unlistenClaudeTargeted();
         unlistenActivityHint();
         unlistenClaudeActivityHint();
+        unlistenOpenCodeActivityHint();
         unlistenPlan();
         unlistenProjectFiles();
         unlistenQuotaSnapshots();

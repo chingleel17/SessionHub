@@ -107,9 +107,7 @@ pub fn set_provider_quota_settings(
 }
 
 #[tauri::command]
-pub fn get_claude_usage_blocks(
-    session_dir: String,
-) -> Result<Vec<ClaudeUsageBlock>, String> {
+pub fn get_claude_usage_blocks(session_dir: String) -> Result<Vec<ClaudeUsageBlock>, String> {
     let path = std::path::PathBuf::from(&session_dir);
     if !path.exists() || !is_claude_session_file(&path) {
         return Err(format!("not a valid Claude session file: {session_dir}"));

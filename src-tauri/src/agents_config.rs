@@ -123,7 +123,9 @@ pub(crate) enum AgentsRootLinkStatus {
     NotLinked,
     Missing,
     #[serde(rename_all = "camelCase")]
-    Partial { unmatched_items: Vec<String> },
+    Partial {
+        unmatched_items: Vec<String>,
+    },
     UnlinkedPhysical,
 }
 
@@ -533,7 +535,9 @@ fn link_agents_root_to(
     let status = check_agents_root_link_against(agents_root, source_root)?;
     if status != AgentsRootLinkStatus::Missing {
         return Err(match status {
-            AgentsRootLinkStatus::Linked => "~/.agents is already linked to the custom source".to_string(),
+            AgentsRootLinkStatus::Linked => {
+                "~/.agents is already linked to the custom source".to_string()
+            }
             AgentsRootLinkStatus::Partial { .. } => {
                 "~/.agents contains partial links; it will not be overwritten".to_string()
             }
@@ -567,7 +571,9 @@ fn link_agents_root_to(
 /// 檔案不存在、無 frontmatter 或無該欄位時回傳 `None`，不視為錯誤。
 fn read_frontmatter_description(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
-    let after_open = content.strip_prefix("---\r\n").or_else(|| content.strip_prefix("---\n"))?;
+    let after_open = content
+        .strip_prefix("---\r\n")
+        .or_else(|| content.strip_prefix("---\n"))?;
     let end = after_open.find("\n---")?;
     let frontmatter = &after_open[..end];
     let parsed: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
@@ -775,9 +781,12 @@ pub(crate) fn save_project_agents_prefs_internal(
     allow_create_project_config_dir: bool,
 ) -> Result<SaveProjectAgentsPrefsResult, String> {
     let project_path = project_agents_prefs_path(project_cwd);
-    let project_dir = project_path
-        .parent()
-        .ok_or_else(|| format!("failed to resolve project prefs parent for {}", project_path.display()))?;
+    let project_dir = project_path.parent().ok_or_else(|| {
+        format!(
+            "failed to resolve project prefs parent for {}",
+            project_path.display()
+        )
+    })?;
     let should_write_project = project_path.is_file() || allow_create_project_config_dir;
     let created_project_config_dir = should_write_project && !project_dir.exists();
     let target_path = if should_write_project {
@@ -1530,9 +1539,10 @@ fn skills_source_root(scope: &AgentsScope, settings: &AppSettings) -> Result<Pat
         AgentsScope::Project { project_cwd } => {
             Ok(PathBuf::from(project_cwd).join(".agents").join("skills"))
         }
-        AgentsScope::Global => {
-            Ok(resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?.join("skills"))
-        }
+        AgentsScope::Global => Ok(resolve_agents_source_root(Some(
+            settings.agents_source_root.as_str(),
+        ))?
+        .join("skills")),
     }
 }
 
@@ -1557,7 +1567,8 @@ fn skill_target_roots(
         AgentsScope::Global => {
             let claude_root =
                 resolve_claude_root(Some(settings.claude_root.as_str()))?.join("skills");
-            let source_root = resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
+            let source_root =
+                resolve_agents_source_root(Some(settings.agents_source_root.as_str()))?;
             let default_root = default_agents_root()?;
             if source_root != default_root {
                 Ok(vec![
@@ -2212,8 +2223,7 @@ mod tests {
     fn skill_target_roots_global_scope_default_source_only_targets_claude() {
         let mut settings = AppSettings::default().expect("default settings");
         settings.agents_source_root = String::new();
-        let targets =
-            skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
+        let targets = skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0, CLAUDE_PROVIDER);
     }
@@ -2222,8 +2232,7 @@ mod tests {
     fn skill_target_roots_global_scope_custom_source_targets_agents_and_claude() {
         let mut settings = AppSettings::default().expect("default settings");
         settings.agents_source_root = "D:/custom/agents".to_string();
-        let targets =
-            skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
+        let targets = skill_target_roots(&AgentsScope::Global, &settings).expect("targets");
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].0, AGENTS_PROVIDER);
         assert_eq!(targets[1].0, CLAUDE_PROVIDER);
@@ -2294,12 +2303,12 @@ mod tests {
             );
             assert!(link_agents_root_to(&agents_root, &source_root).is_err());
 
-            create_directory_symlink(
-                &source_root.join("skills"),
-                &agents_root.join("skills"),
-            )
-            .expect("link skills");
-            create_file_symlink(&source_root.join("AGENTS.md"), &agents_root.join("AGENTS.md"));
+            create_directory_symlink(&source_root.join("skills"), &agents_root.join("skills"))
+                .expect("link skills");
+            create_file_symlink(
+                &source_root.join("AGENTS.md"),
+                &agents_root.join("AGENTS.md"),
+            );
             assert_eq!(
                 check_agents_root_link_against(&agents_root, &source_root).expect("check linked"),
                 AgentsRootLinkStatus::Linked
@@ -2308,7 +2317,8 @@ mod tests {
             fs::remove_dir(&agents_root.join("skills")).expect("remove skills link");
             fs::create_dir_all(agents_root.join("skills")).expect("create physical skills copy");
             assert_eq!(
-                check_agents_root_link_against(&agents_root, &source_root).expect("check copied item"),
+                check_agents_root_link_against(&agents_root, &source_root)
+                    .expect("check copied item"),
                 AgentsRootLinkStatus::Partial {
                     unmatched_items: vec!["skills".to_string()],
                 }
@@ -2330,7 +2340,8 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         {
-            create_directory_symlink(&other_source, &agents_root).expect("create other source link");
+            create_directory_symlink(&other_source, &agents_root)
+                .expect("create other source link");
             assert_eq!(
                 check_agents_root_link_against(&agents_root, &source_root).expect("check"),
                 AgentsRootLinkStatus::NotLinked
@@ -2554,7 +2565,10 @@ mod tests {
             .iter()
             .find(|skill| skill.name == "team/demo-skill")
             .expect("nested skill entry");
-        assert!(entry.source_dir.ends_with("team\\demo-skill") || entry.source_dir.ends_with("team/demo-skill"));
+        assert!(
+            entry.source_dir.ends_with("team\\demo-skill")
+                || entry.source_dir.ends_with("team/demo-skill")
+        );
 
         fs::remove_dir_all(&root).expect("cleanup root");
     }
