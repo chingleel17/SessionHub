@@ -45,7 +45,7 @@ function renderMarkdownHtml(content: string, interactiveTasks: boolean): string 
       }
 
       const currentTaskIndex = taskIndex++;
-      const body = stripParagraphWrapper(this.parser.parse(item.tokens, !!item.loose));
+      const body = stripParagraphWrapper(this.parser.parse(item.tokens));
       const checkedClass = item.checked ? " explorer-task-content--checked" : "";
 
       return [
