@@ -140,7 +140,10 @@ mod tests {
             "2026-07-21T00:05:00.000Z".to_string(),
         );
 
-        assert!(result.is_none(), "identical upsert should not report change");
+        assert!(
+            result.is_none(),
+            "identical upsert should not report change"
+        );
     }
 
     #[test]
@@ -164,7 +167,10 @@ mod tests {
         let registry = InterventionRegistry::default();
         let result = registry.remove("missing-session");
 
-        assert!(result.is_none(), "removing absent session should not report change");
+        assert!(
+            result.is_none(),
+            "removing absent session should not report change"
+        );
     }
 
     #[test]

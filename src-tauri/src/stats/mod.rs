@@ -363,7 +363,6 @@ pub(crate) fn parse_session_stats_internal(session_dir: &Path) -> Result<Session
     Ok(stats)
 }
 
-
 mod claude;
 mod opencode;
 

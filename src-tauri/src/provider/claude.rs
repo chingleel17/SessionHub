@@ -11,7 +11,7 @@ use super::bridge::read_bridge_diagnostics;
 use super::{build_install_failure_status, build_provider_integration_status};
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "4";
+const HOOK_SCRIPT_VERSION: &str = "6";
 
 const CLAUDE_MANAGED_EVENTS: [&str; 7] = [
     "SessionStart",

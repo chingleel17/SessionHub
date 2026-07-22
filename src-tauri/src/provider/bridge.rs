@@ -313,7 +313,9 @@ pub(crate) fn derive_activity_status(
                 ("waiting".to_string(), None)
             }
         }
-        "permission.updated" | "permission.asked" | "permission.v2.asked"
+        "permission.updated"
+        | "permission.asked"
+        | "permission.v2.asked"
         | "permission.requested" => ("waiting".to_string(), None),
         "permission.replied" | "permission.v2.replied" => ("active".to_string(), None),
         // Claude Notification hook：permission_prompt / idle_prompt 代表需授權/等待回應，
@@ -369,7 +371,12 @@ fn sync_intervention_registry(
     let registry = app.state::<InterventionRegistry>();
     let changed = if status == "waiting" {
         let project_name = derive_project_name(cwd, Some(session_id), provider);
-        registry.upsert(session_id, project_name, tool_label, current_timestamp_iso())
+        registry.upsert(
+            session_id,
+            project_name,
+            tool_label,
+            current_timestamp_iso(),
+        )
     } else {
         registry.remove(session_id)
     };

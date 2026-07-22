@@ -1,6 +1,16 @@
-import App from "../App";
-import { EmbeddedQuotaOverlayApp } from "./EmbeddedQuotaOverlayApp";
-import { EmbeddedTrayPanelApp } from "./EmbeddedTrayPanelApp";
+import { lazy, Suspense } from "react";
+
+const App = lazy(() => import("../App"));
+const EmbeddedQuotaOverlayApp = lazy(() =>
+  import("./EmbeddedQuotaOverlayApp").then(({ EmbeddedQuotaOverlayApp }) => ({
+    default: EmbeddedQuotaOverlayApp,
+  })),
+);
+const EmbeddedTrayPanelApp = lazy(() =>
+  import("./EmbeddedTrayPanelApp").then(({ EmbeddedTrayPanelApp }) => ({
+    default: EmbeddedTrayPanelApp,
+  })),
+);
 
 const EMBEDDED_VIEW = new URLSearchParams(window.location.search).get("view");
 
@@ -9,13 +19,15 @@ if (EMBEDDED_VIEW) {
 }
 
 export default function RoutedApp() {
+  let view = <App />;
+
   if (EMBEDDED_VIEW === "quota-overlay") {
-    return <EmbeddedQuotaOverlayApp />;
+    view = <EmbeddedQuotaOverlayApp />;
   }
 
   if (EMBEDDED_VIEW === "tray-panel") {
-    return <EmbeddedTrayPanelApp />;
+    view = <EmbeddedTrayPanelApp />;
   }
 
-  return <App />;
+  return <Suspense fallback={null}>{view}</Suspense>;
 }

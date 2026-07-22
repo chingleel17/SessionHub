@@ -149,12 +149,13 @@ pub(super) fn install_hook_scripts(
     Ok(root.to_path_buf())
 }
 
-/// 安裝通知所需的 binary 資源（snoretoast.exe）至 hook 落地目錄的 `_bin/` 子目錄。
+/// 安裝通知所需的資源至 hook 落地目錄的 `_bin/` 子目錄。
 /// 僅在 Windows 平台有效，其他平台直接略過（不報錯）。
 pub(super) fn install_notification_binary(root: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let snoretoast_bytes: &[u8] = include_bytes!("../../../hooks/_bin/snoretoast.exe");
+        let sessionhub_logo_bytes: &[u8] = include_bytes!("../../icons/128x128.png");
         let bin_dir = root.join("_bin");
         ensure_parent_dir(&bin_dir.join("placeholder"))?;
         let dest = bin_dir.join("snoretoast.exe");
@@ -164,18 +165,29 @@ pub(super) fn install_notification_binary(root: &Path) -> Result<(), String> {
                 dest.display()
             )
         })?;
+        let logo_dest = bin_dir.join("sessionhub-logo.png");
+        fs::write(&logo_dest, sessionhub_logo_bytes).map_err(|error| {
+            format!(
+                "failed to write SessionHub notification image to {}: {error}",
+                logo_dest.display()
+            )
+        })?;
     }
     let _ = root; // 非 Windows 靜默略過
     Ok(())
 }
 
-/// 移除通知 binary（`_bin/snoretoast.exe`）。目錄若清空一併移除。
+/// 移除通知資源。目錄若清空一併移除。
 pub(super) fn uninstall_notification_binary(root: &Path) {
     let dest = root.join("_bin").join("snoretoast.exe");
     if dest.exists() {
         let _ = fs::remove_file(&dest);
     }
     let bin_dir = root.join("_bin");
+    let logo_dest = bin_dir.join("sessionhub-logo.png");
+    if logo_dest.exists() {
+        let _ = fs::remove_file(&logo_dest);
+    }
     remove_dir_if_empty(&bin_dir);
 }
 
@@ -353,6 +365,21 @@ mod tests {
         // 沒有使用者檔案時，modules/ 與 root 皆應被移除
         assert!(!root.exists(), "空目錄應被清除");
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn notification_assets_include_sessionhub_logo() {
+        let root = temp_root("notification-assets");
+        let _ = fs::remove_dir_all(&root);
+
+        install_notification_binary(&root).unwrap();
+
+        assert!(root.join("_bin/snoretoast.exe").exists());
+        assert!(root.join("_bin/sessionhub-logo.png").exists());
+
+        uninstall_notification_binary(&root);
+        assert!(!root.join("_bin").exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

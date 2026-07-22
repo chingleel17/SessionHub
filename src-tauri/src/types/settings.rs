@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER};
 use crate::types::{default_false, default_true, ProviderIntegrationStatus};
+use crate::types::{
+    ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
+};
 
 pub(crate) fn default_enabled_providers() -> Vec<String> {
     vec![

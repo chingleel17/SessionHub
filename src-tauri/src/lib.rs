@@ -1,3 +1,5 @@
+#![allow(linker_messages)] // Windows MSVC linker reports expected import-library creation as stdout.
+
 mod activity;
 mod agents_config;
 mod antigravity_hooks;
@@ -31,10 +33,7 @@ pub(crate) const QUOTA_OVERLAY_LABEL: &str = "quota-overlay";
 pub(crate) const TRAY_PANEL_LABEL: &str = "tray-panel";
 
 /// 將設定變更定向通知 overlay webview，避免動態建立視窗遺漏 AppHandle 廣播。
-pub(crate) fn emit_overlay_settings_changed(
-    app: &tauri::AppHandle,
-    settings: &AppSettings,
-) {
+pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &AppSettings) {
     if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
         let _ = overlay.emit("quota-overlay-settings-changed", settings);
     }
@@ -82,7 +81,10 @@ fn position_window_bottom_right(window: &tauri::WebviewWindow) {
     let screen_size = monitor.size();
     let x = screen_pos.x + screen_size.width as i32 - size.width as i32 - MARGIN;
     let y = screen_pos.y + screen_size.height as i32 - size.height as i32 - MARGIN;
-    let _ = window.set_position(tauri::PhysicalPosition::new(x.max(screen_pos.x), y.max(screen_pos.y)));
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        x.max(screen_pos.x),
+        y.max(screen_pos.y),
+    ));
 }
 
 /// 建立（或顯示）常駐 quota overlay 視窗。
@@ -234,20 +236,22 @@ fn position_panel_near_tray(
     let margin = 12.0_f64;
 
     // 使用 tray 所在螢幕的實體座標與原點，支援副螢幕不在 (0, 0) 的情況。
-    let monitor = tray_rect.and_then(|(tray_x, tray_y)| {
-        app.available_monitors().ok().and_then(|monitors| {
-            monitors.into_iter().find(|monitor| {
-                let position = monitor.position();
-                let size = monitor.size();
-                let right = position.x as f64 + size.width as f64;
-                let bottom = position.y as f64 + size.height as f64;
-                tray_x >= position.x as f64
-                    && tray_x <= right
-                    && tray_y >= position.y as f64
-                    && tray_y <= bottom
+    let monitor = tray_rect
+        .and_then(|(tray_x, tray_y)| {
+            app.available_monitors().ok().and_then(|monitors| {
+                monitors.into_iter().find(|monitor| {
+                    let position = monitor.position();
+                    let size = monitor.size();
+                    let right = position.x as f64 + size.width as f64;
+                    let bottom = position.y as f64 + size.height as f64;
+                    tray_x >= position.x as f64
+                        && tray_x <= right
+                        && tray_y >= position.y as f64
+                        && tray_y <= bottom
+                })
             })
         })
-    }).or_else(|| window.current_monitor().ok().flatten());
+        .or_else(|| window.current_monitor().ok().flatten());
 
     let (screen_x, screen_y, screen_w, screen_h, scale) = monitor
         .map(|monitor| {

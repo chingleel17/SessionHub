@@ -8,9 +8,7 @@ use rusqlite::{params, Connection};
 use crate::db::init_db;
 use crate::types::SessionStats;
 
-use super::{
-    backfill_missing_stats_internal, session_events_mtime, upsert_session_stats_cache,
-};
+use super::{backfill_missing_stats_internal, session_events_mtime, upsert_session_stats_cache};
 
 fn create_temp_dir(name: &str) -> PathBuf {
     let suffix = SystemTime::now()
@@ -85,8 +83,8 @@ fn backfill_skips_cached_and_live_sessions() {
         "2026-05-13T08:00:00Z",
     );
 
-    let cached_mtime = session_events_mtime(&cached_dir.join("events.jsonl"))
-        .expect("cached mtime should read");
+    let cached_mtime =
+        session_events_mtime(&cached_dir.join("events.jsonl")).expect("cached mtime should read");
     upsert_session_stats_cache(
         &connection,
         "cached-session",
@@ -95,8 +93,8 @@ fn backfill_skips_cached_and_live_sessions() {
     )
     .expect("cached stats should insert");
 
-    let processed = backfill_missing_stats_internal(&connection, &temp_root)
-        .expect("backfill should succeed");
+    let processed =
+        backfill_missing_stats_internal(&connection, &temp_root).expect("backfill should succeed");
 
     assert_eq!(processed, 1);
 

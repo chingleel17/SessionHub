@@ -8,7 +8,8 @@ const os = require("os");
 const childProcess = require("child_process");
 
 const SNORETOAST_EXE_NAME = "snoretoast.exe";
-const SESSION_HUB_APP_ID = "SessionHub";
+const SESSION_HUB_APP_ID = "com.ching.sessionhub";
+const SESSION_HUB_TOAST_IMAGE_NAME = "sessionhub-logo.png";
 const SETTINGS_FILE = "settings.json";
 
 function getAppDataDir() {
@@ -74,6 +75,17 @@ function findSnoretoast() {
     return null;
 }
 
+function findToastImage() {
+    const candidates = [
+        path.join(__dirname, "..", "_bin", SESSION_HUB_TOAST_IMAGE_NAME),
+        path.join(__dirname, "..", "..", "_bin", SESSION_HUB_TOAST_IMAGE_NAME),
+    ];
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
 /**
  * 發送 Windows 系統 Toast 通知
  * @param {object} options
@@ -102,6 +114,8 @@ function sendNotification({ sessionId, title, body, kind }) {
             "-id", notifId,
             "-silent",
         ];
+        const toastImage = findToastImage();
+        if (toastImage) args.push("-p", toastImage);
 
         childProcess.spawnSync(snoretoast, args, {
             timeout: 5000,

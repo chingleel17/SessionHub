@@ -398,8 +398,11 @@ pub(crate) fn get_sessions_internal(
                     .unwrap_or(true);
 
             if should_full_scan(&antigravity_guard, antigravity_force_full) {
-                match scan_antigravity_sessions_internal(antigravity_root, show_archived, &connection)
-                {
+                match scan_antigravity_sessions_internal(
+                    antigravity_root,
+                    show_archived,
+                    &connection,
+                ) {
                     Ok(sessions) => {
                         let mtimes = build_antigravity_session_mtimes(&sessions);
                         *antigravity_guard = Some(ProviderCache {
@@ -430,7 +433,8 @@ pub(crate) fn get_sessions_internal(
             }
 
             if let Some(cache) = antigravity_guard.as_ref() {
-                if let Err(error) = persist_provider_cache(&connection, ANTIGRAVITY_PROVIDER, cache) {
+                if let Err(error) = persist_provider_cache(&connection, ANTIGRAVITY_PROVIDER, cache)
+                {
                     eprintln!("failed to persist antigravity cache: {error}");
                 }
             }

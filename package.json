@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "lint": "oxlint --react-plugin src"
+    "lint": "oxlint --react-plugin src",
+    "verify:windows-notification-identity": "pwsh -NoProfile -File scripts/verify-windows-notification-identity.ps1"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.79.0",

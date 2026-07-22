@@ -12,7 +12,7 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "3";
+const HOOK_SCRIPT_VERSION: &str = "5";
 
 // Node.js 主軌（.cjs，強制 CommonJS）
 const MODULE_RECORD_EVENT_JS: &str =
