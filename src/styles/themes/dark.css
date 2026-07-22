@@ -42,6 +42,7 @@
   /* ── 輕量陰影 ── */
   --shadow-panel: 0 2px 12px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.55);
 
   /* ── Glassmorphism 專用 ── */
   --glass-blur: 20px;
@@ -82,6 +83,21 @@
 
   --color-action-primary-subtle-border: rgba(59, 130, 246, 0.24);
   --color-action-primary-subtle-bg: rgba(59, 130, 246, 0.12);
+
+  /* OpenSpec explorer：壓低選取列亮度，讓任務狀態仍清楚可辨 */
+  --color-tree-hover: rgba(255, 255, 255, 0.055);
+  --color-tree-selected-bg: #162b49;
+  --color-tree-selected-text: #a9ccff;
+  --color-tree-selected-border: #284e7e;
+  --color-openspec-not-started-bg: #252b35;
+  --color-openspec-not-started-text: #9ca6b5;
+  --color-openspec-not-started-border: #394352;
+  --color-openspec-progress-bg: #312511;
+  --color-openspec-progress-text: #f5bb4e;
+  --color-openspec-progress-border: #6f5420;
+  --color-openspec-done-bg: #112b20;
+  --color-openspec-done-text: #52cf8a;
+  --color-openspec-done-border: #236b46;
 
   --color-shadow-dialog: rgba(0, 0, 0, 0.4);
   --color-dialog-overlay: rgba(0, 0, 0, 0.6);
@@ -159,16 +175,16 @@
 
 /* ── Explorer Tree 深色模式 hover/selected 覆寫 ── */
 [data-theme="dark"] .tree-leaf-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-tree-hover);
 }
 
 [data-theme="dark"] .tree-leaf-btn--selected {
-  background: var(--color-action-primary-subtle-bg);
-  color: var(--color-action-primary);
+  background: var(--color-tree-selected-bg);
+  color: var(--color-tree-selected-text);
 }
 
 [data-theme="dark"] .tree-subgroup-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-tree-hover);
 }
 
 /* ── Explorer List 深色模式 hover/selected 覆寫 ── */

@@ -29,13 +29,13 @@
 - [x] 4.3 往上延伸：提醒區 DOM 排到 chip 上方（flex order），視窗總高增加時同步將視窗 top 上移等量，使 chip 螢幕 Y 不變
 - [x] 4.4 邊界 fallback：往上空間不足（貼頂緣）時改往下，不使內容超出螢幕頂端
 - [x] 4.5 將方向計算與既有 `syncWindowSize` 合併：同一 effect/rAF 內先算目標 size + position 再一次套用，避免 setSize/setPosition 抖動與閃爍
-- [ ] 4.6 手動驗證：overlay 分別貼底、貼頂、置中三種位置，compact 與 full 皆確認延伸方向正確且 chip 不位移
+- [x] 4.6 手動驗證：overlay 分別貼底、貼頂、置中三種位置，compact 與 full 皆確認延伸方向正確且 chip 不位移
 
 ## 5. 驗證與收尾
 
-- [ ] 5.1 觸發某 provider session 進入 waiting，確認 overlay 提醒區即時出現、授權完成後即時消失
-- [ ] 5.2 主視窗最小化/關閉狀態下觸發 waiting，確認 overlay 仍顯示提醒（後端 source of truth）
-- [ ] 5.3 關閉 `enable_intervention_notification`：確認 Toast 與 overlay 提醒皆不顯示；開啟時兩者恢復
-- [ ] 5.4 點擊 overlay 卡片，確認主視窗聚焦並導航至正確 project tab
+- [x] 5.1 觸發某 provider session 進入 waiting，確認 overlay 提醒區即時出現、授權完成後即時消失
+- [x] 5.2 主視窗最小化/關閉狀態下觸發 waiting，確認 overlay 仍顯示提醒（後端 source of truth）
+- [x] 5.3 關閉 `enable_intervention_notification`：確認 Toast 與 overlay 提醒皆不顯示；開啟時兩者恢復
+- [x] 5.4 點擊 overlay 卡片，確認主視窗聚焦並導航至正確 project tab
 - [x] 5.5 執行 `openspec validate add-intervention-overlay-panel --strict` 並修正（通過：`Change 'add-intervention-overlay-panel' is valid`）
 - [x] 5.6 前端 lint/type check 與 `cargo check` 通過（`tsc --noEmit` 無錯誤、`oxlint` 無新增警告、`cargo check`/`cargo test` 167 通過）

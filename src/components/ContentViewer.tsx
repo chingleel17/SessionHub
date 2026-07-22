@@ -47,7 +47,10 @@ function renderMarkdownHtml(content: string, interactiveTasks: boolean): string 
       }
 
       const currentTaskIndex = taskIndex++;
-      const body = stripParagraphWrapper(this.parser.parse(item.tokens));
+      // marked v18 會把 `[x] ` 拆成獨立的 checkbox token，直接 parse 會多渲染一個原生
+      // disabled 的 <input type="checkbox">，與自訂的 toggle 按鈕重複並撐壞排版
+      const bodyTokens = item.tokens.filter((token) => token.type !== "checkbox");
+      const body = stripParagraphWrapper(this.parser.parse(bodyTokens));
       const checkedClass = item.checked ? " explorer-task-content--checked" : "";
 
       return [

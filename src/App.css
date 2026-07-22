@@ -57,7 +57,7 @@ input[type="checkbox"] {
 .ui-select-trigger:disabled { cursor: not-allowed; opacity: 0.48; }
 .ui-select-chevron { width: 8px; height: 8px; margin-right: 3px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform var(--motion-fast) var(--motion-ease); }
 .ui-select-trigger[aria-expanded="true"] .ui-select-chevron { transform: rotate(225deg) translate(-2px, 0); }
-.ui-select-menu { position: absolute; top: calc(100% + 6px); left: -1px; z-index: 50; display: grid; width: calc(100% + 2px); max-height: 240px; overflow-y: auto; padding: 6px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-input); background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--shadow-float); }
+.ui-select-menu { position: absolute; top: calc(100% + 6px); left: -1px; z-index: 50; display: grid; width: calc(100% + 2px); max-height: 240px; overflow-y: auto; padding: 6px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-input); background: var(--color-surface-panel); box-shadow: var(--shadow-popover); }
 .ui-select-option { width: 100%; min-height: 34px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius-button); background: transparent; color: var(--color-text-primary); cursor: pointer; font: inherit; text-align: left; transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease); }
 .ui-select-option:hover:not(:disabled), .ui-select-option--selected { border-color: var(--color-action-primary-subtle-border); background: var(--color-action-primary-subtle-bg); }
 .ui-select-option:disabled { cursor: not-allowed; opacity: 0.48; }
@@ -81,9 +81,10 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--color-action-pri
   left: 50%;
   z-index: 100;
   padding: 4px 8px;
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-button);
-  background: var(--glass-bg);
-  box-shadow: var(--shadow-float);
+  background: var(--color-surface-panel);
+  box-shadow: var(--shadow-popover);
   color: var(--color-text-primary);
   font-size: 12px;
   pointer-events: none;
@@ -3059,10 +3060,8 @@ html.embedded-quota-view .quota-overlay-no-drag {
   padding: 8px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-card);
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  box-shadow: var(--shadow-float);
+  background: var(--color-surface-panel);
+  box-shadow: var(--shadow-popover);
   z-index: 9999;
 }
 
@@ -3995,12 +3994,10 @@ html.embedded-quota-view .quota-overlay-no-drag {
   align-items: center;
 }
 .dropdown-menu {
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
+  background: var(--color-surface-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-input);
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-popover);
   min-width: 150px;
   max-width: min(280px, calc(100vw - 16px));
   overflow: hidden;
@@ -5885,15 +5882,18 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   cursor: pointer;
   text-align: left;
   border-radius: 10px;
+  border: 1px solid transparent;
+  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
 }
 
 .tree-leaf-btn:hover {
-  background: rgba(241, 245, 249, 0.92);
+  background: var(--color-tree-hover);
 }
 
 .tree-leaf-btn--selected {
-  background: #eff6ff !important;
-  color: #1d4ed8;
+  background: var(--color-tree-selected-bg) !important;
+  border-color: var(--color-tree-selected-border);
+  color: var(--color-tree-selected-text);
 }
 
 .tree-leaf-btn--disabled {
@@ -5914,8 +5914,8 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #64748b;
-  background: #e2e8f0;
+  color: var(--color-muted-chip-text);
+  background: var(--color-muted-chip-bg);
 }
 
 .tree-subgroup-btn {
@@ -5936,7 +5936,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .tree-subgroup-btn:hover {
-  background: rgba(241, 245, 249, 0.92);
+  background: var(--color-tree-hover);
   color: var(--color-text-primary);
 }
 
@@ -5960,48 +5960,52 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 .tree-node-badge--neutral,
 .tree-node-badge--muted {
-  color: #64748b;
-  background: #e2e8f0;
+  color: var(--color-openspec-not-started-text);
+  background: var(--color-openspec-not-started-bg);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-not-started-border);
 }
 
 .tree-node-badge--not_started {
-  color: #6b7280;
-  background: #e5e7eb;
+  color: var(--color-openspec-not-started-text);
+  background: var(--color-openspec-not-started-bg);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-not-started-border);
 }
 
 .tree-node-badge--in_progress {
-  color: #b45309;
-  background: #fef3c7;
+  color: var(--color-openspec-progress-text);
+  background: var(--color-openspec-progress-bg);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-progress-border);
 }
 
 .tree-node-badge--done {
-  color: #166534;
-  background: #dcfce7;
+  color: var(--color-openspec-done-text);
+  background: var(--color-openspec-done-bg);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-done-border);
 }
 
 .tree-leaf-icon--proposal {
-  color: #1d4ed8;
-  background: #dbeafe;
+  color: var(--color-provider-copilot-text);
+  background: var(--color-provider-copilot-bg);
 }
 
 .tree-leaf-icon--design {
-  color: #7c3aed;
-  background: #ede9fe;
+  color: var(--color-provider-codex-text);
+  background: var(--color-provider-codex-bg);
 }
 
 .tree-leaf-icon--tasks {
-  color: #0f766e;
-  background: #ccfbf1;
+  color: var(--color-provider-opencode-text);
+  background: var(--color-provider-opencode-bg);
 }
 
 .tree-leaf-icon--spec {
-  color: #475569;
-  background: #e2e8f0;
+  color: var(--color-muted-chip-text);
+  background: var(--color-muted-chip-bg);
 }
 
 .tree-leaf-icon--change {
-  color: #0f172a;
-  background: #e5e7eb;
+  color: var(--color-text-primary);
+  background: var(--color-surface-subtle);
 }
 
 .tree-leaf-icon--plan {
@@ -6025,15 +6029,15 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 .tree-leaf-icon--done {
-  box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.14);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-done-border);
 }
 
 .tree-leaf-icon--in_progress {
-  box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.14);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-progress-border);
 }
 
 .tree-leaf-icon--not_started {
-  box-shadow: inset 0 0 0 1px rgba(107, 114, 128, 0.14);
+  box-shadow: inset 0 0 0 1px var(--color-openspec-not-started-border);
 }
 
 .explorer-list-view {

@@ -42,6 +42,7 @@
   /* ── 輕量陰影（depth 但不壓迫） ── */
   --shadow-panel: 0 2px 12px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.18);
 
   /* ── Glassmorphism 專用（僅浮層類元件） ── */
   --glass-blur: 20px;
@@ -82,6 +83,21 @@
 
   --color-action-primary-subtle-border: rgba(37, 99, 235, 0.18);
   --color-action-primary-subtle-bg: rgba(37, 99, 235, 0.08);
+
+  /* OpenSpec explorer：檔案列與任務狀態 */
+  --color-tree-hover: var(--color-surface-subtle);
+  --color-tree-selected-bg: #e8f0ff;
+  --color-tree-selected-text: #245ad3;
+  --color-tree-selected-border: #cbdcff;
+  --color-openspec-not-started-bg: #eef0f4;
+  --color-openspec-not-started-text: #5f6879;
+  --color-openspec-not-started-border: #d8dce3;
+  --color-openspec-progress-bg: #fff4dc;
+  --color-openspec-progress-text: #a16207;
+  --color-openspec-progress-border: #f6d388;
+  --color-openspec-done-bg: #e7f8ee;
+  --color-openspec-done-text: #18794e;
+  --color-openspec-done-border: #a4e0bd;
 
   --color-shadow-dialog: rgba(12, 20, 38, 0.18);
   --color-dialog-overlay: rgba(13, 18, 28, 0.32);
