@@ -313,11 +313,69 @@ pub(crate) fn derive_activity_status(
                 ("waiting".to_string(), None)
             }
         }
-        "permission.updated" | "permission.asked" | "permission.v2.asked" => {
-            ("waiting".to_string(), None)
-        }
+        "permission.updated" | "permission.asked" | "permission.v2.asked"
+        | "permission.requested" => ("waiting".to_string(), None),
         "permission.replied" | "permission.v2.replied" => ("active".to_string(), None),
+        // Claude Notification hook：permission_prompt / idle_prompt 代表需授權/等待回應，
+        // stop_reason 參數在此路徑帶入 notification_type（見 process_provider_bridge_event 的 Claude 分支）
+        "notification" => match stop_reason {
+            Some("permission_prompt") | Some("idle_prompt") => ("waiting".to_string(), None),
+            _ => ("idle".to_string(), None),
+        },
         _ => ("idle".to_string(), None),
+    }
+}
+
+/// 由 cwd 最後一段路徑推導 projectName，取不到時 fallback session_id 尾段或 provider 名。
+/// 與 `App.tsx:1038` 的 `session?.cwd?.split("\\").pop()` 同規則。
+fn derive_project_name(cwd: Option<&str>, session_id: Option<&str>, provider: &str) -> String {
+    if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
+        let normalized = cwd.trim_end_matches(['\\', '/']);
+        if let Some(name) = normalized.rsplit(['\\', '/']).find(|s| !s.is_empty()) {
+            return name.to_string();
+        }
+    }
+    if let Some(session_id) = session_id.filter(|s| !s.is_empty()) {
+        return session_id.to_string();
+    }
+    provider.to_string()
+}
+
+/// 由 OpenCode permission 事件的 `title`（形如 `"bash [permission-001]"`）萃取工具類型。
+/// 僅取工具名，不含 request id，符合「不寫入指令/路徑」的最小化欄位原則。
+fn derive_opencode_tool_label(title: Option<&str>) -> Option<String> {
+    let title = title?;
+    let tool = title.split('[').next().unwrap_or(title).trim();
+    if tool.is_empty() {
+        None
+    } else {
+        Some(tool.to_string())
+    }
+}
+
+/// Registry 更新：進入 waiting 時 upsert，離開 waiting 時 remove；並廣播 `intervention-list-changed`。
+/// session_id 缺失時無法定位清單項目，直接略過（不阻擋原有事件流程）。
+fn sync_intervention_registry(
+    app: &tauri::AppHandle,
+    session_id: Option<&str>,
+    status: &str,
+    cwd: Option<&str>,
+    tool_label: Option<String>,
+    provider: &str,
+) {
+    let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let registry = app.state::<InterventionRegistry>();
+    let changed = if status == "waiting" {
+        let project_name = derive_project_name(cwd, Some(session_id), provider);
+        registry.upsert(session_id, project_name, tool_label, current_timestamp_iso())
+    } else {
+        registry.remove(session_id)
+    };
+    // 僅在清單確有變動時廣播，避免每個 tool.pre 對已離開 waiting 的 session 重複 emit
+    if let Some(items) = changed {
+        crate::emit_intervention_list_changed(app, &items);
     }
 }
 
@@ -476,11 +534,12 @@ pub(crate) fn process_provider_bridge_event(
     if provider == CLAUDE_PROVIDER {
         if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
             // tool.pre / tool.post / prompt.submitted / session.started / session.stop
-            // 只需更新 activity status，不觸發掃描（session.stop 與 session.started 不改 JSONL 結構）
+            // 及 notification / permission.requested（等待授權訊號）：只需更新 activity status，
+            // 不觸發掃描（這些事件不改 JSONL 結構）。
             let is_hint = is_activity_only_event(&record.event_type)
                 || matches!(
                     record.event_type.as_str(),
-                    "session.started" | "session.stop"
+                    "session.started" | "session.stop" | "notification" | "permission.requested"
                 );
             if is_hint {
                 let resolved_session_id = record
@@ -489,6 +548,8 @@ pub(crate) fn process_provider_bridge_event(
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .or_else(|| session_id_from_source_path(record.source_path.as_deref()));
+                // session.stop 的 title 為 stop_reason；notification 的 title 為 notification_type，
+                // derive_activity_status 兩者皆以此參數判斷是否進入 waiting。
                 let stop_reason = record.title.as_deref();
                 let (status, detail) = derive_activity_status(&record.event_type, stop_reason);
                 let payload = ActivityHintPayload {
@@ -504,6 +565,17 @@ pub(crate) fn process_provider_bridge_event(
                 app.emit("claude-activity-hint", &payload)
                     .map_err(|e| format!("failed to emit claude-activity-hint: {e}"))?;
                 emit_event_log(app, make_log_entry(&record, "activity_hint"));
+                // 所有 hint 事件都同步 Registry：進入 waiting（notification/permission.requested/
+                // 非正常 session.stop）→ upsert；離開 waiting（tool.pre/tool.post/prompt.submitted/
+                // 正常 session.stop）→ remove（不存在時 no-op，不會多餘廣播）。
+                sync_intervention_registry(
+                    app,
+                    payload.session_id.as_deref(),
+                    &payload.status.clone().unwrap_or_default(),
+                    Some(cwd),
+                    None,
+                    CLAUDE_PROVIDER,
+                );
                 // session.started 還需要觸發掃描（新 session），session.stop 則不需要
                 if record.event_type == "session.started" {
                     let rate_ok = should_emit_provider_refresh_at(
@@ -571,6 +643,14 @@ pub(crate) fn process_provider_bridge_event(
         app.emit("opencode-activity-hint", &payload)
             .map_err(|error| format!("failed to emit opencode-activity-hint: {error}"))?;
         emit_event_log(app, make_log_entry(&record, "activity_hint"));
+        sync_intervention_registry(
+            app,
+            payload.session_id.as_deref(),
+            &payload.status.clone().unwrap_or_default(),
+            None,
+            derive_opencode_tool_label(record.title.as_deref()),
+            OPENCODE_PROVIDER,
+        );
         return Ok(true);
     }
 

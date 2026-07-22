@@ -578,6 +578,8 @@ export const zhTwMessages = {
   "quota.overlay.lock": "鎖定",
   "quota.overlay.localOnly": "本地統計",
   "quota.overlay.stale": "略舊",
+  "quota.overlay.intervention.title": "需授權 ({count})",
+  "quota.overlay.intervention.unknownProject": "未知專案",
   "quota.settings.trayMode": "系統匣圖示模式",
   "quota.settings.trayMode.iconOnly": "圖示顏色指示",
   "quota.settings.trayMode.percentage": "顯示百分比",

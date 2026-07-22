@@ -1,6 +1,7 @@
 mod activity;
 mod agents_config;
 mod antigravity_hooks;
+mod app_setup;
 mod commands;
 mod db;
 mod mcp_config;
@@ -44,6 +45,14 @@ pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
     let _ = app.emit("quota-snapshots-updated", ());
     if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
         let _ = overlay.emit("quota-snapshots-updated", ());
+    }
+}
+
+/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過介入提醒清單變動。
+pub(crate) fn emit_intervention_list_changed(app: &tauri::AppHandle, items: &[InterventionItem]) {
+    let _ = app.emit("intervention-list-changed", items);
+    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
+        let _ = overlay.emit("intervention-list-changed", items);
     }
 }
 
@@ -291,6 +300,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(ScanCache::default()))
         .manage(DbState::new().expect("failed to init metadata db"))
         .manage(QuotaCache::default())
+        .manage(InterventionRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -314,203 +324,9 @@ pub fn run() {
                 &settings.enabled_providers,
             )?;
 
-            // Quota monitoring startup: load from DB then do background refresh
-            if settings.enable_quota_monitoring {
-                let db_state = app.state::<DbState>();
-                let quota_cache = app.state::<QuotaCache>();
-                {
-                    let conn = db_state.conn.lock().unwrap_or_else(|p| p.into_inner());
-                    let _ = quota::cache::load_cache_from_db(
-                        &conn,
-                        &quota_cache,
-                        &settings.quota_enabled_providers,
-                    );
-                }
-
-                let app_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    // Small delay to let the app fully start before first refresh
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    let db_state = app_handle.state::<DbState>();
-                    let quota_cache = app_handle.state::<QuotaCache>();
-                    let settings = load_settings_internal().unwrap_or_else(|_| AppSettings {
-                        enable_quota_monitoring: false,
-                        copilot_root: String::new(),
-                        opencode_root: String::new(),
-                        codex_root: String::new(),
-                        claude_root: String::new(),
-                        antigravity_root: String::new(),
-                        hook_scripts_path: String::new(),
-                        claude_quota_reset_day: 1,
-                        minimize_to_tray: false,
-                        terminal_path: None,
-                        external_editor_path: None,
-                        show_archived: false,
-                        pinned_projects: Vec::new(),
-                        enabled_providers: Vec::new(),
-                        provider_integrations: Vec::new(),
-                        default_launcher: None,
-                        enable_intervention_notification: false,
-                        enable_session_end_notification: false,
-                        show_status_bar: true,
-                        analytics_refresh_interval: 30,
-                        analytics_panel_collapsed: false,
-                        quota_enabled_providers: Vec::new(),
-                        allow_create_project_config_dir: false,
-                        agents_source_root: String::new(),
-                        tray_quota_mode: TrayQuotaMode::default(),
-                        tray_quota_primary_provider: None,
-                        tray_quota_panel_enabled: true,
-                        quota_overlay_enabled: false,
-                        quota_overlay_locked: true,
-                        quota_overlay_opacity: crate::types::default_quota_overlay_opacity(),
-                        quota_overlay_providers: Vec::new(),
-                        quota_overlay_theme: OverlayTheme::default(),
-                        quota_overlay_style: OverlayStyle::default(),
-                    });
-                    if settings.enable_quota_monitoring {
-                        commands::quota::refresh_quota_internal(
-                            &db_state,
-                            &quota_cache,
-                            &settings,
-                            None,
-                        );
-                        emit_quota_snapshots_updated(&app_handle);
-                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
-                    }
-                });
-            }
-
-            // Background quota polling thread
-            {
-                let app_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    let mut last_refresh = std::time::Instant::now()
-                        .checked_sub(std::time::Duration::from_secs(3600))
-                        .unwrap_or(std::time::Instant::now());
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(60));
-                        let settings = match load_settings_internal() {
-                            Ok(s) => s,
-                            Err(_) => continue,
-                        };
-                        if !settings.enable_quota_monitoring {
-                            continue;
-                        }
-                        // 固定每 30 分鐘刷新一次，避免與 Claude Code CLI 等工具同時打 API 撞到 429 限流
-                        const QUOTA_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
-                        if last_refresh.elapsed().as_secs() < QUOTA_REFRESH_INTERVAL_SECS {
-                            continue;
-                        }
-                        last_refresh = std::time::Instant::now();
-                        let db_state = app_handle.state::<DbState>();
-                        let quota_cache = app_handle.state::<QuotaCache>();
-                        commands::quota::refresh_quota_internal(
-                            &db_state,
-                            &quota_cache,
-                            &settings,
-                            None,
-                        );
-                        emit_quota_snapshots_updated(&app_handle);
-                        crate::tray_icon::update_tray_from_cache(&app_handle, &settings);
-                    }
-                });
-            }
-
-            // Build system tray icon with menu
-            let tray_icon =
-                tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok();
-            let mut tray_builder =
-                tauri::tray::TrayIconBuilder::with_id(crate::tray_icon::TRAY_ICON_ID);
-            if let Some(icon) = tray_icon {
-                tray_builder = tray_builder.icon(icon);
-            }
-            let show_item = tray_builder.on_tray_icon_event(|tray, event| {
-                if let tauri::tray::TrayIconEvent::Click {
-                    button: tauri::tray::MouseButton::Left,
-                    button_state: tauri::tray::MouseButtonState::Up,
-                    rect,
-                    ..
-                } = event
-                {
-                    let app = tray.app_handle();
-                    let panel_enabled = load_settings_internal()
-                        .map(|s| s.tray_quota_panel_enabled)
-                        .unwrap_or(true);
-                    if panel_enabled {
-                        // 點擊系統匣圖示彈出 mini panel（rect.position 為 physical/logical enum）
-                        let tray_pos = match rect.position {
-                            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
-                            tauri::Position::Logical(p) => (p.x, p.y),
-                        };
-                        toggle_tray_panel(app, Some(tray_pos));
-                    } else if let Some(window) = app.get_webview_window("main") {
-                        // panel 停用時回復原本開啟主視窗行為
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-            });
-
-            let show_menu_item = tauri::menu::MenuItemBuilder::new("顯示視窗")
-                .id("show_window")
-                .build(app)?;
-            let overlay_toggle_item = tauri::menu::MenuItemBuilder::new("顯示/隱藏 Quota Overlay")
-                .id("toggle_overlay")
-                .build(app)?;
-            let overlay_lock_item = tauri::menu::MenuItemBuilder::new("編輯 / 鎖定 Overlay 位置")
-                .id("toggle_overlay_lock")
-                .build(app)?;
-            let quit_menu_item = tauri::menu::MenuItemBuilder::new("退出 SessionHub")
-                .id("quit")
-                .build(app)?;
-            let menu = tauri::menu::MenuBuilder::new(app)
-                .item(&show_menu_item)
-                .separator()
-                .item(&overlay_toggle_item)
-                .item(&overlay_lock_item)
-                .separator()
-                .item(&quit_menu_item)
-                .build()?;
-
-            show_item
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show_window" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "toggle_overlay" => {
-                        // toggle quota_overlay_enabled 並持久化，再建立/關閉視窗
-                        if let Ok(mut settings) = load_settings_internal() {
-                            settings.quota_overlay_enabled = !settings.quota_overlay_enabled;
-                            let _ = save_settings_internal(&settings);
-                            sync_overlay_visibility(app, &settings);
-                        }
-                    }
-                    "toggle_overlay_lock" => {
-                        // toggle 鎖定狀態，即時套用滑鼠穿透並通知前端切換編輯視覺
-                        if let Ok(mut settings) = load_settings_internal() {
-                            settings.quota_overlay_locked = !settings.quota_overlay_locked;
-                            let _ = save_settings_internal(&settings);
-                            if let Some(window) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
-                                apply_overlay_locked(&window, settings.quota_overlay_locked);
-                            }
-                            let _ = app.emit(
-                                "quota-overlay-locked-changed",
-                                settings.quota_overlay_locked,
-                            );
-                        }
-                    }
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+            app_setup::setup_quota_monitoring(app, &settings)?;
+            app_setup::spawn_quota_poller_thread(app.handle().clone());
+            app_setup::build_tray_icon(app)?;
 
             // 啟動時依設定初始化 tray icon 與 overlay
             {
@@ -610,7 +426,8 @@ pub fn run() {
             upsert_mcp_server,
             delete_mcp_server,
             set_mcp_server_enabled,
-            check_codex_project_trust
+            check_codex_project_trust,
+            get_intervention_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -999,6 +816,32 @@ mod tests {
         assert_eq!(
             derive_activity_status("permission.v2.replied", None),
             ("active".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn derive_activity_status_maps_claude_permission_and_notification_events() {
+        // Claude Code 授權/等待訊號：permission.requested 與 notification(permission_prompt/idle_prompt)
+        assert_eq!(
+            derive_activity_status("permission.requested", None),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", Some("permission_prompt")),
+            ("waiting".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", Some("idle_prompt")),
+            ("waiting".to_string(), None)
+        );
+        // 其他 notification 類型不視為 waiting
+        assert_eq!(
+            derive_activity_status("notification", Some("info")),
+            ("idle".to_string(), None)
+        );
+        assert_eq!(
+            derive_activity_status("notification", None),
+            ("idle".to_string(), None)
         );
     }
 

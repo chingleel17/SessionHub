@@ -1,11 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
-import { LogicalSize, PhysicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useI18n } from "../i18n/I18nProvider";
-import type { OverlayStyle, QuotaSnapshot } from "../types";
+import type { InterventionItem, OverlayStyle, QuotaSnapshot } from "../types";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { LockIcon, MoveIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
@@ -18,6 +18,9 @@ type QuotaOverlayProps = {
   locked: boolean;
   theme: "dark" | "light";
   styleMode: OverlayStyle;
+  interventionItems: InterventionItem[];
+  interventionEnabled: boolean;
+  onInterventionCardClick?: (sessionId: string) => void;
   onLockToggle?: () => void;
 };
 
@@ -137,13 +140,21 @@ export function QuotaOverlay({
   locked,
   theme,
   styleMode,
+  interventionItems,
+  interventionEnabled,
+  onInterventionCardClick,
   onLockToggle,
 }: QuotaOverlayProps) {
   const { t } = useI18n();
   const visibleSnapshots = getVisibleRows(snapshots, enabledProviders, selectedProviders);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const interventionRef = useRef<HTMLDivElement | null>(null);
+  const showIntervention = interventionEnabled && interventionItems.length > 0;
+  // 往上延伸旗標：DOM order 反轉（提醒區排到 chip 上方），由尺寸同步 effect 依可用工作區計算
+  const [extendUp, setExtendUp] = useState(false);
 
-  // 視窗尺寸貼合內容：量測 wrapper 實際尺寸並同步到原生視窗，避免出現滾動條
+  // 視窗尺寸貼合內容：量測 wrapper 實際尺寸並同步到原生視窗，避免出現滾動條；
+  // 同一 effect 內先算好延伸方向與目標 position，再與 size 一併套用，避免抖動閃爍。
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return undefined;
@@ -152,13 +163,57 @@ export function QuotaOverlay({
     let lastHeight = 0;
 
     const syncWindowSize = () => {
-      const width = Math.ceil(wrapper.scrollWidth);
-      const height = Math.ceil(wrapper.scrollHeight);
-      if (width === 0 || height === 0) return;
-      if (width === lastWidth && height === lastHeight) return;
-      lastWidth = width;
-      lastHeight = height;
-      void getCurrentWindow().setSize(new LogicalSize(width, height));
+      void (async () => {
+        const width = Math.ceil(wrapper.scrollWidth);
+        const height = Math.ceil(wrapper.scrollHeight);
+        if (width === 0 || height === 0) return;
+        if (width === lastWidth && height === lastHeight) return;
+
+        const currentWindow = getCurrentWindow();
+        const interventionHeight = showIntervention
+          ? Math.ceil(interventionRef.current?.scrollHeight ?? 0)
+          : 0;
+
+        let targetPosition: PhysicalPosition | null = null;
+        if (interventionHeight > 0) {
+          try {
+            const [monitor, outerPos, outerSize, scaleFactor] = await Promise.all([
+              currentMonitor(),
+              currentWindow.outerPosition(),
+              currentWindow.outerSize(),
+              currentWindow.scaleFactor(),
+            ]);
+            if (monitor) {
+              const heightDeltaPhysical = Math.ceil((height - outerSize.height / scaleFactor) * scaleFactor);
+              const workAreaTop = monitor.workArea.position.y;
+              const workAreaBottom = workAreaTop + monitor.workArea.size.height;
+              const chipBottomY = outerPos.y + outerSize.height;
+              const wouldOverflowBottom = chipBottomY + heightDeltaPhysical > workAreaBottom;
+              const upSpaceAvailable = outerPos.y - workAreaTop >= heightDeltaPhysical;
+
+              if (wouldOverflowBottom && upSpaceAvailable) {
+                // 往上延伸：提醒區排到 chip 上方，視窗上緣同步上移等量，維持 chip 螢幕 Y 不變
+                setExtendUp(true);
+                targetPosition = new PhysicalPosition(outerPos.x, outerPos.y - heightDeltaPhysical);
+              } else {
+                // 下方空間充足，或上方空間也不足（貼頂緣 fallback）：維持往下延伸
+                setExtendUp(false);
+              }
+            }
+          } catch {
+            setExtendUp(false);
+          }
+        } else {
+          setExtendUp(false);
+        }
+
+        lastWidth = width;
+        lastHeight = height;
+        await currentWindow.setSize(new LogicalSize(width, height));
+        if (targetPosition) {
+          await currentWindow.setPosition(targetPosition);
+        }
+      })();
     };
 
     syncWindowSize();
@@ -170,7 +225,7 @@ export function QuotaOverlay({
       observer.disconnect();
       mutationObserver.disconnect();
     };
-  }, [styleMode, locked, visibleSnapshots.length]);
+  }, [styleMode, locked, visibleSnapshots.length, showIntervention, interventionItems.length]);
 
   useEffect(() => {
     const refreshTransparentWebview = async () => {
@@ -209,107 +264,137 @@ export function QuotaOverlay({
           </div>
         ) : null}
 
-        {isCompact ? (
-          <div className="quota-overlay-compact-list">
-            {visibleSnapshots.map((snapshot) => {
-              const abbr = PROVIDER_ABBR[snapshot.provider] ?? snapshot.provider.slice(0, 2).toUpperCase();
-              const primaryUtilization = getPrimaryUtilization(snapshot);
-              const hasData = snapshot.status === "ok" || snapshot.status === "rate_limited";
-              const tooltip = [
-                PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider,
-                ...(snapshot.windows ?? []).map((window) => {
-                  const label = localizedWindowLabel(snapshot.provider, window.windowKey, window.label, t);
-                  return `${label}: ${Math.round(window.utilization * 100)}%`;
-                }),
-              ].join("\n");
+        <div className={`quota-overlay-stack${extendUp ? " quota-overlay-stack--extend-up" : ""}`}>
+          {isCompact ? (
+            <div className="quota-overlay-compact-list">
+              {visibleSnapshots.map((snapshot) => {
+                const abbr = PROVIDER_ABBR[snapshot.provider] ?? snapshot.provider.slice(0, 2).toUpperCase();
+                const primaryUtilization = getPrimaryUtilization(snapshot);
+                const hasData = snapshot.status === "ok" || snapshot.status === "rate_limited";
+                const tooltip = [
+                  PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider,
+                  ...(snapshot.windows ?? []).map((window) => {
+                    const label = localizedWindowLabel(snapshot.provider, window.windowKey, window.label, t);
+                    return `${label}: ${Math.round(window.utilization * 100)}%`;
+                  }),
+                ].join("\n");
 
-              return (
-                <span className="quota-overlay-chip" key={snapshot.provider} title={tooltip}>
-                  <span className="quota-overlay-chip-abbr" style={{ color: PROVIDER_COLOR[snapshot.provider] }}>
-                    {abbr}
-                  </span>
-                  {hasData && primaryUtilization !== null ? (
-                    <>
-                      <OverlayRing utilization={primaryUtilization} />
-                      <span className="quota-overlay-chip-pct" style={{ color: toneColor(getBarTone(primaryUtilization)) }}>
-                        {Math.round(primaryUtilization * 100)}%
-                      </span>
-                    </>
-                  ) : (
-                    <span className="quota-overlay-chip-pct quota-overlay-meta--muted">–</span>
-                  )}
-                </span>
-              );
-            })}
-            {visibleSnapshots.length === 0 ? <div className="quota-overlay-empty">{t("quota.monitoring.noData")}</div> : null}
-          </div>
-        ) : (
-          <div className="quota-overlay-list">
-            {visibleSnapshots.map((snapshot) => {
-              const providerLabel = PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider;
-              const windows = snapshot.windows ?? [];
-
-              return (
-                <article className="quota-overlay-provider" key={snapshot.provider}>
-                  <div className="quota-overlay-provider-header">
-                    <span className="quota-overlay-provider-name">{providerLabel}</span>
-                    <span className="quota-overlay-provider-source">
-                      {t(snapshot.source === "remote_api" ? "quota.monitoring.source.remote_api" : "quota.monitoring.source.local_scan")}
+                return (
+                  <span className="quota-overlay-chip" key={snapshot.provider} title={tooltip}>
+                    <span className="quota-overlay-chip-abbr" style={{ color: PROVIDER_COLOR[snapshot.provider] }}>
+                      {abbr}
                     </span>
-                  </div>
-
-                  {snapshot.status === "ok" || snapshot.status === "rate_limited" ? (
-                    windows.length > 0 ? (
-                      windows.map((window) => {
-                        const utilization = window.utilization;
-                        const tone = getBarTone(utilization);
-                        const countdown = formatResetCountdown(
-                          window.resetsAt,
-                          t("quota.unit.day"),
-                          t("quota.unit.hour"),
-                          t("quota.unit.minute"),
-                          t("quota.resetDone"),
-                        );
-                        const metaText = [countdown, snapshot.status === "rate_limited" ? t("quota.overlay.stale") : ""]
-                          .filter(Boolean)
-                          .join(" · ");
-                        return (
-                          <div className="quota-overlay-row" key={`${snapshot.provider}-${window.windowKey}`} data-tone={tone}>
-                            <div className="quota-overlay-labels">
-                              <span className="quota-overlay-name">
-                                {localizedWindowLabel(snapshot.provider, window.windowKey, window.label, t)}
-                              </span>
-                              {metaText ? <span className="quota-overlay-meta">{metaText}</span> : null}
-                            </div>
-
-                            <div className="quota-overlay-bar">
-                              <div className="quota-overlay-bar-fill" style={{ width: `${Math.max(0, Math.min(100, utilization * 100))}%` }} />
-                            </div>
-                            <span className="quota-overlay-value">{Math.round(utilization * 100)}%</span>
-                          </div>
-                        );
-                      })
+                    {hasData && primaryUtilization !== null ? (
+                      <>
+                        <OverlayRing utilization={primaryUtilization} />
+                        <span className="quota-overlay-chip-pct" style={{ color: toneColor(getBarTone(primaryUtilization)) }}>
+                          {Math.round(primaryUtilization * 100)}%
+                        </span>
+                      </>
                     ) : (
-                      <span className="quota-overlay-local-summary">
-                        {snapshot.localTokens
-                          ? `${snapshot.localTokens.periodLabel} · ${Math.round((snapshot.localTokens.inputTokens + snapshot.localTokens.outputTokens) / 1000)}k`
-                          : t("quota.monitoring.source.local_scan")}
-                      </span>
-                    )
-                  ) : (
-                    <div className="quota-overlay-provider-note quota-overlay-meta--muted">
-                      {snapshot.status === "no_auth"
-                        ? t("quota.monitoring.status.no_auth")
-                        : snapshot.errorMessage || t("quota.monitoring.status.error")}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
+                      <span className="quota-overlay-chip-pct quota-overlay-meta--muted">–</span>
+                    )}
+                  </span>
+                );
+              })}
+              {visibleSnapshots.length === 0 ? <div className="quota-overlay-empty">{t("quota.monitoring.noData")}</div> : null}
+            </div>
+          ) : (
+            <div className="quota-overlay-list">
+              {visibleSnapshots.map((snapshot) => {
+                const providerLabel = PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider;
+                const windows = snapshot.windows ?? [];
 
-            {visibleSnapshots.length === 0 ? <div className="quota-overlay-empty">{t("quota.monitoring.noData")}</div> : null}
-          </div>
-        )}
+                return (
+                  <article className="quota-overlay-provider" key={snapshot.provider}>
+                    <div className="quota-overlay-provider-header">
+                      <span className="quota-overlay-provider-name">{providerLabel}</span>
+                      <span className="quota-overlay-provider-source">
+                        {t(snapshot.source === "remote_api" ? "quota.monitoring.source.remote_api" : "quota.monitoring.source.local_scan")}
+                      </span>
+                    </div>
+
+                    {snapshot.status === "ok" || snapshot.status === "rate_limited" ? (
+                      windows.length > 0 ? (
+                        windows.map((window) => {
+                          const utilization = window.utilization;
+                          const tone = getBarTone(utilization);
+                          const countdown = formatResetCountdown(
+                            window.resetsAt,
+                            t("quota.unit.day"),
+                            t("quota.unit.hour"),
+                            t("quota.unit.minute"),
+                            t("quota.resetDone"),
+                          );
+                          const metaText = [countdown, snapshot.status === "rate_limited" ? t("quota.overlay.stale") : ""]
+                            .filter(Boolean)
+                            .join(" · ");
+                          return (
+                            <div className="quota-overlay-row" key={`${snapshot.provider}-${window.windowKey}`} data-tone={tone}>
+                              <div className="quota-overlay-labels">
+                                <span className="quota-overlay-name">
+                                  {localizedWindowLabel(snapshot.provider, window.windowKey, window.label, t)}
+                                </span>
+                                {metaText ? <span className="quota-overlay-meta">{metaText}</span> : null}
+                              </div>
+
+                              <div className="quota-overlay-bar">
+                                <div className="quota-overlay-bar-fill" style={{ width: `${Math.max(0, Math.min(100, utilization * 100))}%` }} />
+                              </div>
+                              <span className="quota-overlay-value">{Math.round(utilization * 100)}%</span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <span className="quota-overlay-local-summary">
+                          {snapshot.localTokens
+                            ? `${snapshot.localTokens.periodLabel} · ${Math.round((snapshot.localTokens.inputTokens + snapshot.localTokens.outputTokens) / 1000)}k`
+                            : t("quota.monitoring.source.local_scan")}
+                        </span>
+                      )
+                    ) : (
+                      <div className="quota-overlay-provider-note quota-overlay-meta--muted">
+                        {snapshot.status === "no_auth"
+                          ? t("quota.monitoring.status.no_auth")
+                          : snapshot.errorMessage || t("quota.monitoring.status.error")}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+
+              {visibleSnapshots.length === 0 ? <div className="quota-overlay-empty">{t("quota.monitoring.noData")}</div> : null}
+            </div>
+          )}
+
+          {showIntervention ? (
+            <div
+              className={`quota-overlay-intervention${isCompact ? " quota-overlay-intervention--compact" : ""}`}
+              ref={interventionRef}
+            >
+              <div className="quota-overlay-intervention-title">
+                {t("quota.overlay.intervention.title", { count: interventionItems.length })}
+              </div>
+              <div className="quota-overlay-intervention-list">
+                {interventionItems.map((item) => (
+                  <button
+                    type="button"
+                    key={item.sessionId}
+                    className="quota-overlay-intervention-card quota-overlay-no-drag"
+                    onClick={() => onInterventionCardClick?.(item.sessionId)}
+                  >
+                    <span className="quota-overlay-intervention-project">
+                      {item.projectName || t("quota.overlay.intervention.unknownProject")}
+                    </span>
+                    {item.toolLabel ? (
+                      <span className="quota-overlay-intervention-tool">{item.toolLabel}</span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </section>
     </div>
   );

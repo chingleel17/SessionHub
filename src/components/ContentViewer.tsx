@@ -3,12 +3,14 @@ import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { TreeNode } from "../types";
+import { formatDate } from "../utils/formatDate";
 import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
 
 type Props = {
   content: string | null;
   filePath: string | null;
   filePathType: TreeNode["filePathType"] | null;
+  createdAt?: string | null;
   isLoading: boolean;
   error: string | null;
   isTaskSaving: boolean;
@@ -79,13 +81,23 @@ export function ContentViewer({
   content,
   filePath,
   filePathType,
+  createdAt,
   isLoading,
   error,
   isTaskSaving,
   onToggleTask,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const contentBodyRef = useRef<HTMLDivElement>(null);
+
+  const renderHeader = (path: string) => (
+    <div className="explorer-content-header">
+      <span className="explorer-content-header-path">{getDisplayPath(path)}</span>
+      {createdAt ? (
+        <span className="explorer-content-header-date">{formatDate(createdAt, locale)}</span>
+      ) : null}
+    </div>
+  );
   const markdownFile = isMarkdownFile(filePath);
   const interactiveTaskFile = isInteractiveTaskFile(filePath, filePathType);
   const markdownHtml = useMemo(
@@ -134,9 +146,7 @@ export function ContentViewer({
   if (isLoading) {
     return (
       <div className="explorer-content">
-        {filePath ? (
-          <div className="explorer-content-header">{getDisplayPath(filePath)}</div>
-        ) : null}
+        {filePath ? renderHeader(filePath) : null}
         <div className="explorer-content-loading">
           {t("plansSpecs.loading")}
         </div>
@@ -147,9 +157,7 @@ export function ContentViewer({
   if (error) {
     return (
       <div className="explorer-content">
-        {filePath ? (
-          <div className="explorer-content-header">{getDisplayPath(filePath)}</div>
-        ) : null}
+        {filePath ? renderHeader(filePath) : null}
         <div className="explorer-error-banner">{error}</div>
       </div>
     );
@@ -167,9 +175,7 @@ export function ContentViewer({
 
   return (
     <div className="explorer-content">
-      {filePath ? (
-        <div className="explorer-content-header">{getDisplayPath(filePath)}</div>
-      ) : null}
+      {filePath ? renderHeader(filePath) : null}
       <div
         ref={contentBodyRef}
         className={[

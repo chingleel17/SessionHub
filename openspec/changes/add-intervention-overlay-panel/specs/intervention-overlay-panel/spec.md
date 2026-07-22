@@ -2,11 +2,12 @@
 
 ### Requirement: Overlay 內嵌需授權提醒區
 
-quota overlay 視窗 SHALL 訂閱 `intervention-list-changed` 並內嵌「需授權」提醒區；清單為 0 筆時整區不 render，清單非空時顯示總數與每筆項目。
+quota overlay 視窗 SHALL 訂閱 `intervention-list-changed` 並內嵌「需授權」提醒區；清單為 0 筆時整區不 render，清單非空時顯示總數與每筆項目。提醒區是否顯示 SHALL 受既有 `enable_intervention_notification` 設定控制，作為 waiting 介入提醒的總開關（同時管 Toast 與 overlay）；不新增設定項。
 
 #### Scenario: 有 waiting 時顯示提醒區
 
 - **WHEN** overlay 收到 `intervention-list-changed` 且清單含至少一筆
+- **AND** `enable_intervention_notification` 為 `true`
 - **THEN** overlay 顯示「需授權」提醒區，標題含當前總數 (N)
 - **AND** 每筆顯示 `專案名 · 工具類型`，僅顯示工具類型不顯示指令或路徑
 
@@ -14,6 +15,12 @@ quota overlay 視窗 SHALL 訂閱 `intervention-list-changed` 並內嵌「需授
 
 - **WHEN** overlay 收到的清單為 0 筆
 - **THEN** overlay 不 render 提醒區，視窗尺寸自動縮回僅含 quota 內容的大小
+
+#### Scenario: 介入提醒總開關關閉時不顯示提醒區
+
+- **WHEN** `enable_intervention_notification` 為 `false`
+- **THEN** overlay 不顯示需授權提醒區（與 waiting Toast 一致同受此開關控制）
+- **AND** 即使清單非空亦不 render 提醒區
 
 #### Scenario: compact 與 full 兩種模式皆支援
 

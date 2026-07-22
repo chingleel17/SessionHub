@@ -6,11 +6,12 @@
 
 已查證的現況：
 
-- **Overlay 視窗**：quota overlay 是獨立 Tauri webview，label 為 `QUOTA_OVERLAY_LABEL = "quota-overlay"`（`lib.rs:28`），以 `index.html?view=quota-overlay` 載入，預設由 `position_window_bottom_right` 定位於螢幕右下（`lib.rs:66`）。已有 `app.get_webview_window(QUOTA_OVERLAY_LABEL).emit("quota-overlay-settings-changed", …)` 的既有跨視窗 emit 模式（`lib.rs:37`）。
-- **Overlay 自量測**：`QuotaOverlay.tsx` 已用 `ResizeObserver` + `MutationObserver` 量測 wrapper 的 `scrollWidth/scrollHeight` 並 `getCurrentWindow().setSize(...)` 同步原生視窗（`QuotaOverlay.tsx:146`）。
-- **styleMode**：`OverlayStyle = "full" | "compact"`（`types/index.ts:76`）。compact 是一排 chip（使用者實際使用且貼工作列）。
-- **設定欄位**：`AppSettings.enable_intervention_notification`（`types.rs:216`）現同時當作 waiting 觸發總開關；前端 `enableInterventionNotification`（`types/index.ts:47`）。
-- **通知觸發與導航**：`App.tsx:1743` 於 `status === "waiting" && prev !== "waiting" && enableWaiting` 發 Toast；`notification://action-performed` listener（`App.tsx:1768`）點擊後 `setActiveView(projectKey)` 導航。
+- **Overlay 視窗**：quota overlay 是獨立 Tauri webview，label 為 `QUOTA_OVERLAY_LABEL = "quota-overlay"`（`lib.rs:29`），以 `index.html?view=quota-overlay` 載入，預設由 `position_window_bottom_right` 定位於螢幕右下（`lib.rs:67`）。已有 `app.get_webview_window(QUOTA_OVERLAY_LABEL).emit("quota-overlay-settings-changed", …)` 的既有跨視窗 emit 模式（`lib.rs:38`、`app_setup.rs:174`）。setup 階段邏輯（含 overlay 視窗建立與 emit）已抽至 `app_setup.rs`。
+- **Overlay 前端分層**：overlay 視窗掛載 `src/app/EmbeddedQuotaOverlayApp.tsx`（重構後路由層），由它負責 `listen(...)` 事件訂閱與 `useQuery` 資料獲取，再以 props 傳給純呈現的 `QuotaOverlay.tsx`。settings 走 `useQuery("get_settings")` + `refetchInterval: 1_000` 輪詢（`EmbeddedQuotaOverlayApp.tsx:12`，註解說明「避免建立時機造成事件遺漏」），並訂閱 `quota-overlay-settings-changed` 即時更新。
+- **Overlay 自量測**：`QuotaOverlay.tsx` 已用 `ResizeObserver` + `MutationObserver` 量測 wrapper 的 `scrollWidth/scrollHeight` 並 `getCurrentWindow().setSize(...)` 同步原生視窗。
+- **styleMode**：`OverlayStyle = "full" | "compact"`，由 `EmbeddedQuotaOverlayApp` 從 settings 讀出以 props 傳入 `QuotaOverlay`（`EmbeddedQuotaOverlayApp.tsx:81`）。compact 是一排 chip（使用者實際使用且貼工作列）。
+- **設定欄位**：`AppSettings.enable_intervention_notification`（`types/settings.rs:98`）現同時當作 waiting 觸發總開關；前端 `enableInterventionNotification`。
+- **通知觸發與導航**：`App.tsx:1041` 於 `status === "waiting" && prev !== "waiting" && enableWaiting`（`enableWaiting` 讀自 `enableInterventionNotification`，`App.tsx:1032`）發 Toast；`notification://action-performed` listener（`App.tsx:1066`）點擊後以 `getProjectKey(session, ...)` + `setActiveView(projectKey)` 導航（`App.tsx:1073`）。
 - **activity 狀態**：`activityStatusMap` 活在主視窗 React state，overlay 視窗（獨立 webview）無法直接讀取。
 
 跨視窗資料是核心約束：overlay 要在主視窗關閉/最小化時仍能顯示，因此清單須由後端廣播，不能依賴主視窗 state。
@@ -39,13 +40,16 @@
 在後端維護一份 `waiting` 清單（key 為 sessionId，value 為 `{ sessionId, projectName, toolLabel, since }`）。activity 狀態進入 `waiting` 時 upsert，離開 `waiting`（active/done/idle 等）時移除；每次變動 emit `intervention-list-changed`（app 級 emit，overlay 與主視窗皆收得到），payload 為當前完整清單快照。
 
 - **替代方案 A**：主視窗把 `activityStatusMap` 的 waiting 子集 `emit_to("quota-overlay", …)`。否決 —— 主視窗關閉/最小化時 state 不更新，overlay 會停在舊清單，違反核心情境。
-- **替代方案 B**：overlay 自己 invoke 一個 `get_waiting_list` command 輪詢。否決 —— 輪詢延遲且浪費；既有已是事件驅動（`quota-overlay-settings-changed`），沿用 emit 模式一致性更好。
+- **替代方案 B**：overlay 完全靠輪詢一個 `get_waiting_list` command、不收事件。否決 —— 純輪詢延遲且浪費。惟初次快照仍需一個查詢 command（見下方「初次快照」），事件負責即時更新，兩者搭配而非二選一。
 - **狀態來源**：Registry 的更新點應接在後端 activity 計算之後（`derive_activity_status` / bridge 分支產生 waiting 的同一路徑），而非前端。與 design 慣例「activity 由後端計算」一致。
-- **payload 最小化**：僅 sessionId / projectName / toolLabel，不含指令、路徑、resources。projectName 由 session cwd 尾段推導（與 `App.tsx:1740` 同規則）；toolLabel 僅工具類型字串。
+- **Claude 實際 waiting 訊號**：查證 `.claude/hooks` 後確認，Claude Code 的等待授權/等待回應是透過 **`notification`**（`on-notification.cjs`，title 為 `permission_prompt` / `idle_prompt`）與 **`permission.requested`**（`on-permission-request.cjs`）事件表達，而非只有 `session.stop`。因此 `derive_activity_status` 需將 `permission.requested` 與 `notification(permission_prompt|idle_prompt)` 映射為 `waiting`；離開 waiting 由後續 `tool.pre`/`tool.post`/`prompt.submitted`/正常 `session.stop` 觸發 remove。Claude 分支對所有 hint 事件皆呼叫 Registry sync（upsert/remove），Registry 內建去重（內容未變不重複廣播）。
+- **已知限制（Copilot／Codex 不在本次覆蓋範圍）**：已查證 GitHub Copilot CLI 官方 hook 事件集合僅 `sessionStart`/`sessionEnd`/`userPromptSubmitted`/`preToolUse`/`postToolUse`/`errorOccurred`（本專案已全部接上），沒有任何「等待授權」事件；`preToolUse` 雖可回傳 allow/deny/ask 決策，但那是 hook 腳本主動控制執行與否，並非 Copilot 主動通知外部監聽者進入等待狀態的事件（GitHub 官方 issue `github/copilot-cli#1651`「Add hook for permission prompt」證實此為社群已知缺口、尚未提供）。因此 Copilot 的 `waiting` 目前只能由前端輪詢 `get_session_activity_statuses`（讀 `events.jsonl` 最後一筆 `assistant.turn_end`）偵測，而輪詢僅在主視窗開啟時執行，不符合本 change「清單獨立於主視窗運行狀態」的目標。Codex 的 activity 計算（`get_codex_activity_status`）本身從未產生 `waiting` 狀態，屬於真正的 N/A。為避免新增後端輪詢執行緒浪費資源，本 change **不將 Copilot 納入 `InterventionRegistry` 覆蓋範圍**；Copilot 的 waiting 提醒維持現況（僅主視窗內 Toast），overlay 常駐提醒僅涵蓋 Claude 與 OpenCode。未來若 Copilot CLI 提供對應 hook 事件，可再擴充此 Registry 的更新點。
+- **payload 最小化**：僅 sessionId / projectName / toolLabel，不含指令、路徑、resources。projectName 由 session cwd 尾段推導（與 `App.tsx:1038` `session?.cwd?.split("\\").pop()` 同規則）；toolLabel 僅工具類型字串。
+- **初次快照**：新增一個查詢當前清單的 command（如 `get_intervention_list`）。overlay 側沿用重構後 `EmbeddedQuotaOverlayApp` 既有慣例——以 `useQuery` 拉該 command 取初值，並訂閱 `intervention-list-changed` 事件於變動時 `invalidate`/`refetch`，不需後端「建立時補發事件」。此模式與 settings 的 `refetchInterval` + 事件更新一致，天然解掉「訂閱者錯過歷史 emit」問題。
 
 ### 決策 2：提醒區 render 在 overlay 內，styleMode 各自版式
 
-`QuotaOverlay.tsx` 訂閱 `intervention-list-changed`，以 local state 保存清單，於 quota 內容旁 render `.quota-overlay-intervention` 區塊。0 筆時不 render 該區（既有 `syncWindowSize` 會自動把視窗縮回原尺寸）。
+依重構後分層，事件訂閱與 command 查詢由 `EmbeddedQuotaOverlayApp.tsx` 負責（與既有 `quota-overlay-settings-changed` / `get_settings` 同層），清單以 props 傳入純呈現的 `QuotaOverlay.tsx`；`QuotaOverlay` 依 props 於 quota 內容旁 render `.quota-overlay-intervention` 區塊，不自行 `listen`。0 筆時不 render 該區（既有 `syncWindowSize` 會自動把視窗縮回原尺寸）。
 
 - compact：延續 chip 風格，提醒區為一列 danger 色標題「需授權 (N)」+ 每筆一行 `專案名 · 工具`。
 - full：與 quota provider 卡片同排版的區塊。
@@ -70,27 +74,30 @@ overlay 在獨立 webview，點擊需跨視窗觸發主視窗導航。發一個 
 
 - **替代方案**：overlay 直接 invoke 導航 command。否決 —— 導航是主視窗 React state（activeView），須由主視窗處理；overlay 只負責發意圖事件。
 
-### 決策 5：waiting Toast 改為獨立設定項
+### 決策 5：沿用既有 `enable_intervention_notification` 當總開關，不新增設定項
 
-`App.tsx:1743` 的 Toast 觸發改讀新設定 `enable_waiting_toast`（預設 `true`），與 overlay 提醒解耦。overlay 提醒是否顯示只取決於 quota overlay 是否開啟 + 是否有 waiting，不受此開關影響。
+overlay 提醒與 waiting Toast 講的是同一件事的兩種呈現（Toast=瞬間、overlay=常駐）。因此 overlay 提醒是否顯示 SHALL 沿用既有 `enable_intervention_notification`：關閉時 Toast 與 overlay 皆不出，作為「waiting 介入提醒」的統一總開關。`App.tsx:1041` 的 Toast 觸發維持不動，overlay render 加上同一開關判斷（overlay 側由 `EmbeddedQuotaOverlayApp` 已取得的 settings 讀 `enableInterventionNotification`）。
 
-- **相容**：現行 `enable_intervention_notification` 語意保留（是否啟用整個 waiting 提醒機制）；新開關只細分「是否額外發 Toast」。預設 `true` 使現有行為不變。
+- **替代方案 A**：新增獨立 `enable_waiting_toast`，讓使用者只關 Toast 保留 overlay。否決 —— 多一個與 `enable_intervention_notification` 語意重疊的設定項，違反既有 `add-opencode-permission-notification` 的「不新增設定項」精神，且使用者實際需求是「要不要 waiting 提醒」而非「用哪種呈現」。
+- **替代方案 B**：overlay 完全獨立於通知開關（只看 quota overlay 開否 + 有無 waiting）。否決 —— 使用者關掉介入通知卻仍看到 overlay 提醒，語意矛盾。
+- main 合併後現況已有 `enable_intervention_notification`（waiting，預設 true）與 `enable_session_end_notification`（done，預設 false）；本 change 不動兩者，僅讓 overlay 一併受前者控制。
 
 ## Risks / Trade-offs
 
 - **[setSize 與 setPosition 抖動]** 往上延伸同時改 size 與 position，若分兩次非同步套用，透明 webview 可能閃爍或位置跳動。→ 同一 rAF/effect 內先算目標值，一次套用；沿用既有 `refreshTransparentWebview` 的透明刷新時機。
 - **[work area API 可用性]** 不同 Tauri 版本對「可用工作區（扣工作列）」的支援不一。→ 以實作時實際可用 API 為準；不可得時用保守估計，並在 spec 以行為（不被工作列擋、不超出螢幕）而非特定 API 描述需求。
 - **[多筆 waiting 撐爆 overlay 高度]** 大量 session 同時 waiting 會讓提醒區過高。→ 提醒區設最大高度 + 內部捲動（`overflow-y`），標題仍顯示 (N) 總數；避免頂到螢幕外。
-- **[主視窗與 overlay 清單不同步]** 兩者都訂閱同一 `intervention-list-changed`，理論上一致；但主視窗若在 emit 後才啟動會錯過。→ Registry 在主視窗/overlay 建立時補發一次當前快照（或提供 command 供初次拉取）。
+- **[主視窗與 overlay 清單不同步]** 兩者都訂閱同一 `intervention-list-changed`，理論上一致；但視窗若在 emit 後才啟動會錯過。→ 提供 `get_intervention_list` command 供初次拉取，訂閱端（`EmbeddedQuotaOverlayApp` 與主視窗）以 `useQuery` 取初值、事件到達時 `refetch`（沿用重構後既有資料獲取慣例），不依賴後端補發歷史 emit。
 - **[projectName 反查失敗]** waiting 事件可能早於 session 掃描到。→ Registry 存 sessionId 即可，projectName 缺失時顯示 sessionId 尾段或 provider 名，不阻擋提醒。
 
 ## Migration Plan
 
-1. 後端新增 `InterventionRegistry` 與 `intervention-list-changed` 廣播，接上既有 activity waiting 計算點。
-2. `AppSettings` 新增 `enable_waiting_toast`（預設 true）與解析預設；前端型別、SettingsView 開關、locales 對應。
-3. `QuotaOverlay.tsx` 訂閱事件、render 提醒區、實作延伸方向與點擊導航；`App.tsx` Toast 觸發改讀新開關並補主視窗 focus 事件 listener。
-4. **Rollback**：移除提醒區 render、Registry 廣播與新設定欄位即可回到現況；無資料遷移。
+1. 後端新增 `InterventionRegistry` 與 `intervention-list-changed` 廣播（emit 沿用 `app_setup.rs` 既有 overlay emit 模式），接上既有 activity waiting 計算點；並新增 `get_intervention_list` command 供初次快照。
+2. 不新增任何 `AppSettings` 欄位——overlay 提醒沿用既有 `enable_intervention_notification` 當總開關。
+3. `EmbeddedQuotaOverlayApp.tsx` 以 `useQuery` 拉 `get_intervention_list` 並訂閱 `intervention-list-changed`，清單以 props 傳給 `QuotaOverlay.tsx`；`QuotaOverlay` render 提醒區、實作延伸方向與點擊導航；`App.tsx` Toast 觸發維持不動（仍讀 `enableInterventionNotification`），僅補 `intervention-focus-session` 主視窗 focus/導航 listener。
+4. **Rollback**：移除提醒區 render、Registry 廣播與 `get_intervention_list` command 即可回到現況；不涉設定欄位，無資料遷移。
 
 ## Open Questions
 
 - 提醒區最大高度與可視筆數上限的具體值（預設先取「不超過可用工作區的一定比例 + 捲動」，實作時定 token）。
+- Copilot CLI 未來若釋出等待授權相關 hook，需重新評估是否納入 `InterventionRegistry` 更新點（見決策 1「已知限制」）。

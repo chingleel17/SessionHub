@@ -582,6 +582,8 @@ export const enUsMessages: Record<MessageKey, string> = {
   "quota.overlay.lock": "Lock",
   "quota.overlay.localOnly": "Local stats",
   "quota.overlay.stale": "stale",
+  "quota.overlay.intervention.title": "Needs Attention ({count})",
+  "quota.overlay.intervention.unknownProject": "Unknown project",
   "quota.settings.trayMode": "Tray icon mode",
   "quota.settings.trayMode.iconOnly": "Color indicator",
   "quota.settings.trayMode.percentage": "Show percentage",

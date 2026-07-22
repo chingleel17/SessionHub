@@ -430,6 +430,14 @@ export type SessionTargetedPayload = {
     eventType: string;
 };
 
+/** 後端 InterventionRegistry 的單筆等待授權項目，欄位最小化不含指令/路徑 */
+export type InterventionItem = {
+    sessionId: string;
+    projectName: string;
+    toolLabel?: string | null;
+    since: string;
+};
+
 export type ActivityHintPayload = {
     cwd: string;
     eventType: string;
