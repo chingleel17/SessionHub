@@ -1,12 +1,10 @@
 ## Purpose
 
 定義 SessionHub provider hook 在應用程式未開啟時，仍可透過隨附通知資源送出 Windows 原生通知的行為、觸發點與設定控制。
-
 ## Requirements
-
 ### Requirement: Hook 離線系統通知
 
-系統 SHALL 在 provider hook 腳本中提供獨立於 SessionHub 行程的系統通知能力，使用隨附的 `snoretoast.exe` 發送 Windows Toast；當 SessionHub 未開啟時通知仍正常發送。
+系統 SHALL 在 provider hook 腳本中提供獨立於 SessionHub 行程的系統通知能力，使用隨附的 `snoretoast.exe` 發送 Windows Toast；當 SessionHub 未開啟時通知仍正常發送。所有 hook 通知 SHALL 使用 `com.ching.sessionhub` 作為 Windows Application User Model ID，使 Windows 將其解析為 SessionHub 應用程式與圖示，而非執行 hook 的終端機。
 
 #### Scenario: SessionHub 未運行時 hook 仍發通知
 
@@ -14,6 +12,7 @@
 - **AND** SessionHub 行程未開啟
 - **THEN** hook 透過隨附的 `snoretoast.exe` 發送 Windows Toast 通知
 - **AND** 通知發送不因 SessionHub 未運行而失敗
+- **AND** 通知以 `com.ching.sessionhub` 歸類為 SessionHub
 
 #### Scenario: notify 模組失敗不阻斷 hook
 
@@ -100,3 +99,4 @@
 
 - **WHEN** 在非 Windows 平台執行 `.sh` hook
 - **THEN** 不發送系統通知（維持現狀，不視為錯誤）
+
