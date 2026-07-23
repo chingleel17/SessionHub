@@ -5,6 +5,11 @@ use crate::types::{AppSettings, QuotaSnapshot, QuotaWindow, COPILOT_PROVIDER};
 #[cfg(target_os = "windows")]
 use crate::types::CREATE_NO_WINDOW;
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Security::Credentials::{
+    CredEnumerateW, CredFree, CREDENTIALW, CRED_ENUMERATE_FLAGS, CRED_TYPE_GENERIC,
+};
+
 use super::QuotaAdapter;
 
 pub(crate) struct CopilotAdapter;
@@ -66,6 +71,101 @@ fn spawn_gh(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn is_copilot_cli_credential_target(target: &str) -> bool {
+    target.ends_with(".copilot-cli")
+}
+
+fn decode_credential_blob(blob: &[u8]) -> Option<String> {
+    let is_utf16_le = blob.len().is_multiple_of(2)
+        && blob
+            .chunks_exact(2)
+            .any(|character| character[0] != 0 && character[1] == 0);
+    let value = if is_utf16_le {
+        String::from_utf16(
+            &blob
+                .chunks_exact(2)
+                .map(|character| u16::from_le_bytes([character[0], character[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .ok()?
+    } else {
+        String::from_utf8(blob.to_vec()).ok()?
+    };
+
+    Some(
+        value
+            .trim_matches(|character: char| character.is_whitespace() || character == '\0')
+            .to_string(),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn read_copilot_cli_token() -> Option<String> {
+    let filter: Vec<u16> = "*.copilot-cli\0".encode_utf16().collect();
+    let mut count = 0;
+    let mut credentials: *mut *mut CREDENTIALW = std::ptr::null_mut();
+
+    // Windows 配置管理員配置的記憶體必須在讀取後透過 CredFree 釋放。
+    let enumerated = unsafe {
+        CredEnumerateW(
+            filter.as_ptr(),
+            0 as CRED_ENUMERATE_FLAGS,
+            &mut count,
+            &mut credentials,
+        )
+    };
+    if enumerated == 0 || credentials.is_null() {
+        return None;
+    }
+
+    let token = unsafe {
+        let entries = std::slice::from_raw_parts(credentials, count as usize);
+        entries.iter().find_map(|credential| {
+            let credential = **credential;
+            if credential.Type != CRED_TYPE_GENERIC
+                || credential.TargetName.is_null()
+                || credential.CredentialBlob.is_null()
+            {
+                return None;
+            }
+
+            let target_length = (0..).find(|&index| *credential.TargetName.add(index) == 0)?;
+            let target = String::from_utf16_lossy(std::slice::from_raw_parts(
+                credential.TargetName,
+                target_length,
+            ));
+            if !is_copilot_cli_credential_target(&target) {
+                return None;
+            }
+
+            decode_credential_blob(std::slice::from_raw_parts(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize as usize,
+            ))
+            .filter(|token| !token.is_empty())
+        })
+    };
+
+    unsafe { CredFree(credentials.cast()) };
+    token
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_copilot_cli_token() -> Option<String> {
+    None
+}
+
+fn get_copilot_token() -> Result<String, String> {
+    if let Some(token) = read_copilot_cli_token() {
+        return Ok(token);
+    }
+
+    spawn_gh(&["auth", "token"]).map_err(|_| {
+        "找不到 Copilot CLI 的登入憑證，且 gh CLI 也未登入。請登入 Copilot CLI 或執行 `gh auth login`"
+            .to_string()
+    })
+}
+
 /// Copilot quota_snapshots 物件內單一額度區塊的解析結果
 struct CopilotQuota {
     remaining_percent: f64,
@@ -90,14 +190,10 @@ impl QuotaAdapter for CopilotAdapter {
     }
 
     fn fetch_snapshot(&self, _settings: &AppSettings) -> QuotaSnapshot {
-        let token = match spawn_gh(&["auth", "token"]) {
+        let token = match get_copilot_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) => {
-                return no_auth_snapshot(
-                    "gh auth token returned empty — please log in with `gh auth login`",
-                )
-            }
-            Err(e) => return no_auth_snapshot(format!("需要安裝並登入 gh CLI: {e}")),
+            Ok(_) => return no_auth_snapshot("找不到可用的 Copilot 或 gh CLI 登入憑證"),
+            Err(e) => return no_auth_snapshot(e),
         };
 
         // 參考 costats 的做法：打 Copilot 內部 usage API，直接用 gh CLI 換來的一般
@@ -280,5 +376,32 @@ mod tests {
             "unexpected status: {}",
             snapshot.status
         );
+    }
+
+    #[test]
+    fn recognizes_copilot_cli_credential_targets() {
+        assert!(is_copilot_cli_credential_target(
+            "https://github.com:octocat.copilot-cli"
+        ));
+        assert!(!is_copilot_cli_credential_target("git:https://github.com"));
+    }
+
+    #[test]
+    fn removes_credential_blob_terminators() {
+        let token = "\0  token-value\r\n\0";
+        let sanitized = token
+            .trim_matches(|character: char| character.is_whitespace() || character == '\0');
+
+        assert_eq!(sanitized, "token-value");
+    }
+
+    #[test]
+    fn decodes_utf16_le_credential_blobs() {
+        let blob = "token-value\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+
+        assert_eq!(decode_credential_blob(&blob).as_deref(), Some("token-value"));
     }
 }
