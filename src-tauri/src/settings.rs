@@ -234,6 +234,8 @@ impl AppSettings {
             hook_scripts_path: default_hook_scripts_root()?.to_string_lossy().to_string(),
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
+            launch_on_startup: false,
+            start_minimized_on_startup: true,
             terminal_path,
             external_editor_path,
             show_archived: false,

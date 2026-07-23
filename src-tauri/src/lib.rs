@@ -300,6 +300,11 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--autostart"])
+                .build(),
+        )
         .manage(WatcherState::default())
         .manage(std::sync::Arc::new(ScanCache::default()))
         .manage(DbState::new().expect("failed to init metadata db"))
@@ -311,6 +316,15 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
+            let should_hide_main_window = app_setup::is_autostart_launch()
+                && settings.launch_on_startup
+                && settings.start_minimized_on_startup;
+            if should_hide_main_window {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            app_setup::reconcile_autostart_on_startup(&app.handle(), &settings);
             ensure_logs_dir();
             provider::ensure_claude_hook_scripts_installed(Some(
                 settings.hook_scripts_path.as_str(),
@@ -354,7 +368,9 @@ pub fn run() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let minimize = load_settings_internal()
-                    .map(|s| s.minimize_to_tray)
+                    .map(|s| {
+                        s.minimize_to_tray || (s.launch_on_startup && s.start_minimized_on_startup)
+                    })
                     .unwrap_or(false);
                 if minimize {
                     api.prevent_close();

@@ -61,6 +61,8 @@ pub(super) fn restart_provider_watchers_after_integration_change(
             .unwrap_or_default(),
         claude_quota_reset_day: 1,
         minimize_to_tray: false,
+        launch_on_startup: false,
+        start_minimized_on_startup: true,
         terminal_path: None,
         external_editor_path: None,
         show_archived: false,

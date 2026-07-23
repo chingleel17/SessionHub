@@ -35,6 +35,14 @@ pub(crate) fn get_settings_internal() -> Result<AppSettings, String> {
     Ok(settings)
 }
 
+fn save_settings_and_sync_internal(
+    settings: &AppSettings,
+    sync_autostart: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    save_settings_internal(settings)?;
+    sync_autostart()
+}
+
 #[tauri::command]
 pub fn get_settings() -> Result<AppSettings, String> {
     get_settings_internal()
@@ -47,7 +55,10 @@ pub fn save_settings(
     quota_cache: State<'_, QuotaCache>,
     settings: AppSettings,
 ) -> Result<(), String> {
-    save_settings_internal(&settings)?;
+    save_settings_and_sync_internal(&settings, || {
+        crate::app_setup::sync_autostart_registration(&app, &settings)
+            .map_err(|error| format!("failed to sync launch on startup: {error}"))
+    })?;
 
     // Prune quota cache & DB for providers the user just disabled
     {
@@ -68,6 +79,56 @@ pub fn save_settings(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_failure_preserves_the_saved_launch_on_startup_setting() {
+        let _guard = crate::shared_env_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let appdata_dir = std::env::temp_dir().join(format!(
+            "session-hub-autostart-settings-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&appdata_dir).expect("create app data dir");
+        unsafe {
+            std::env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata_dir);
+        }
+
+        let mut settings = AppSettings::default().expect("default settings");
+        settings.launch_on_startup = true;
+        let result =
+            save_settings_and_sync_internal(&settings, || Err("registration failed".to_string()));
+
+        assert_eq!(result, Err("registration failed".to_string()));
+        assert!(
+            load_settings_internal()
+                .expect("load settings")
+                .launch_on_startup
+        );
+
+        unsafe {
+            std::env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        }
+        std::fs::remove_dir_all(&appdata_dir).expect("remove app data dir");
+    }
+
+    #[test]
+    fn settings_without_autostart_fields_use_compatible_defaults() {
+        let settings = AppSettings::default().expect("default settings");
+        let mut value = serde_json::to_value(settings).expect("serialize settings");
+        let object = value.as_object_mut().expect("settings object");
+        object.remove("launchOnStartup");
+        object.remove("startMinimizedOnStartup");
+
+        let parsed = serde_json::from_value::<AppSettings>(value).expect("parse old settings");
+        assert!(!parsed.launch_on_startup);
+        assert!(parsed.start_minimized_on_startup);
+    }
 }
 
 #[tauri::command]

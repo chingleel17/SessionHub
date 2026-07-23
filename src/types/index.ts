@@ -50,6 +50,8 @@ export type AppSettings = {
     analyticsRefreshInterval?: 10 | 30;
     analyticsPanelCollapsed?: boolean;
     minimizeToTray?: boolean;
+    launchOnStartup?: boolean;
+    startMinimizedOnStartup?: boolean;
     claudeRoot?: string;
     antigravityRoot?: string;
     hookScriptsPath?: string;

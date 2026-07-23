@@ -542,6 +542,8 @@ mod tests {
             hook_scripts_path: String::new(),
             claude_quota_reset_day: 1,
             minimize_to_tray: false,
+            launch_on_startup: false,
+            start_minimized_on_startup: true,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
             allow_create_project_config_dir: false,

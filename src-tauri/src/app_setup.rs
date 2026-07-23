@@ -14,6 +14,79 @@ use crate::{
     QuotaCache, QUOTA_OVERLAY_LABEL,
 };
 use tauri::{Emitter, Manager};
+use tauri_plugin_autostart::ManagerExt;
+
+pub(crate) fn is_autostart_launch() -> bool {
+    std::env::args().any(|arg| arg == "--autostart")
+}
+
+fn sync_autostart_registration_with(
+    launch_on_startup: bool,
+    enable: impl FnOnce() -> Result<(), String>,
+    disable: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if launch_on_startup {
+        enable()
+    } else {
+        disable()
+    }
+}
+
+pub(crate) fn sync_autostart_registration(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+) -> Result<(), String> {
+    let autolaunch = app.autolaunch();
+    sync_autostart_registration_with(
+        settings.launch_on_startup,
+        || autolaunch.enable().map_err(|error| error.to_string()),
+        || autolaunch.disable().map_err(|error| error.to_string()),
+    )
+}
+
+pub(crate) fn reconcile_autostart_on_startup(app: &tauri::AppHandle, settings: &AppSettings) {
+    let autolaunch = app.autolaunch();
+    let result = if settings.launch_on_startup {
+        autolaunch.enable()
+    } else {
+        match autolaunch.is_enabled() {
+            Ok(true) => autolaunch.disable(),
+            Ok(false) => Ok(()),
+            Err(error) => Err(error),
+        }
+    };
+
+    if let Err(error) = result {
+        eprintln!("[autostart] 啟動對帳失敗: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_autostart_registration_with;
+
+    #[test]
+    fn sync_enables_when_requested() {
+        let result = sync_autostart_registration_with(true, || Ok(()), || panic!("disable"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sync_disables_when_not_requested() {
+        let result = sync_autostart_registration_with(false, || panic!("enable"), || Ok(()));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sync_preserves_failure_for_the_caller_to_report() {
+        let result = sync_autostart_registration_with(
+            true,
+            || Err("registration failed".to_string()),
+            || Ok(()),
+        );
+        assert_eq!(result, Err("registration failed".to_string()));
+    }
+}
 
 /// Quota monitoring 啟動：讀 DB 快取 + spawn 一次性背景執行緒做首次刷新。
 pub(crate) fn setup_quota_monitoring(

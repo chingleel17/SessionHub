@@ -36,6 +36,14 @@ pub(crate) fn default_minimize_to_tray() -> bool {
     false
 }
 
+pub(crate) fn default_launch_on_startup() -> bool {
+    false
+}
+
+pub(crate) fn default_start_minimized_on_startup() -> bool {
+    true
+}
+
 pub(crate) fn default_notification_enabled() -> bool {
     true
 }
@@ -116,6 +124,10 @@ pub(crate) struct AppSettings {
     pub(crate) claude_quota_reset_day: u8,
     #[serde(default = "default_minimize_to_tray")]
     pub(crate) minimize_to_tray: bool,
+    #[serde(default = "default_launch_on_startup")]
+    pub(crate) launch_on_startup: bool,
+    #[serde(default = "default_start_minimized_on_startup")]
+    pub(crate) start_minimized_on_startup: bool,
     #[serde(default = "default_true")]
     pub(crate) enable_quota_monitoring: bool,
     #[serde(default = "default_enabled_providers_all")]

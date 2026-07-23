@@ -14,6 +14,8 @@ export const DEFAULT_APP_SETTINGS: Required<Omit<AppSettings, RequiredKeys>> = {
   analyticsRefreshInterval: 30,
   analyticsPanelCollapsed: false,
   minimizeToTray: false,
+  launchOnStartup: false,
+  startMinimizedOnStartup: true,
   claudeRoot: "",
   antigravityRoot: "",
   hookScriptsPath: "",

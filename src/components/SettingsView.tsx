@@ -321,6 +321,35 @@ export function SettingsView({
             </span>
           </label>
 
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.launchOnStartup ?? false}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, launchOnStartup: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.launchOnStartup")}
+              <small className="settings-field-desc">{t("settings.fields.launchOnStartupDesc")}</small>
+            </span>
+          </label>
+
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.startMinimizedOnStartup ?? true}
+              disabled={!(settingsForm.launchOnStartup ?? false)}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, startMinimizedOnStartup: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.startMinimizedOnStartup")}
+              <small className="settings-field-desc">{t("settings.fields.startMinimizedOnStartupDesc")}</small>
+            </span>
+          </label>
+
           <div className="settings-field">
             <label htmlFor="default-launcher-select">
               {t("settings.fields.defaultLauncher")}
