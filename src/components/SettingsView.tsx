@@ -221,38 +221,54 @@ export function SettingsView({
 
           <label className="field-group">
             <span>{t("settings.fields.terminalPath")}</span>
-            <div className="field-with-action">
+            <div className="field-with-action field-with-action--dual-action">
               <input
                 value={settingsForm.terminalPath ?? ""}
+                title={settingsForm.terminalPath ?? ""}
                 onChange={(event) =>
                   onFormChange({ ...settingsForm, terminalPath: event.currentTarget.value })
                 }
               />
               <button
                 type="button"
-                className="ghost-button"
+                className="ghost-button path-action-button"
                 onClick={() => onBrowseFile("terminalPath")}
               >
                 {t("settings.actions.browseFile")}
+              </button>
+              <button
+                type="button"
+                className="ghost-button path-action-button"
+                onClick={onDetectTerminal}
+              >
+                {t("settings.actions.detectTerminal")}
               </button>
             </div>
           </label>
 
           <label className="field-group">
             <span>{t("settings.fields.externalEditorPath")}</span>
-            <div className="field-with-action">
+            <div className="field-with-action field-with-action--dual-action">
               <input
                 value={settingsForm.externalEditorPath ?? ""}
+                title={settingsForm.externalEditorPath ?? ""}
                 onChange={(event) =>
                   onFormChange({ ...settingsForm, externalEditorPath: event.currentTarget.value })
                 }
               />
               <button
                 type="button"
-                className="ghost-button"
+                className="ghost-button path-action-button"
                 onClick={() => onBrowseFile("externalEditorPath")}
               >
                 {t("settings.actions.browseFile")}
+              </button>
+              <button
+                type="button"
+                className="ghost-button path-action-button"
+                onClick={onDetectVscode}
+              >
+                {t("settings.actions.detectEditor")}
               </button>
             </div>
           </label>
@@ -364,7 +380,7 @@ export function SettingsView({
               }
             >
               <option value="terminal">Terminal</option>
-              <option value="vscode">VS Code</option>
+              <option value="vscode">外部編輯器</option>
               <option value="explorer">Explorer</option>
               <option value="opencode">OpenCode</option>
               <option value="claude">Claude</option>
@@ -473,12 +489,6 @@ export function SettingsView({
           <div className="settings-actions">
             <Button variant="primary" onClick={onSave}>
               {t("settings.actions.save")}
-            </Button>
-            <Button variant="secondary" onClick={onDetectTerminal}>
-              {t("settings.actions.detectTerminal")}
-            </Button>
-            <Button variant="secondary" onClick={onDetectVscode}>
-              {t("settings.actions.detectEditor")}
             </Button>
           </div>
         </div>

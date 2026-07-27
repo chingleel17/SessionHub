@@ -14,6 +14,14 @@ pub(crate) fn default_provider() -> String {
     "copilot".to_string()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectPathRemap {
+    pub(crate) old_path: String,
+    pub(crate) new_path: String,
+    pub(crate) created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionInfo {

@@ -6,8 +6,8 @@ use std::time::Instant;
 use rusqlite::Connection;
 
 use crate::db::{
-    instant_from_unix_secs, load_scan_state_from_db, load_session_mtimes_from_db,
-    load_sessions_cache_from_db, persist_provider_cache,
+    instant_from_unix_secs, list_path_remaps, load_scan_state_from_db, load_session_mtimes_from_db,
+    load_sessions_cache_from_db, persist_provider_cache, remap_path,
 };
 use crate::settings::{
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
@@ -437,6 +437,18 @@ pub(crate) fn get_sessions_internal(
                 {
                     eprintln!("failed to persist antigravity cache: {error}");
                 }
+            }
+        }
+    }
+
+    let path_remaps = list_path_remaps(connection)?;
+    if !path_remaps.is_empty() {
+        for session in &mut all_sessions {
+            if let Some(cwd) = session.cwd.as_deref() {
+                session.cwd = Some(remap_path(cwd, &path_remaps));
+            }
+            if let Some(repo_root) = session.repo_root.as_deref() {
+                session.repo_root = Some(remap_path(repo_root, &path_remaps));
             }
         }
     }

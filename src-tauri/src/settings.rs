@@ -201,23 +201,53 @@ pub(crate) fn detect_terminal_path() -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// 偵測 PATH 上的 VS Code 指令。
+///
+/// 依序嘗試正式版與 Insiders 版，讓只安裝 Insiders 的環境也能偵測到。
 pub(crate) fn detect_vscode_path() -> Result<Option<String>, String> {
-    let mut cmd = Command::new("where");
-    cmd.arg("code");
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd
-        .output()
-        .map_err(|error| format!("failed to execute where command: {error}"))?;
+    for candidate in ["code", "code-insiders"] {
+        let mut cmd = Command::new("where");
+        cmd.arg(candidate);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let output = cmd
+            .output()
+            .map_err(|error| format!("failed to execute where command: {error}"))?;
 
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .map(|line| line.trim().to_string()));
+        if output.status.success() {
+            let found = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty());
+
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
     }
 
     Ok(None)
+}
+
+/// 解析實際要使用的 VS Code 執行檔。
+///
+/// 優先採用設定中的 `external_editor_path`（使用者可能指定 VS Code Insiders 等變體），
+/// 該路徑存在時直接回傳；否則退回 PATH 上的 `code`。
+pub(crate) fn resolve_vscode_command() -> Option<String> {
+    let configured = load_settings_internal()
+        .ok()
+        .and_then(|settings| settings.external_editor_path)
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty());
+
+    if let Some(path) = configured {
+        if std::path::Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
+
+    detect_vscode_path().ok().flatten()
 }
 
 impl AppSettings {

@@ -186,12 +186,9 @@ pub(crate) fn build_tray_icon(app: &tauri::App) -> tauri::Result<()> {
                 .map(|s| s.tray_quota_panel_enabled)
                 .unwrap_or(true);
             if panel_enabled {
-                // 點擊系統匣圖示彈出 mini panel（rect.position 為 physical/logical enum）
-                let tray_pos = match rect.position {
-                    tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
-                    tauri::Position::Logical(p) => (p.x, p.y),
-                };
-                toggle_tray_panel(app, Some(tray_pos));
+                // 點擊系統匣圖示彈出 mini panel。rect.position 可能是 physical 或
+                // logical，換算需要 monitor scale factor，交由 panel 定位邏輯處理。
+                toggle_tray_panel(app, Some(rect.position));
             } else if let Some(window) = app.get_webview_window("main") {
                 // panel 停用時回復原本開啟主視窗行為
                 let _ = window.show();

@@ -63,6 +63,10 @@ function normalizePath(path: string): string {
   return path.replace(/\//g, "\\").toLowerCase();
 }
 
+function formatDisplayPath(path: string): string {
+  return path.replace(/^[a-z]:/, (drive) => drive.toUpperCase());
+}
+
 function normalizePinnedProjectKey(projectKey: string): string {
   const branchSeparatorIndex = projectKey.lastIndexOf(":");
   if (branchSeparatorIndex <= 1) {
@@ -82,7 +86,7 @@ function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string
 }
 
 function getProjectDisplayPath(session: SessionInfo, uncategorizedLabel: string): string {
-  return session.repoRoot?.trim() || session.cwd?.trim() || uncategorizedLabel;
+  return formatDisplayPath(session.repoRoot?.trim() || session.cwd?.trim() || uncategorizedLabel);
 }
 
 function getProjectTitle(session: SessionInfo, displayPath: string, uncategorizedLabel: string): string {
@@ -592,6 +596,22 @@ function App() {
     },
   });
 
+  const invalidatePathRemapQueries = async () => {
+    forceFullRef.current = true;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["project_path_remaps"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions_cached"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+    ]);
+  };
+
+  const upsertPathRemapMutation = useMutation({
+    mutationFn: ({ oldPath, newPath }: { oldPath: string; newPath: string }) =>
+      invoke("upsert_project_path_remap", { oldPath, newPath }),
+    onSuccess: invalidatePathRemapQueries,
+    onError: (error) => showToast(resolveErrorMessage(error, t("toast.pathRemapSaveFailed"))),
+  });
+
   const savePlanMutation = useMutation({
     mutationFn: ({ sessionDir, content }: { sessionDir: string; content: string }) =>
       invoke("write_plan", { sessionDir, content }),
@@ -681,6 +701,12 @@ function App() {
     () => groupedProjects.find((p) => p.key === activeView) ?? null,
     [activeView, groupedProjects],
   );
+
+  const projectPathExistsQuery = useQuery({
+    queryKey: ["project_path_exists", activeProject?.pathLabel ?? ""],
+    enabled: Boolean(activeProject?.pathLabel),
+    queryFn: () => invoke<boolean>("check_path_remap_directory_exists", { path: activeProject?.pathLabel }),
+  });
 
   const planSpecsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 樂觀更新期間壓制 openspec 重整，防止 watcher 觸發的 refetch 引發 UI 閃爍。
@@ -1495,6 +1521,21 @@ function App() {
     if (typeof selected === "string") setSettingsForm((v) => ({ ...v, [field]: selected }));
   };
 
+  const handleSavePathRemap = async (oldPath: string, newPath: string) => {
+    const exists = await invoke<boolean>("check_path_remap_directory_exists", { path: newPath });
+    if (!exists) {
+      showToast(t("toast.pathRemapDirectoryMissing"));
+      return;
+    }
+    await upsertPathRemapMutation.mutateAsync({ oldPath, newPath });
+    showToast(t("toast.pathRemapSaved"));
+  };
+
+  const handleRemapProjectPath = async (oldPath: string) => {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") await handleSavePathRemap(oldPath, selected);
+  };
+
   const handleToggleArchived = async (nextValue: boolean) => {
     const next = buildSettingsPayload({ showArchived: nextValue });
     setSettingsForm((v) => ({ ...v, showArchived: nextValue }));
@@ -2006,6 +2047,8 @@ function App() {
               onOpenProjectInTool={(project, tool) => void handleOpenProjectInTool(project, tool)}
               defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}
               toolAvailability={toolAvailabilityQuery.data ?? null}
+              projectPathExists={projectPathExistsQuery.data ?? true}
+              onRemapProjectPath={(oldPath) => void handleRemapProjectPath(oldPath)}
             />
           ) : null}
         </div>

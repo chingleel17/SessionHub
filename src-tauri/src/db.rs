@@ -63,6 +63,20 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "
+            CREATE TABLE IF NOT EXISTS project_path_remap (
+                old_path_key TEXT PRIMARY KEY,
+                old_path TEXT NOT NULL,
+                new_path TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            ",
+            [],
+        )
+        .map_err(|error| format!("failed to initialize project path remap db: {error}"))?;
+
+    connection
+        .execute(
+            "
             CREATE TABLE IF NOT EXISTS session_stats (
                 session_id TEXT PRIMARY KEY,
                 events_mtime INTEGER NOT NULL,
@@ -223,6 +237,85 @@ pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub(crate) fn normalize_remap_path(path: &str) -> String {
+    let normalized = path.trim().replace('/', "\\");
+    let trimmed = normalized.trim_end_matches('\\');
+    if trimmed.len() == 2 && trimmed.ends_with(':') {
+        normalized.to_lowercase()
+    } else {
+        trimmed.to_lowercase()
+    }
+}
+
+pub(crate) fn list_path_remaps(connection: &Connection) -> Result<Vec<ProjectPathRemap>, String> {
+    let mut statement = connection
+        .prepare("SELECT old_path, new_path, created_at FROM project_path_remap ORDER BY created_at DESC")
+        .map_err(|error| format!("failed to prepare path remap query: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ProjectPathRemap {
+                old_path: row.get(0)?,
+                new_path: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })
+        .map_err(|error| format!("failed to query path remaps: {error}"))?;
+
+    rows.map(|row| row.map_err(|error| format!("failed to read path remap row: {error}")))
+        .collect()
+}
+
+pub(crate) fn upsert_path_remap(
+    connection: &Connection,
+    old_path: &str,
+    new_path: &str,
+) -> Result<(), String> {
+    let old_path_key = normalize_remap_path(old_path);
+    if old_path_key.is_empty() {
+        return Err("old path must not be empty".to_string());
+    }
+
+    connection
+        .execute(
+            "
+            INSERT INTO project_path_remap (old_path_key, old_path, new_path)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(old_path_key) DO UPDATE SET
+                old_path = excluded.old_path,
+                new_path = excluded.new_path
+            ",
+            params![old_path_key, old_path.trim(), new_path.trim()],
+        )
+        .map_err(|error| format!("failed to upsert path remap: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn delete_path_remap(connection: &Connection, old_path: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM project_path_remap WHERE old_path_key = ?1",
+            params![normalize_remap_path(old_path)],
+        )
+        .map_err(|error| format!("failed to delete path remap: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn remap_path(path: &str, remaps: &[ProjectPathRemap]) -> String {
+    let normalized_path = normalize_remap_path(path);
+    for remap in remaps {
+        let old_path_key = normalize_remap_path(&remap.old_path);
+        if normalized_path == old_path_key {
+            return remap.new_path.clone();
+        }
+        if let Some(suffix) = path.get(old_path_key.len()..) {
+            if normalized_path.starts_with(&(old_path_key + "\\")) {
+                return format!("{}{}", remap.new_path.trim_end_matches(['\\', '/']), suffix);
+            }
+        }
+    }
+    path.to_string()
 }
 
 pub(crate) fn load_quota_snapshots_from_db(
@@ -831,4 +924,53 @@ pub(crate) fn delete_session_meta_internal(
         .map_err(|error| format!("failed to delete metadata: {error}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remap(old_path: &str, new_path: &str) -> ProjectPathRemap {
+        ProjectPathRemap {
+            old_path: old_path.to_string(),
+            new_path: new_path.to_string(),
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn normalize_remap_path_unifies_separators_case_and_trailing_separator() {
+        assert_eq!(normalize_remap_path("D:/Old/Project/"), "d:\\old\\project");
+        assert_eq!(normalize_remap_path("D:\\"), "d:\\");
+    }
+
+    #[test]
+    fn upsert_path_remap_replaces_case_insensitive_old_path() {
+        let connection = Connection::open_in_memory().expect("open test db");
+        init_db(&connection).expect("initialize test db");
+        upsert_path_remap(&connection, "D:\\Old\\Project", "D:\\New\\Project")
+            .expect("insert remap");
+        upsert_path_remap(&connection, "d:\\old\\project", "D:\\Renamed\\Project")
+            .expect("update remap");
+
+        let remaps = list_path_remaps(&connection).expect("list remaps");
+        assert_eq!(remaps.len(), 1);
+        assert_eq!(remaps[0].new_path, "D:\\Renamed\\Project");
+    }
+
+    #[test]
+    fn remap_path_matches_directory_boundaries_only() {
+        let remaps = vec![remap("D:\\old\\project", "D:\\new\\project")];
+        assert_eq!(remap_path("D:\\old\\project", &remaps), "D:\\new\\project");
+        assert_eq!(
+            remap_path("D:\\old\\project\\Src\\App", &remaps),
+            "D:\\new\\project\\Src\\App"
+        );
+        assert_eq!(
+            remap_path("D:\\old\\project2", &remaps),
+            "D:\\old\\project2"
+        );
+        assert_eq!(remap_path("D:\\other", &remaps), "D:\\other");
+        assert_eq!(remap_path("D:\\old\\project", &[]), "D:\\old\\project");
+    }
 }

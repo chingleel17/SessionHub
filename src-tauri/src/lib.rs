@@ -31,6 +31,12 @@ pub(crate) use watcher::*;
 pub(crate) const QUOTA_OVERLAY_LABEL: &str = "quota-overlay";
 /// mini panel 視窗 label
 pub(crate) const TRAY_PANEL_LABEL: &str = "tray-panel";
+/// mini panel 邏輯寬度（需與 App.css 的 .tray-panel-root 一致）
+pub(crate) const TRAY_PANEL_WIDTH: f64 = 320.0;
+/// mini panel 邏輯高度（需與 App.css 的 .tray-panel-root 一致）
+pub(crate) const TRAY_PANEL_HEIGHT: f64 = 480.0;
+/// mini panel 與螢幕邊緣的邏輯間距
+pub(crate) const TRAY_PANEL_MARGIN: f64 = 12.0;
 
 /// 將設定變更定向通知 overlay webview，避免動態建立視窗遺漏 AppHandle 廣播。
 pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &AppSettings) {
@@ -179,7 +185,7 @@ pub(crate) fn sync_overlay_visibility(app: &tauri::AppHandle, settings: &AppSett
 
 /// 切換 tray mini panel 的顯示狀態（左鍵點擊 tray 時呼叫）。
 /// panel 不存在則建立於系統匣附近；已可見則隱藏；隱藏中則顯示並置前。
-pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, f64)>) {
+pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<tauri::Position>) {
     if let Some(window) = app.get_webview_window(TRAY_PANEL_LABEL) {
         let visible = window.is_visible().unwrap_or(false);
         if visible {
@@ -206,7 +212,7 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, 
     .always_on_top(true)
     .skip_taskbar(true)
     .resizable(false)
-    .inner_size(320.0, 480.0)
+    .inner_size(TRAY_PANEL_WIDTH, TRAY_PANEL_HEIGHT)
     .visible(false);
 
     let window = match builder.build() {
@@ -217,6 +223,12 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, 
         }
     };
 
+    // 尺寸以 logical 為準，避免任何外部還原覆蓋成錯誤的 physical 值
+    let _ = window.set_size(tauri::LogicalSize::new(
+        TRAY_PANEL_WIDTH,
+        TRAY_PANEL_HEIGHT,
+    ));
+
     // 定位到系統匣附近（右下角，taskbar 上方）
     position_panel_near_tray(app, &window, tray_rect);
     let _ = window.show();
@@ -225,68 +237,105 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<(f64, 
     let _ = window.set_focus();
 }
 
-/// 將 panel 定位到系統匣附近；取不到 tray 座標時退回螢幕右下角。
+/// 螢幕可用區域（work area，已扣除 taskbar）的實體座標與縮放比例
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PanelScreen {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub scale: f64,
+}
+
+/// 計算 tray panel 的實體座標。
+///
+/// `tray_phys` 為已換算為 physical 的系統匣圖示座標；`None` 時退回可用區域右下角。
+/// panel 尺寸以 logical 定義，需依 `screen.scale` 換算後才能與 work area 比較。
+pub(crate) fn compute_panel_position(screen: PanelScreen, tray_phys: Option<(f64, f64)>) -> (f64, f64) {
+    let panel_w = TRAY_PANEL_WIDTH * screen.scale;
+    let panel_h = TRAY_PANEL_HEIGHT * screen.scale;
+    let margin = TRAY_PANEL_MARGIN * screen.scale;
+
+    let max_x = (screen.x + screen.width - panel_w - margin).max(screen.x);
+    let max_y = (screen.y + screen.height - panel_h - margin).max(screen.y);
+
+    match tray_phys {
+        // 以 tray 圖示為中心水平對齊，垂直貼齊 work area 底部（即 taskbar 上方）
+        Some((tray_x, _)) => {
+            let x = (tray_x - panel_w / 2.0).min(max_x).max(screen.x + margin);
+            (x, max_y)
+        }
+        None => (max_x, max_y),
+    }
+}
+
+/// 將 panel 定位到系統匣附近；取不到 tray 座標時退回可用區域右下角。
 fn position_panel_near_tray(
     app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
-    tray_rect: Option<(f64, f64)>,
+    tray_rect: Option<tauri::Position>,
 ) {
-    let panel_w = 320.0_f64;
-    let panel_h = 480.0_f64;
-    let margin = 12.0_f64;
+    let monitors = app.available_monitors().unwrap_or_default();
 
-    // 使用 tray 所在螢幕的實體座標與原點，支援副螢幕不在 (0, 0) 的情況。
-    let monitor = tray_rect
-        .and_then(|(tray_x, tray_y)| {
-            app.available_monitors().ok().and_then(|monitors| {
-                monitors.into_iter().find(|monitor| {
-                    let position = monitor.position();
-                    let size = monitor.size();
-                    let right = position.x as f64 + size.width as f64;
-                    let bottom = position.y as f64 + size.height as f64;
-                    tray_x >= position.x as f64
-                        && tray_x <= right
-                        && tray_y >= position.y as f64
-                        && tray_y <= bottom
-                })
-            })
+    // logical 座標需要 scale 才能換算，但選哪個螢幕又取決於換算結果。
+    // 先用主螢幕 scale 粗換算選出 monitor，再以該 monitor 的 scale 重算一次。
+    let primary_scale = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+
+    let to_phys = |scale: f64| {
+        tray_rect.map(|position| match position {
+            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+            tauri::Position::Logical(p) => (p.x * scale, p.y * scale),
         })
-        .or_else(|| window.current_monitor().ok().flatten());
-
-    let (screen_x, screen_y, screen_w, screen_h, scale) = monitor
-        .map(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            (
-                position.x as f64,
-                position.y as f64,
-                size.width as f64,
-                size.height as f64,
-                monitor.scale_factor(),
-            )
-        })
-        .unwrap_or((0.0, 0.0, 1920.0, 1080.0, 1.0));
-
-    let panel_w_phys = panel_w * scale;
-    let panel_h_phys = panel_h * scale;
-    let margin_phys = margin * scale;
-    // 預留 taskbar 高度（估 48 邏輯像素）
-    let taskbar_phys = 48.0 * scale;
-
-    let (x, y) = match tray_rect {
-        Some((tray_x, tray_y)) => {
-            let x = (tray_x - panel_w_phys / 2.0)
-                .min(screen_x + screen_w - panel_w_phys - margin_phys)
-                .max(screen_x + margin_phys);
-            let y = (tray_y - panel_h_phys - margin_phys).max(screen_y + margin_phys);
-            (x, y)
-        }
-        None => (
-            screen_x + screen_w - panel_w_phys - margin_phys,
-            screen_y + screen_h - panel_h_phys - taskbar_phys - margin_phys,
-        ),
     };
 
+    let find_monitor = |point: Option<(f64, f64)>| {
+        point.and_then(|(x, y)| {
+            monitors.iter().find(|monitor| {
+                let position = monitor.position();
+                let size = monitor.size();
+                x >= position.x as f64
+                    && x <= position.x as f64 + size.width as f64
+                    && y >= position.y as f64
+                    && y <= position.y as f64 + size.height as f64
+            })
+        })
+    };
+
+    let monitor = find_monitor(to_phys(primary_scale))
+        .cloned()
+        .or_else(|| window.current_monitor().ok().flatten());
+
+    // 以命中螢幕自身的 scale 重新換算 tray 座標（混合 DPI 多螢幕）
+    let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(primary_scale);
+    let tray_phys = to_phys(scale);
+    let monitor = find_monitor(tray_phys).cloned().or(monitor);
+
+    let screen = monitor
+        .map(|monitor| {
+            // work_area 已扣除 taskbar，無需再估算其高度
+            let area = monitor.work_area();
+            PanelScreen {
+                x: area.position.x as f64,
+                y: area.position.y as f64,
+                width: area.size.width as f64,
+                height: area.size.height as f64,
+                scale: monitor.scale_factor(),
+            }
+        })
+        .unwrap_or(PanelScreen {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1032.0,
+            scale: 1.0,
+        });
+
+    let (x, y) = compute_panel_position(screen, tray_phys);
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
@@ -313,7 +362,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // tray panel 尺寸固定、位置每次依 tray 座標重算，不可交由 window-state 還原
+        // （plugin 以 physical 儲存／還原，會覆蓋 builder 的 logical 尺寸而壓縮內容）
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[TRAY_PANEL_LABEL])
+                .build(),
+        )
         .setup(|app| {
             let settings = load_settings_internal().unwrap_or(AppSettings::default()?);
             let should_hide_main_window = app_setup::is_autostart_launch()
@@ -404,6 +459,10 @@ pub fn run() {
             get_analytics_data,
             open_terminal,
             check_directory_exists,
+            check_path_remap_directory_exists,
+            list_project_path_remaps,
+            upsert_project_path_remap,
+            delete_project_path_remap,
             read_plan,
             write_plan,
             open_plan_external,
@@ -460,6 +519,83 @@ pub fn run() {
 pub(crate) fn shared_env_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
+mod panel_position_tests {
+    use super::*;
+
+    /// 1920x1080、taskbar 48px、scale 1.0 的主螢幕 work area
+    fn screen_1x() -> PanelScreen {
+        PanelScreen {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1032.0,
+            scale: 1.0,
+        }
+    }
+
+    /// 同上但 125% 縮放（physical 1920x1080、work area 高 1020）
+    fn screen_125x() -> PanelScreen {
+        PanelScreen {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1020.0,
+            scale: 1.25,
+        }
+    }
+
+    #[test]
+    fn panel_sits_above_taskbar() {
+        let screen = screen_1x();
+        let (_, y) = compute_panel_position(screen, Some((1500.0, 1050.0)));
+        // 底部貼齊 work area（1032）扣掉 panel 高度與間距
+        assert_eq!(y, 1032.0 - 480.0 - 12.0);
+    }
+
+    #[test]
+    fn panel_centers_on_tray_icon() {
+        let (x, _) = compute_panel_position(screen_1x(), Some((1500.0, 1050.0)));
+        assert_eq!(x, 1500.0 - 160.0);
+    }
+
+    #[test]
+    fn panel_scales_with_dpi() {
+        let screen = screen_125x();
+        let (x, y) = compute_panel_position(screen, Some((1875.0, 1050.0)));
+        // panel physical 尺寸為 400x600，右緣不可超出 work area
+        assert_eq!(x, 1920.0 - 400.0 - 15.0);
+        assert_eq!(y, 1020.0 - 600.0 - 15.0);
+    }
+
+    #[test]
+    fn panel_clamps_to_left_edge() {
+        let (x, _) = compute_panel_position(screen_1x(), Some((10.0, 1050.0)));
+        assert_eq!(x, 12.0);
+    }
+
+    #[test]
+    fn panel_falls_back_to_bottom_right() {
+        let (x, y) = compute_panel_position(screen_1x(), None);
+        assert_eq!(x, 1920.0 - 320.0 - 12.0);
+        assert_eq!(y, 1032.0 - 480.0 - 12.0);
+    }
+
+    #[test]
+    fn panel_respects_secondary_monitor_origin() {
+        let screen = PanelScreen {
+            x: 1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1032.0,
+            scale: 1.0,
+        };
+        let (x, y) = compute_panel_position(screen, Some((3400.0, 1050.0)));
+        assert_eq!(x, 3400.0 - 160.0);
+        assert_eq!(y, 1032.0 - 480.0 - 12.0);
+    }
 }
 
 #[cfg(test)]

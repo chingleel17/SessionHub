@@ -18,6 +18,12 @@ export type SessionInfo = {
     hasEvents: boolean;
 };
 
+export type ProjectPathRemap = {
+    oldPath: string;
+    newPath: string;
+    createdAt: string;
+};
+
 export type SessionTodoStatus = "pending" | "in_progress" | "done" | "blocked" | (string & {});
 
 export type SessionTodo = {

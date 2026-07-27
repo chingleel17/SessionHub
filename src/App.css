@@ -1003,8 +1003,24 @@ textarea {
 
 .field-with-action {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+/* 路徑欄位並排的操作按鈕（選擇檔案／自動偵測），採緊湊樣式避免擠壓路徑顯示 */
+.field-with-action--dual-action {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.path-action-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.field-with-action input {
+  text-overflow: ellipsis;
 }
 
 .field-group span,
@@ -1652,6 +1668,56 @@ html.embedded-quota-view .quota-overlay-no-drag {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.path-remap-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.path-remap-list,
+.path-remap-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.path-remap-list > p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.path-remap-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.path-remap-row code {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-path-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 0;
+  color: var(--color-error-text);
+  font-size: 13px;
+}
+
+.project-path-warning .ghost-button {
+  min-height: 32px;
+  flex-shrink: 0;
 }
 
 .provider-integration-section-heading {
@@ -2945,6 +3011,15 @@ html.embedded-quota-view .quota-overlay-no-drag {
   .plan-editor-layout,
   .field-with-action {
     grid-template-columns: 1fr;
+  }
+
+  /* 窄畫面時路徑欄位改為上下堆疊，兩個操作按鈕並列於下一列 */
+  .field-with-action--dual-action {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .field-with-action--dual-action input {
+    grid-column: 1 / -1;
   }
 
   .hero-actions {

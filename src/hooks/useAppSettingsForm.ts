@@ -128,6 +128,8 @@ export function useAppSettingsForm({
       showToast(t("toast.settingsSaved"));
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      // 外部編輯器路徑會影響工具可用性偵測，需一併失效
+      await queryClient.invalidateQueries({ queryKey: ["tool_availability"] });
       onSettingsSaved();
     },
   });

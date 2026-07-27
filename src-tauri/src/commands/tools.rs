@@ -10,6 +10,7 @@ use crate::openspec_scan::{
     read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
 };
 use crate::sessions::{configure_msys_stackdump_suppression, open_terminal_internal};
+use crate::settings::resolve_vscode_command;
 use crate::sisyphus::scan_sisyphus_internal;
 use crate::types::*;
 use crate::watcher::watch_project_files_internal;
@@ -31,7 +32,7 @@ pub(crate) fn check_tool_availability_internal() -> ToolAvailability {
         claude: which_exists("claude"),
         codex: which_exists("codex"),
         gemini: which_exists("gemini"),
-        vscode: which_exists("code"),
+        vscode: resolve_vscode_command().is_some(),
     }
 }
 
@@ -75,8 +76,22 @@ pub(crate) fn open_in_tool_internal(
             open_terminal_internal(path, cwd)
         }
         "opencode" => {
-            let mut cmd = Command::new("opencode");
+            // OpenCode 在 Windows 常以 npm shim（opencode.cmd）安裝，
+            // std::process::Command 只會解析 .exe，因此改由終端機執行指令。
+            let term = terminal_path.unwrap_or("pwsh");
+            let term_stem = PathBuf::from(term)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            let mut cmd = Command::new(term);
             cmd.current_dir(cwd);
+            if term_stem == "cmd" {
+                cmd.args(["/K", &format!("cd /d \"{}\" && opencode", cwd)]);
+            } else {
+                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; opencode", cwd)]);
+            }
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NEW_CONSOLE);
             configure_msys_stackdump_suppression(&mut cmd);
@@ -151,9 +166,39 @@ pub(crate) fn open_in_tool_internal(
             Ok(())
         }
         "vscode" => {
-            Command::new("code")
-                .arg(cwd)
-                .spawn()
+            let editor = resolve_vscode_command()
+                .ok_or_else(|| "failed to open vscode: no VS Code executable found".to_string())?;
+            let editor_ext = PathBuf::from(&editor)
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            // .cmd / .bat / .ps1 為 shim 腳本，Command 只解析 .exe，需透過終端機執行。
+            let mut cmd = if matches!(editor_ext.as_str(), "cmd" | "bat" | "ps1") {
+                let term = terminal_path.unwrap_or("pwsh");
+                let term_stem = PathBuf::from(term)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+
+                let mut c = Command::new(term);
+                if term_stem == "cmd" {
+                    c.args(["/C", &format!("\"{}\" \"{}\"", editor, cwd)]);
+                } else {
+                    c.args(["-NoProfile", "-Command", &format!("& '{}' '{}'", editor, cwd)]);
+                }
+                c
+            } else {
+                let mut c = Command::new(&editor);
+                c.arg(cwd);
+                c
+            };
+
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.spawn()
                 .map_err(|e| format!("failed to open vscode: {e}"))?;
             Ok(())
         }

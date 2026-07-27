@@ -37,7 +37,7 @@ const FILTER_EXPANDED_STORAGE_KEY = "sessionFilterExpanded";
 
 const PROJECT_LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: string; availKey?: keyof ToolAvailability }[] = [
   { type: "terminal", label: "Terminal", icon: ">_" },
-  { type: "vscode", label: "VS Code", icon: "⌨", availKey: "vscode" },
+  { type: "vscode", label: "外部編輯器", icon: "⌨", availKey: "vscode" },
   { type: "explorer", label: "Explorer", icon: "📁" },
   { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
   { type: "claude", label: "Claude", icon: "C", availKey: "claude" },
@@ -142,6 +142,8 @@ type Props = {
   onOpenProjectInTool: (project: ProjectGroup, tool: IdeLauncherType) => void;
   defaultLauncher: string | null;
   toolAvailability: ToolAvailability | null;
+  projectPathExists: boolean;
+  onRemapProjectPath: (oldPath: string) => void;
   // Plan sub-tab props (IPC handled by App.tsx, state flows through here)
   activePlanSessionId: string | null;
   onActivePlanChange: (sessionId: string | null) => void;
@@ -286,6 +288,8 @@ export function ProjectView({
   onOpenProjectInTool,
   defaultLauncher,
   toolAvailability,
+  projectPathExists,
+  onRemapProjectPath,
 }: Props) {
   const { t } = useI18n();
   // 舊版曾有獨立 "mcp" sub-tab（現併入 agents 頁籤）；殘留狀態正規化為 agents，避免空白內容。
@@ -688,6 +692,14 @@ export function ProjectView({
                   </div>
                 </section>
               ) : null}
+            </div>
+          ) : null}
+          {!projectPathExists ? (
+            <div className="project-path-warning">
+              <span>{t("project.pathRemap.missing")}</span>
+              <button type="button" className="ghost-button" onClick={() => onRemapProjectPath(project.pathLabel)}>
+                {t("project.pathRemap.action")}
+              </button>
             </div>
           ) : null}
         </div>
