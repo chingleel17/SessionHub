@@ -1542,13 +1542,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .tray-panel-provider-header,
 .tray-panel-window-top,
-.tray-panel-local-usage {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
 .tray-panel-provider-name,
 .tray-panel-window-label {
   font-size: 13px;
@@ -1572,15 +1565,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .tray-panel-provider-note--error {
   color: var(--color-error-text);
-}
-
-.tray-panel-local-usage span {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.tray-panel-local-usage strong {
-  font-size: 12px;
 }
 
 .tray-panel-footer {
@@ -7274,12 +7258,6 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 }
 
 /* ── local usage ── */
-.qo-local {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--quota-divider);
-}
-
 .qo-reset-credits {
   margin-top: 18px;
   padding-top: 14px;
@@ -7358,31 +7336,6 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   color: var(--quota-reset-text);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.qo-local-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 4px;
-}
-
-.qo-local-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--quota-pct-text);
-}
-
-.qo-local-value {
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--quota-accent-opencode);
-}
-
-.qo-local-period {
-  font-size: 11px;
-  color: var(--quota-reset-text);
 }
 
 /* ── extra credits ── */

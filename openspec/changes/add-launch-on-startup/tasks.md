@@ -33,7 +33,7 @@
 - [x] 5.2 於 `lib.rs` 的 `setup()` 開頭（早於 watcher／quota 初始化）判斷 `is_autostart_launch() && settings.launch_on_startup && settings.start_minimized_on_startup`，成立時對 `main` 視窗呼叫 `hide()`
 - [x] 5.3 確認隱藏狀態下 `build_tray_icon` 仍正常建立系統匣圖示與「顯示視窗」選單項
 - [x] 5.4 修改 `lib.rs` 的 `CloseRequested` 處理（現為 `lib.rs:351` 僅檢查 `minimize_to_tray`），改為 `minimize_to_tray || (launch_on_startup && start_minimized_on_startup)` 成立時 `prevent_close()` + `hide()`（見 design.md D7）
-- [ ] 5.5 實測是否出現主視窗閃現；若明顯，改採 design.md D5 回退方案（`tauri.conf.json` 設 `"visible": false` + 非 autostart 啟動時於 `setup()` 末端 `show()`）並更新 design.md
+- [x] 5.5 實測是否出現主視窗閃現；若明顯，改採 design.md D5 回退方案（`tauri.conf.json` 設 `"visible": false` + 非 autostart 啟動時於 `setup()` 末端 `show()`）並更新 design.md
 
 ## 6. 前端型別與預設值
 

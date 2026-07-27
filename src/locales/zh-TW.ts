@@ -563,7 +563,7 @@ export const zhTwMessages = {
   "quota.monitoring.source.remote_api": "API",
   "quota.monitoring.source.local_scan": "本地估算",
   "quota.monitoring.overview": "額度概覽",
-  "quota.monitoring.localUsage": "本月用量（估算）",
+  "quota.monitoring.noQuotaData": "無額度資料",
   "quota.tab.all": "全部",
   "quota.window.fiveHour": "5 小時",
   "quota.window.sevenDay": "1 週",

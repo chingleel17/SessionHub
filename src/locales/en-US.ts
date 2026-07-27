@@ -567,7 +567,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "quota.monitoring.source.remote_api": "API",
   "quota.monitoring.source.local_scan": "Local estimate",
   "quota.monitoring.overview": "Quota Overview",
-  "quota.monitoring.localUsage": "This month's usage (estimate)",
+  "quota.monitoring.noQuotaData": "No quota data",
   "quota.tab.all": "All",
   "quota.window.fiveHour": "5 Hours",
   "quota.window.sevenDay": "1 Week",

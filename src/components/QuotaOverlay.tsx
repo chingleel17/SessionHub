@@ -346,11 +346,7 @@ export function QuotaOverlay({
                           );
                         })
                       ) : (
-                        <span className="quota-overlay-local-summary">
-                          {snapshot.localTokens
-                            ? `${snapshot.localTokens.periodLabel} · ${Math.round((snapshot.localTokens.inputTokens + snapshot.localTokens.outputTokens) / 1000)}k`
-                            : t("quota.monitoring.source.local_scan")}
-                        </span>
+                        <span className="quota-overlay-local-summary">{t("quota.monitoring.noQuotaData")}</span>
                       )
                     ) : (
                       <div className="quota-overlay-provider-note quota-overlay-meta--muted">

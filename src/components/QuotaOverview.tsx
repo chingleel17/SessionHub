@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow, ResetCreditEntry } from "../types";
+import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 
 const DEFAULT_STORAGE_KEY = "quota-overview-active-provider";
@@ -56,13 +57,6 @@ function formatAge(fetchedAt: string): string {
   const hours = Math.floor(totalMins / 60);
   if (hours < 24) return `${hours} 小時前`;
   return `${Math.floor(hours / 24)} 天前`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
-  return `${n}`;
 }
 
 function barColor(pct: number): string {
@@ -216,16 +210,8 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
         </div>
       ) : null}
 
-      {isOk && snap.source === "local_scan" && snap.localTokens ? (
-        <div className="qo-local">
-          <div className="qo-local-row">
-            <span className="qo-local-label">{t("quota.monitoring.localUsage")}</span>
-            <span className="qo-local-value">
-              {formatTokens(snap.localTokens.inputTokens + snap.localTokens.outputTokens)} tok
-            </span>
-          </div>
-          <div className="qo-local-period">{snap.localTokens.periodLabel}</div>
-        </div>
+      {isOk && hasNoQuotaContent(snap) ? (
+        <p className="qo-hint qo-hint--muted">{t("quota.monitoring.noQuotaData")}</p>
       ) : null}
 
       {isOk && snap.extraCredits?.isEnabled ? (

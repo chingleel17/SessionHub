@@ -255,26 +255,23 @@ pub(crate) fn compute_primary_pct(
 }
 
 /// 依 snapshot 建構多行 tooltip 摘要（格式見 design.md §1.3）。
-/// window 名稱一律取自 `QuotaWindow.label`；local_scan 期間取自 `LocalTokenUsage.period_label`。
+/// window 名稱一律取自 `QuotaWindow.label`；無任何 window 的 provider 顯示無額度資料說明。
 pub(crate) fn build_tooltip(snapshots: &[QuotaSnapshot]) -> String {
     let mut lines = vec!["SessionHub".to_string()];
     for snap in snapshots {
         let name = provider_label(&snap.provider);
         match snap.status.as_str() {
             "ok" => {
-                if let Some(local) = &snap.local_tokens {
-                    let total = local.input_tokens + local.output_tokens;
-                    lines.push(format!("{name}: {total} tok（{}）", local.period_label));
-                } else if let Some(windows) = &snap.windows {
-                    let parts: Vec<String> = windows
-                        .iter()
-                        .map(|w| {
-                            format!("{}% ({})", (w.utilization * 100.0).round() as i64, w.label)
-                        })
-                        .collect();
-                    if !parts.is_empty() {
-                        lines.push(format!("{name}: {}", parts.join(" · ")));
-                    }
+                let parts: Vec<String> = snap
+                    .windows
+                    .iter()
+                    .flatten()
+                    .map(|w| format!("{}% ({})", (w.utilization * 100.0).round() as i64, w.label))
+                    .collect();
+                if parts.is_empty() {
+                    lines.push(format!("{name}: 無額度資料"));
+                } else {
+                    lines.push(format!("{name}: {}", parts.join(" · ")));
                 }
             }
             "no_auth" => lines.push(format!("{name}: 未登入")),
@@ -346,7 +343,6 @@ mod tests {
                     })
                     .collect(),
             ),
-            local_tokens: None,
             extra_credits: None,
             reset_credits: None,
         }

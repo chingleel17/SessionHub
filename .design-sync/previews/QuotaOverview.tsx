@@ -31,25 +31,25 @@ const antigravityOk = {
   ],
 };
 
-const codexLocal = {
-  provider: "codex",
+// 無任何額度內容的 provider：應顯示「無額度資料」說明文字而非空白區塊
+const opencodeNoQuota = {
+  provider: "opencode",
   status: "ok",
   source: "local_scan",
   fetchedAt: minutesAgo(25),
   windows: [],
-  localTokens: {
-    inputTokens: 2_940_000,
-    outputTokens: 611_000,
-    periodLabel: "2026-07-01 ~ 2026-07-31",
-  },
 };
 
 export const MultiProvider = () => (
   <QuotaOverview
-    snapshots={[claudeOk, antigravityOk, codexLocal]}
+    snapshots={[claudeOk, antigravityOk, opencodeNoQuota]}
     onRefresh={noop}
     onRefreshProvider={noop}
   />
+);
+
+export const NoQuotaData = () => (
+  <QuotaOverview snapshots={[opencodeNoQuota]} onRefresh={noop} onRefreshProvider={noop} />
 );
 
 export const AntigravityGroups = () => (

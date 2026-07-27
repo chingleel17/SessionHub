@@ -1,8 +1,7 @@
 use std::env;
 
 use crate::types::{
-    AppSettings, LocalTokenUsage, QuotaSnapshot, QuotaWindow, ResetCreditEntry, ResetCredits,
-    CODEX_PROVIDER,
+    AppSettings, QuotaSnapshot, QuotaWindow, ResetCreditEntry, ResetCredits, CODEX_PROVIDER,
 };
 
 use super::QuotaAdapter;
@@ -29,7 +28,6 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         fetched_at: current_timestamp(),
         error_message: Some(error_message.into()),
         windows: None,
-        local_tokens: None,
         extra_credits: None,
         reset_credits: None,
     }
@@ -43,7 +41,6 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         fetched_at: current_timestamp(),
         error_message: Some(error_message.into()),
         windows: None,
-        local_tokens: None,
         extra_credits: None,
         reset_credits: None,
     }
@@ -265,84 +262,6 @@ fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>,
     Ok(Some(reset_credits))
 }
 
-fn count_monthly_tokens_from_jsonl(codex_root: &str) -> (u64, u64) {
-    let root = std::path::PathBuf::from(codex_root);
-    if !root.exists() {
-        return (0, 0);
-    }
-
-    use chrono::Datelike;
-
-    let now = chrono::Utc::now();
-    let current_year = now.year();
-    let current_month = now.month();
-    let mut input_total: u64 = 0;
-    let mut output_total: u64 = 0;
-
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            for line in content.lines() {
-                let json: serde_json::Value = match serde_json::from_str(line) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-
-                let ts = json
-                    .get("timestamp")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&chrono::Utc));
-
-                if let Some(dt) = ts {
-                    if dt.year() != current_year || dt.month() != current_month {
-                        continue;
-                    }
-                }
-
-                if let Some(usage) = json.get("usage") {
-                    input_total += usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    input_total += usage
-                        .get("prompt_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    output_total += usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    output_total += usage
-                        .get("completion_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                }
-            }
-        }
-    }
-
-    (input_total, output_total)
-}
-
 impl QuotaAdapter for CodexAdapter {
     fn provider_key(&self) -> &str {
         CODEX_PROVIDER
@@ -387,8 +306,6 @@ impl QuotaAdapter for CodexAdapter {
             }
         }
 
-        let (input_tokens, output_tokens) = count_monthly_tokens_from_jsonl(&settings.codex_root);
-        let period_label = chrono::Utc::now().format("本月（%Y-%m）").to_string();
         let reset_credits = match fetch_reset_credits(&creds) {
             Ok(reset_credits) => reset_credits,
             Err(error) => {
@@ -408,11 +325,6 @@ impl QuotaAdapter for CodexAdapter {
             } else {
                 Some(windows)
             },
-            local_tokens: Some(LocalTokenUsage {
-                input_tokens,
-                output_tokens,
-                period_label,
-            }),
             extra_credits: None,
             reset_credits,
         }
@@ -590,12 +502,35 @@ mod tests {
             "fetchedAt": "2026-07-14T08:00:00Z",
             "errorMessage": null,
             "windows": [],
-            "localTokens": null,
             "extraCredits": null
         }))
         .expect("snapshot should deserialize");
 
         assert_eq!(snapshot.reset_credits, None);
+    }
+
+    /// local_tokens 欄位移除後，SQLite 中既有的舊快照 JSON 仍須可反序列化，
+    /// 多餘的 localTokens 鍵由 serde 忽略，不需 DB migration。
+    #[test]
+    fn quota_snapshot_ignores_legacy_local_tokens_field() {
+        let snapshot = serde_json::from_value::<QuotaSnapshot>(json!({
+            "provider": "codex",
+            "status": "ok",
+            "source": "remote_api",
+            "fetchedAt": "2026-07-14T08:00:00Z",
+            "errorMessage": null,
+            "windows": [],
+            "localTokens": {
+                "inputTokens": 1234,
+                "outputTokens": 567,
+                "periodLabel": "本月（2026-07）"
+            },
+            "extraCredits": null
+        }))
+        .expect("legacy snapshot should still deserialize");
+
+        assert_eq!(snapshot.provider, "codex");
+        assert_eq!(snapshot.status, "ok");
     }
 
     #[test]

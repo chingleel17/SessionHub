@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
+import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { RefreshIcon, SettingsIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
@@ -132,13 +133,8 @@ export function TrayQuotaPanel({ snapshots, onRefresh, onOpenSettings }: TrayQuo
                     <WindowRow key={`${snapshot.provider}-${window.windowKey}`} provider={snapshot.provider} window={window} />
                   ))}
 
-                  {snapshot.localTokens ? (
-                    <div className="tray-panel-local-usage">
-                      <span>{snapshot.localTokens.periodLabel}</span>
-                      <strong>
-                        {Math.round(snapshot.localTokens.inputTokens / 1000)}k / {Math.round(snapshot.localTokens.outputTokens / 1000)}k
-                      </strong>
-                    </div>
+                  {snapshot.status === "ok" && hasNoQuotaContent(snapshot) ? (
+                    <div className="tray-panel-provider-note">{t("quota.monitoring.noQuotaData")}</div>
                   ) : null}
 
                   {snapshot.status === "rate_limited" ? (

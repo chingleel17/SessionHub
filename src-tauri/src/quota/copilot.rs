@@ -26,7 +26,6 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         fetched_at: current_timestamp(),
         error_message: Some(error_message.into()),
         windows: None,
-        local_tokens: None,
         extra_credits: None,
         reset_credits: None,
     }
@@ -40,7 +39,6 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         fetched_at: current_timestamp(),
         error_message: Some(error_message.into()),
         windows: None,
-        local_tokens: None,
         extra_credits: None,
         reset_credits: None,
     }
@@ -223,7 +221,6 @@ impl QuotaAdapter for CopilotAdapter {
                         "此帳號無法使用 Copilot usage API（可能非 Copilot 訂閱帳號）".to_string(),
                     ),
                     windows: None,
-                    local_tokens: None,
                     extra_credits: None,
                     reset_credits: None,
                 };
@@ -300,7 +297,6 @@ impl QuotaAdapter for CopilotAdapter {
                     "Copilot 回應中沒有可用的額度資料（可能為無限方案）".to_string(),
                 ),
                 windows: None,
-                local_tokens: None,
                 extra_credits: None,
                 reset_credits: None,
             };
@@ -313,7 +309,6 @@ impl QuotaAdapter for CopilotAdapter {
             fetched_at: current_timestamp(),
             error_message: None,
             windows: Some(windows),
-            local_tokens: None,
             extra_credits: None,
             reset_credits: None,
         }

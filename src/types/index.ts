@@ -496,12 +496,6 @@ export type QuotaWindow = {
     group?: string | null;
 };
 
-export type LocalTokenUsage = {
-    inputTokens: number;
-    outputTokens: number;
-    periodLabel: string;
-};
-
 export type ExtraCredits = {
     isEnabled: boolean;
     monthlyLimit?: number | null;
@@ -529,7 +523,6 @@ export type QuotaSnapshot = {
     fetchedAt: string;
     errorMessage?: string | null;
     windows?: QuotaWindow[] | null;
-    localTokens?: LocalTokenUsage | null;
     extraCredits?: ExtraCredits | null;
     resetCredits?: ResetCredits | null;
 };

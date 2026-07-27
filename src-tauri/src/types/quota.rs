@@ -18,14 +18,6 @@ pub(crate) struct QuotaWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct LocalTokenUsage {
-    pub(crate) input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) period_label: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct ExtraCredits {
     pub(crate) is_enabled: bool,
     pub(crate) monthly_limit: Option<u64>,
@@ -59,7 +51,6 @@ pub(crate) struct QuotaSnapshot {
     pub(crate) fetched_at: String,
     pub(crate) error_message: Option<String>,
     pub(crate) windows: Option<Vec<QuotaWindow>>,
-    pub(crate) local_tokens: Option<LocalTokenUsage>,
     pub(crate) extra_credits: Option<ExtraCredits>,
     #[serde(default)]
     pub(crate) reset_credits: Option<ResetCredits>,
