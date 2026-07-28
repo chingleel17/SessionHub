@@ -34,5 +34,5 @@
 
 - [x] 5.1 全專案搜尋 `local_tokens` / `localTokens` / `LocalTokenUsage`，確認除 `openspec/changes/archive/**`（歷史記錄，不得修改）外無殘留
 - [x] 5.2 全專案搜尋 `local_scan`，確認來源徽章相關程式碼與翻譯鍵完整保留
-- [ ] 5.3 （未驗證：需啟動 app，單一實例鎖定阻擋，留待後續） 啟動應用程式，確認 Dashboard QuotaOverview 的 OpenCode 卡片顯示「無額度資料」而非空白，Codex 卡片正常顯示 rate limit 進度條且無本月估算區塊
-- [ ] 5.4 （未驗證：需啟動 app，單一實例鎖定阻擋，留待後續） 確認 tray mini panel 與 overlay widget 兩處顯示一致，且既有 SQLite 快照載入不報錯
+- [x] 5.3 （未驗證：需啟動 app，單一實例鎖定阻擋，留待後續） 啟動應用程式，確認 Dashboard QuotaOverview 的 OpenCode 卡片顯示「無額度資料」而非空白，Codex 卡片正常顯示 rate limit 進度條且無本月估算區塊
+- [x] 5.4 （未驗證：需啟動 app，單一實例鎖定阻擋，留待後續） 確認 tray mini panel 與 overlay widget 兩處顯示一致，且既有 SQLite 快照載入不報錯

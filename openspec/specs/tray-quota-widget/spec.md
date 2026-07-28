@@ -14,7 +14,7 @@
 - **THEN** 系統取 `tray_quota_primary_provider` 指定 provider（`None` 時自動取所有 status:ok provider 中最高用量 window）的 utilization
 - **AND** 依 `tray_quota_mode` 重繪 tray 圖示：`icon_only` 疊彩色圓點 / `percentage` 疊百分比文字 / `bar` 疊進度條
 - **AND** 顏色三段：綠 <50%、黃 50-80%、紅 >80%
-- **AND** 更新 tooltip 為各 enabled provider 的多行用量摘要，window 名稱取自 `QuotaWindow.label`，`local_scan` 期間取自 `LocalTokenUsage.period_label`
+- **AND** 更新 tooltip 為各 enabled provider 的多行用量摘要，window 名稱取自 `QuotaWindow.label`；無任何 window 的 provider 於 tooltip 中顯示無額度資料說明
 
 #### Scenario: 隱藏模式
 
@@ -38,12 +38,13 @@
 
 - **WHEN** overlay 顯示中且 `"quota-snapshots-updated"` 事件觸發
 - **THEN** 對 `quota_overlay_providers`（空 = 全部 enabled）中每個 provider 顯示一列：名稱 + utilization bar + 百分比 + reset 倒數
-- **AND** window 名稱一律取自 `QuotaWindow.label`（不硬編碼 5h/7d）；`source: local_scan` 的期間文字取自 `LocalTokenUsage.period_label`
+- **AND** window 名稱一律取自 `QuotaWindow.label`（不硬編碼 5h/7d）
 - **AND** bar 顏色三段：綠 <50%、黃 50-80%、紅 >80%
+- **AND** `status: ok` 但無任何 window 的 provider 顯示無額度資料說明文字，不顯示 bar
 - **AND** `status: no_auth / error` 的 provider 顯示灰色錯誤指示，不顯示 bar
 - **AND** `status: rate_limited` 的 provider 沿用上次快取的 bar 數值並加註略舊標記，不清空顯示
 - **AND** `status: unsupported` 的 provider 不列出（該列完全不顯示）
-- **AND** overlay 視窗尺寸貼合內容（前端量測後同步原生視窗大小），不顯示滾動條，長的 local scan 期間文字不可以撐破或裁切視窗
+- **AND** overlay 視窗尺寸貼合內容（前端量測後同步原生視窗大小），不顯示滾動條
 - **AND** 用量百分比僅顯示一次（bar 右側）；reset 倒數行不重複顯示百分比
 - **AND** overlay 可依 `quota_overlay_theme` 使用深色或淺色配色，且 webview 根背景保持透明，不顯示白色外框
 
@@ -90,7 +91,8 @@
 #### Scenario: 開關 panel
 
 - **WHEN** `tray_quota_panel_enabled: true` 且使用者左鍵點擊 tray 圖示
-- **THEN** 於系統匣上方彈出 320px 寬無框、不透明面板，顯示所有 enabled provider 的 quota 詳情（bar、百分比、reset 倒數、錯誤狀態、local tokens）與刷新 icon 按鈕
+- **THEN** 於系統匣上方彈出 320px 寬無框、不透明面板，顯示所有 enabled provider 的 quota 詳情（bar、百分比、reset 倒數、錯誤狀態）與刷新 icon 按鈕
+- **AND** 無任何額度內容的 provider 顯示無額度資料說明文字
 - **AND** panel 建立時設定 skip-taskbar，且每次 `show()` 之後重新呼叫 `set_skip_taskbar(true)`（同 overlay，對應 tauri#10422 Windows 樣式重置問題）
 - **AND** panel 以 tray 所在螢幕的座標與 DPI 定位，不可在多螢幕環境超出可視範圍
 - **AND** panel 失焦（blur）、再次點擊 tray 圖示或按 Esc 時隱藏
@@ -123,16 +125,17 @@
 
 ### Requirement: OpenCode Gateway 觸發上游 quota 更新
 
-系統 SHALL 將 OpenCode 本地 token 統計與上游帳號 quota 分開處理，並在 OpenCode gateway 活動時更新已啟用的上游 quota。
+系統 SHALL 在 OpenCode gateway 活動時更新已啟用的上游 quota。OpenCode 本身無帳號層級的額度 API，其 snapshot 不含額度數值，SHALL NOT 以任何本機統計數值代表 OpenCode Go 或 Zen 訂閱額度。
 
-#### Scenario: OpenCode local scan
+#### Scenario: OpenCode 無額度資料
 
 - **WHEN** OpenCode quota adapter 刷新
-- **THEN** 系統僅從本機 `opencode.db` 或 session JSON 統計當月 input/output tokens
-- **AND** 系統不將該數值表示為 OpenCode Go 或 Zen 訂閱額度
+- **THEN** 系統回傳 `status: "ok"`、`windows: null` 的 snapshot
+- **AND** 系統不掃描本機 `opencode.db` 或 session JSON 統計 token 用量
+- **AND** UI 依「provider 無可顯示額度資料時呈現說明文字」要求顯示說明
 
 #### Scenario: OpenCode bridge event
 
 - **WHEN** 收到 OpenCode provider bridge event 且 quota monitoring 啟用
 - **THEN** 系統刷新所有 `quota_enabled_providers` 的 quota adapter
-- **AND** Codex、Copilot adapter 各自查詢其帳號 quota，不依賴 OpenCode local scan 數值
+- **AND** Codex、Copilot adapter 各自查詢其帳號 quota

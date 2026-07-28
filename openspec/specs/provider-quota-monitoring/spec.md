@@ -13,7 +13,6 @@ error_message: Option<String>  — 查詢失敗時的錯誤描述
 
 // 以下欄位依 provider 與查詢結果填入，不可取得時為 null
 windows:       Option<Vec<QuotaWindow>>  — rolling window 用量（claude / copilot 適用）
-local_tokens:  Option<LocalTokenUsage>   — 本地掃描的 token 累計（opencode / codex 適用）
 extra_credits: Option<ExtraCredits>      — overage / 超額用量（claude extra_usage 適用）
 reset_credits: Option<ResetCredits>      — 手動重置額度（codex 適用）
 ```
@@ -25,14 +24,6 @@ window_key:   String  — "five_hour" | "seven_day" | "seven_day_sonnet" | "seve
 label:        String  — 顯示用名稱（"5h" / "7d" / "7d Sonnet" / "7d Opus" / "AI Credits" / 動態 scoped model 名稱，例如 "Fable"）
 utilization:  f64     — 使用百分比（0.0–100.0）
 resets_at:    Option<String>  — ISO 8601 reset 時間
-```
-
-`LocalTokenUsage` 欄位：
-
-```
-input_tokens:  u64
-output_tokens: u64
-period_label:  String  — 例如 "本月" / "本週"
 ```
 
 `ExtraCredits` 欄位：
@@ -59,6 +50,8 @@ expires_at: Option<String>  — ISO 8601 到期時間
 status:     String          — API 原始狀態字串（如 "active"）
 ```
 
+`source` 欄位僅標示資料取得方式（遠端 API 或本機掃描），與 snapshot 是否含 token 用量統計無關。
+
 #### Scenario: 成功取得 quota snapshot
 
 - **WHEN** 後端 quota manager 成功向某個 provider adapter 取得資料
@@ -83,6 +76,12 @@ status:     String          — API 原始狀態字串（如 "active"）
 - **THEN** 反序列化成功，`reset_credits` 為 null
 - **AND** 不產生錯誤或阻斷載入
 
+#### Scenario: 舊快照含已移除的 local_tokens 欄位
+
+- **WHEN** 從 SQLite 載入 `local_tokens` 欄位移除前序列化的 snapshot JSON
+- **THEN** 反序列化成功，多餘的 `localTokens` 鍵被忽略
+- **AND** 不產生錯誤或阻斷載入，不需要 DB migration
+
 ### Requirement: quota 顯示範圍跟隨 enabledProviders 設定
 
 系統 SHALL 只為 `AppSettings.enabledProviders` 中包含的 provider 查詢並顯示 quota snapshot。未勾選的 provider 不查詢、不在 UI 中出現。
@@ -94,6 +93,8 @@ status:     String          — API 原始狀態字串（如 "active"）
 - **AND** 已移除 provider 的 quota snapshot 從記憶體快取與 SQLite 中清除
 
 ### Requirement: 各 provider 的 quota 資料來源規格
+
+各 provider 的 quota adapter SHALL 依下列場景所定義的資料來源與解析規則取得 snapshot。所有 adapter SHALL NOT 掃描本機 session 檔案統計 token 用量作為額度資料。
 
 #### Scenario: Claude adapter - Anthropic OAuth usage API
 
@@ -154,21 +155,20 @@ Claude quota adapter SHALL 在解析頂層時間視窗後，額外掃描 usage A
 - **WHEN** `gh` CLI 不存在或 `gh auth token` 失敗
 - **THEN** 回傳 `status: "no_auth"`，`error_message: "需要安裝並登入 gh CLI"`
 
-#### Scenario: OpenCode adapter - 本地掃描
+#### Scenario: OpenCode adapter - 無遠端額度來源
 
 - **WHEN** `opencode` 在 enabledProviders 中
-- **THEN** 後端掃描 `{opencodeRoot}/sessions/` 計算本月 token 用量
-- **AND** 回傳 `local_tokens` 欄位（input / output tokens）
-- **AND** source 標示為 `local_scan`
-- **AND** `windows` 欄位為 null（無遠端 quota 資料）
+- **THEN** 後端回傳 `status: "ok"`、`source: "local_scan"` 的 snapshot
+- **AND** `windows` 欄位為 null（OpenCode 無帳號層級的額度 API）
+- **AND** 系統不掃描本機 session 檔案統計 token 用量
 
 #### Scenario: Codex adapter - 遠端 usage API 取得 rate limit 窗口
 
 - **WHEN** `codex` 在 enabledProviders 中且 `{codexRoot}/auth.json`（或 `$CODEX_HOME/auth.json`、`~/.codex/auth.json`）存在並含有效 access token
 - **THEN** 後端呼叫 `GET https://chatgpt.com/backend-api/wham/usage`，帶 header `Authorization: Bearer <token>`（若有 account_id 則附 `ChatGPT-Account-Id`）
 - **AND** 由 `rate_limit.primary_window` 與 `rate_limit.secondary_window` 解析出 rolling window 用量
-- **AND** 額外掃描 `{codexRoot}/` 下的 JSONL 計算本月 token 用量，回傳於 `local_tokens`
 - **AND** source 標示為 `remote_api`
+- **AND** 系統不掃描 `{codexRoot}/` 下的 JSONL 統計 token 用量
 
 - **WHEN** auth.json 不存在或 token 讀取失敗
 - **THEN** 回傳 `status: "no_auth"`，`error_message` 說明需重新登入 Codex CLI
@@ -193,7 +193,6 @@ Claude quota adapter SHALL 在解析頂層時間視窗後，額外掃描 usage A
 
 - **WHEN** `rate_limit` 缺席，或 `primary_window` 與 `secondary_window` 皆為 `null`
 - **THEN** `windows` 欄位為 null（前端顯示無 rate limit 資料）
-- **AND** 仍可回傳本月 `local_tokens`（若掃描到用量）
 
 ### Requirement: Codex adapter 查詢手動重置額度
 
@@ -208,7 +207,7 @@ Codex quota adapter SHALL 在成功取得 usage 資料後，以相同憑證（ac
 #### Scenario: reset-credits 查詢失敗不影響主 snapshot
 
 - **WHEN** usage API 成功但 reset-credits API 回傳錯誤（4xx / 5xx / 網路失敗 / 解析失敗）
-- **THEN** snapshot 維持 `status: "ok"`，windows 與 local_tokens 照常填入
+- **THEN** snapshot 維持 `status: "ok"`，windows 照常填入
 - **AND** `reset_credits` 為 null，不寫入 `error_message`
 
 #### Scenario: 帳號無重置額度功能
@@ -303,3 +302,30 @@ trait QuotaAdapter {
 - **THEN** 系統回傳包含 `status: "error"` 與 `error_message` 的 snapshot
 - **AND** 不得阻斷其他 provider 的 quota 結果
 - **AND** SQLite 中保留上次成功的快照（失敗時不覆蓋成功記錄）
+
+### Requirement: provider 無可顯示額度資料時呈現說明文字
+
+當某個 `status: "ok"` 的 provider snapshot 不含任何可渲染的額度內容（`windows` 為 null 或空陣列，且無 `extra_credits`、`reset_credits`）時，quota UI SHALL 保留該 provider 的區塊並顯示一行說明文字，告知此 provider 無可取得的額度資料。UI SHALL NOT 呈現空白區塊，亦 SHALL NOT 隱藏該 provider 使其看似未啟用。
+
+說明文字 SHALL 透過翻譯鍵取得（zh-TW 與 en-US 皆需提供），不得硬編於 JSX。
+
+#### Scenario: OpenCode 卡片顯示無額度資料
+
+- **WHEN** Dashboard 的 QuotaOverview 渲染 OpenCode snapshot（`status: "ok"`、`windows: null`）
+- **THEN** 卡片顯示 provider 名稱、來源徽章與一行「無額度資料」說明文字
+- **AND** 不出現空白內容區
+
+#### Scenario: Tray mini panel 顯示無額度資料
+
+- **WHEN** tray mini panel 渲染不含任何額度內容的 provider snapshot
+- **THEN** 該 provider 列顯示名稱與「無額度資料」說明文字
+
+#### Scenario: Overlay 顯示無額度資料
+
+- **WHEN** overlay widget 渲染不含任何額度內容的 provider snapshot
+- **THEN** 該列顯示「無額度資料」說明文字，不渲染 utilization bar
+
+#### Scenario: 有額度資料時不顯示說明文字
+
+- **WHEN** provider snapshot 含至少一個 `QuotaWindow`
+- **THEN** 三處 UI 皆照常渲染額度內容，不顯示「無額度資料」說明文字
