@@ -436,6 +436,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions,
             get_sessions_cached,
+            search_session_content,
             get_settings,
             save_settings,
             install_provider_integration,

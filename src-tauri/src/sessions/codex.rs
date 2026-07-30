@@ -9,6 +9,21 @@ use crate::db::read_session_meta;
 use crate::sessions::dir_mtime_secs;
 use crate::types::*;
 
+pub(crate) fn extract_codex_session_texts(session_path: &Path) -> Vec<String> {
+    let Ok(file) = fs::File::open(session_path) else { return Vec::new() };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .filter_map(|entry| {
+            let payload = entry.get("payload")?;
+            let role = payload.get("role").and_then(|value| value.as_str())?;
+            if !matches!(role, "user" | "assistant") { return None; }
+            payload.get("content").and_then(crate::sessions::text_from_value)
+        })
+        .collect()
+}
+
 fn codex_sessions_root(codex_root: &Path) -> PathBuf {
     codex_root.join("sessions")
 }

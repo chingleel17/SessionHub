@@ -3295,9 +3295,32 @@ html.embedded-quota-view .quota-overlay-no-drag {
   align-items: flex-start;
   gap: 8px;
   flex-wrap: wrap;
+  row-gap: 12px;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--color-border-subtle);
+}
+
+.filter-search-field {
+  flex: 3 1 280px;
+  min-width: 240px;
+}
+
+.filter-date-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-date-range input {
+  min-width: 148px;
+}
+
+.filter-range-error {
+  align-self: center;
+  color: var(--color-status-error);
+  font-size: 12px;
 }
 
 .filter-bar-toggle-group {

@@ -329,7 +329,13 @@ export type ProjectGroup = {
     updatedAtLabel: string;
 };
 
-export type SortKey = "updatedAt" | "createdAt" | "summaryCount" | "summary";
+export type SortKey = "updatedAt" | "createdAt" | "summary";
+
+export type SessionSearchTarget = {
+    id: string;
+    provider: string;
+    sessionDir: string;
+};
 
 export type RealtimeStatus = "connecting" | "active" | "error";
 

@@ -31,6 +31,7 @@ import type {
   SessionActivityStatus,
   SessionInfo,
   SessionStats,
+  SessionSearchTarget,
   SessionTodo,
   SkillsScanResult,
   SisyphusData,
@@ -248,7 +249,7 @@ function App() {
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<string>("dashboard");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [hideEmptySessions, setHideEmptySessions] = useState(false);
+  const [showEmptySessions, setShowEmptySessions] = useState(false);
   const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
 
   const [activePlanSessionId, setActivePlanSessionId] = useState<string | null>(null);
@@ -524,6 +525,8 @@ function App() {
   }, []);
 
   const showToast = (message: string) => setToastMessage(message);
+  const searchSessionContent = (query: string, sessions: SessionSearchTarget[]) =>
+    invoke<string[]>("search_session_content", { query, sessions });
 
   const {
     settingsForm,
@@ -1945,8 +1948,10 @@ function App() {
             <ProjectView
               project={activeProject}
               showArchived={settingsForm.showArchived}
-              hideEmptySessions={hideEmptySessions}
-              onHideEmptySessionsChange={setHideEmptySessions}
+              showEmptySessions={showEmptySessions}
+              onShowEmptySessionsChange={setShowEmptySessions}
+              onSearchSessionContent={searchSessionContent}
+              onContentSearchError={(error) => showToast(resolveErrorMessage(error, t("session.filter.searchError")))}
               totalEmptySessions={deletableEmptySessionCount}
               onToggleArchived={(v) => void handleToggleArchived(v)}
               onCopyCommand={(s) => void handleCopyCommand(s)}

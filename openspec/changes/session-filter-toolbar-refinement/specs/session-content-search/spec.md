@@ -35,6 +35,19 @@
 - **WHEN** 傳入的關鍵字為空字串或僅含空白
 - **THEN** 指令 SHALL 直接回傳空清單而不讀取任何檔案
 
+#### Scenario: 對話內容不落地
+
+- **WHEN** 指令讀取任一 session 的逐字稿內容
+- **THEN** 系統 SHALL NOT 將該內容寫入 `metadata.db`、寫入任何檔案，或存放於跨呼叫的記憶體快取
+- **AND** 內容 SHALL 只在單次指令執行期間存在於記憶體，比對完即釋放
+- **AND** 指令回傳值 SHALL 只包含 session ID，不含任何訊息文字
+
+#### Scenario: 逐字稿來源已被 provider 清除
+
+- **WHEN** 某 session 的逐字稿曾存在但已被其 provider 自行清理
+- **THEN** 該 session SHALL 不再被內容搜尋命中
+- **AND** 系統 SHALL NOT 因為任何殘留的快取或索引而回報命中
+
 ### Requirement: 對話內容搜尋 UI 整合
 
 篩選工具列 SHALL 提供「搜尋對話內容」開關，讓使用者將關鍵字比對範圍擴及 session 逐字稿。

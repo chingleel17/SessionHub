@@ -51,6 +51,23 @@ fn open_opencode_db(opencode_root: &Path) -> Result<Option<Connection>, String> 
         .map_err(|error| format!("failed to open OpenCode db {}: {error}", db_path.display()))
 }
 
+pub(crate) fn extract_opencode_session_texts(message_dir: &Path) -> Vec<String> {
+    let Some(storage_root) = message_dir.parent().and_then(|path| path.parent()) else { return Vec::new() };
+    let session_id = message_dir.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let db_path = storage_root.parent().map(|path| path.join("opencode.db"));
+    let Some(db_path) = db_path.filter(|path| path.exists()) else { return Vec::new() };
+    let Ok(connection) = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) else { return Vec::new() };
+    let Ok(mut statement) = connection.prepare(
+        "SELECT p.data FROM part p JOIN message m ON m.id = p.message_id WHERE m.session_id = ?1 AND json_extract(m.data, '$.role') IN ('user', 'assistant') ORDER BY p.time_created ASC",
+    ) else { return Vec::new() };
+    let Ok(rows) = statement.query_map([session_id], |row| row.get::<_, String>(0)) else { return Vec::new() };
+    rows.flatten()
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .filter(|part| part.get("type").and_then(|value| value.as_str()) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(crate::sessions::text_from_value))
+        .collect()
+}
+
 fn has_table(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(

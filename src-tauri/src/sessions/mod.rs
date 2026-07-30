@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -28,6 +28,31 @@ pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use git::*;
 pub(crate) use opencode::*;
+
+pub(crate) fn extract_session_texts(provider: &str, session_dir: &Path) -> Vec<String> {
+    match provider {
+        CLAUDE_PROVIDER => extract_claude_session_texts(session_dir),
+        CODEX_PROVIDER => extract_codex_session_texts(session_dir),
+        COPILOT_PROVIDER => extract_copilot_session_texts(session_dir),
+        ANTIGRAVITY_PROVIDER => extract_antigravity_session_texts(session_dir),
+        OPENCODE_PROVIDER => extract_opencode_session_texts(session_dir),
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) fn text_from_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+        serde_json::Value::Array(parts) => parts.iter().find_map(|part| {
+            (part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
+                .then(|| part.get("text").and_then(|text| text.as_str()))
+                .flatten()
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_string)
+        }),
+        _ => None,
+    }
+}
 
 pub(crate) fn merge_msys_options(existing: Option<&str>) -> String {
     let existing = existing.unwrap_or_default();

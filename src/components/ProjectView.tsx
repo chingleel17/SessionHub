@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import { DropdownMenu } from "./DropdownMenu";
 import type {
@@ -14,6 +14,7 @@ import type {
   ProjectSubTabState,
   SessionActivityStatus,
   SessionInfo,
+  SessionSearchTarget,
   SessionStats,
   SessionTodo,
   SkillsScanResult,
@@ -46,39 +47,47 @@ const PROJECT_LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: st
   { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
 ];
 
-type SessionUpdatedRange = "all" | "week" | "month";
+type SessionUpdatedRange = "all" | "week" | "month" | "custom";
+type UpdatedRangeBounds = { start: number | null; end: number | null };
 
 const SESSIONS_PAGE_SIZE = 20;
 
-function getUpdatedRangeStart(range: SessionUpdatedRange): number | null {
+function getUpdatedRangeBounds(range: SessionUpdatedRange, customStart: string, customEnd: string): UpdatedRangeBounds | null {
   const now = new Date();
   if (range === "week") {
     const start = new Date(now);
     start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
     start.setHours(0, 0, 0, 0);
-    return start.getTime();
+    return { start: start.getTime(), end: null };
   }
 
   if (range === "month") {
-    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    return { start: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), end: null };
   }
 
-  return null;
+  if (range !== "custom") return { start: null, end: null };
+  if (customStart && customEnd && customStart > customEnd) return null;
+  const start = customStart ? new Date(`${customStart}T00:00:00`).getTime() : null;
+  const end = customEnd ? new Date(`${customEnd}T23:59:59.999`).getTime() : null;
+  return { start, end };
 }
 
-function isSessionInUpdatedRange(session: SessionInfo, range: SessionUpdatedRange): boolean {
-  const rangeStart = getUpdatedRangeStart(range);
-  if (rangeStart === null) return true;
+function isSessionInUpdatedRange(session: SessionInfo, bounds: UpdatedRangeBounds | null): boolean {
+  if (bounds === null) return true;
   if (!session.updatedAt) return false;
   const updatedAtTime = Date.parse(session.updatedAt);
-  return !Number.isNaN(updatedAtTime) && updatedAtTime >= rangeStart;
+  return !Number.isNaN(updatedAtTime)
+    && (bounds.start === null || updatedAtTime >= bounds.start)
+    && (bounds.end === null || updatedAtTime <= bounds.end);
 }
 
 type Props = {
   project: ProjectGroup;
   showArchived: boolean;
-  hideEmptySessions: boolean;
-  onHideEmptySessionsChange: (value: boolean) => void;
+  showEmptySessions: boolean;
+  onShowEmptySessionsChange: (value: boolean) => void;
+  onSearchSessionContent: (query: string, sessions: SessionSearchTarget[]) => Promise<string[]>;
+  onContentSearchError: (error: unknown) => void;
   totalEmptySessions: number;
   onToggleArchived: (value: boolean) => void;
   onCopyCommand: (session: SessionInfo) => void;
@@ -169,16 +178,20 @@ function filterAndSortSessions(
   searchTerm: string,
   sortKey: SortKey,
   selectedTags: string[],
-  hideEmpty: boolean,
+  showEmpty: boolean,
   selectedProviders: string[],
   updatedRange: SessionUpdatedRange,
+  customRangeStart: string,
+  customRangeEnd: string,
+  contentMatchIds: Set<string> | null,
 ) {
   const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const updatedBounds = getUpdatedRangeBounds(updatedRange, customRangeStart, customRangeEnd);
 
   const filtered = sessions.filter((session) => {
     if (selectedProviders.length > 0 && !selectedProviders.includes(session.provider)) return false;
-    if (hideEmpty && !session.hasEvents) return false;
-    if (!isSessionInUpdatedRange(session, updatedRange)) return false;
+    if (!showEmpty && !session.hasEvents) return false;
+    if (!isSessionInUpdatedRange(session, updatedBounds)) return false;
 
     const matchesTags =
       selectedTags.length === 0 || selectedTags.every((tag) => session.tags.includes(tag));
@@ -188,21 +201,19 @@ function filterAndSortSessions(
 
     const haystacks = [
       session.id,
-      session.cwd ?? "",
       session.summary ?? "",
       session.notes ?? "",
       session.tags.join(" "),
     ];
 
-    return haystacks.some((value) => value.toLowerCase().includes(normalizedSearchTerm));
+    return haystacks.some((value) => value.toLowerCase().includes(normalizedSearchTerm))
+      || contentMatchIds?.has(session.id) === true;
   });
 
   return filtered.sort((left, right) => {
     switch (sortKey) {
       case "createdAt":
         return (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
-      case "summaryCount":
-        return (right.summaryCount ?? 0) - (left.summaryCount ?? 0);
       case "summary": {
         const getTitle = (s: SessionInfo) => s.summary?.trim() || s.id;
         return getTitle(left).localeCompare(getTitle(right));
@@ -217,8 +228,10 @@ function filterAndSortSessions(
 export function ProjectView({
   project,
   showArchived,
-  hideEmptySessions,
-  onHideEmptySessionsChange,
+  showEmptySessions,
+  onShowEmptySessionsChange,
+  onSearchSessionContent,
+  onContentSearchError,
   totalEmptySessions,
   onToggleArchived,
   onCopyCommand,
@@ -299,6 +312,13 @@ export function ProjectView({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [selectedUpdatedRange, setSelectedUpdatedRange] = useState<SessionUpdatedRange>("all");
+  const [customRangeStart, setCustomRangeStart] = useState("");
+  const [customRangeEnd, setCustomRangeEnd] = useState("");
+  const [lastValidCustomRange, setLastValidCustomRange] = useState({ start: "", end: "" });
+  const [searchInContent, setSearchInContent] = useState(false);
+  const [contentMatchIds, setContentMatchIds] = useState<Set<string> | null>(null);
+  const [isContentSearching, setIsContentSearching] = useState(false);
+  const contentSearchRequestId = useRef(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isFilterExpanded, setIsFilterExpanded] = useState(() => {
     return window.localStorage.getItem(FILTER_EXPANDED_STORAGE_KEY) === "true";
@@ -363,6 +383,13 @@ export function ProjectView({
     [project.sessions],
   );
 
+  const effectiveCustomRange = useMemo(
+    () => customRangeStart && customRangeEnd && customRangeStart > customRangeEnd
+      ? lastValidCustomRange
+      : { start: customRangeStart, end: customRangeEnd },
+    [customRangeStart, customRangeEnd, lastValidCustomRange],
+  );
+
   const filteredSessions = useMemo(
     () =>
       filterAndSortSessions(
@@ -370,11 +397,14 @@ export function ProjectView({
         searchTerm,
         sortKey,
         selectedTags,
-        hideEmptySessions,
+        showEmptySessions,
         selectedProviders,
         selectedUpdatedRange,
+        effectiveCustomRange.start,
+        effectiveCustomRange.end,
+        contentMatchIds,
       ),
-    [project.sessions, searchTerm, sortKey, selectedTags, hideEmptySessions, selectedProviders, selectedUpdatedRange],
+    [project.sessions, searchTerm, sortKey, selectedTags, showEmptySessions, selectedProviders, selectedUpdatedRange, effectiveCustomRange, contentMatchIds],
   );
 
   const hiddenCount = useMemo(() => {
@@ -383,25 +413,69 @@ export function ProjectView({
       searchTerm,
       sortKey,
       selectedTags,
-      false,
+      true,
       selectedProviders,
       selectedUpdatedRange,
+      effectiveCustomRange.start,
+      effectiveCustomRange.end,
+      null,
     );
     const withHide = filterAndSortSessions(
       project.sessions,
       searchTerm,
       sortKey,
       selectedTags,
-      true,
+      false,
       selectedProviders,
       selectedUpdatedRange,
+      effectiveCustomRange.start,
+      effectiveCustomRange.end,
+      null,
     );
     return withoutHide.length - withHide.length;
-  }, [project.sessions, searchTerm, sortKey, selectedTags, selectedProviders, selectedUpdatedRange]);
+  }, [project.sessions, searchTerm, sortKey, selectedTags, selectedProviders, selectedUpdatedRange, effectiveCustomRange]);
+
+  const contentSearchTargets = useMemo(() => {
+    const bounds = getUpdatedRangeBounds(selectedUpdatedRange, effectiveCustomRange.start, effectiveCustomRange.end);
+    if (bounds === null) return [];
+    return project.sessions
+      .filter((session) => (selectedProviders.length === 0 || selectedProviders.includes(session.provider))
+        && (showEmptySessions || session.hasEvents)
+        && isSessionInUpdatedRange(session, bounds)
+        && (selectedTags.length === 0 || selectedTags.every((tag) => session.tags.includes(tag))))
+      .map(({ id, provider, sessionDir }) => ({ id, provider, sessionDir }));
+  }, [project.sessions, selectedProviders, showEmptySessions, selectedUpdatedRange, effectiveCustomRange, selectedTags]);
+
+  useEffect(() => {
+    const requestId = ++contentSearchRequestId.current;
+    const query = searchTerm.trim();
+    if (!searchInContent || !query) {
+      setContentMatchIds(null);
+      setIsContentSearching(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setIsContentSearching(true);
+      onSearchSessionContent(query, contentSearchTargets)
+        .then((ids) => {
+          if (requestId === contentSearchRequestId.current) setContentMatchIds(new Set(ids));
+        })
+        .catch((error: unknown) => {
+          if (requestId === contentSearchRequestId.current) {
+            setContentMatchIds(null);
+            onContentSearchError(error);
+          }
+        })
+        .finally(() => {
+          if (requestId === contentSearchRequestId.current) setIsContentSearching(false);
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInContent, searchTerm, contentSearchTargets, onSearchSessionContent, onContentSearchError]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, sortKey, selectedTags, selectedProviders, selectedUpdatedRange, hideEmptySessions, filteredSessions.length]);
+  }, [searchTerm, sortKey, selectedTags, selectedProviders, selectedUpdatedRange, effectiveCustomRange, showEmptySessions, searchInContent, filteredSessions.length]);
 
   const totalPages = Math.ceil(filteredSessions.length / SESSIONS_PAGE_SIZE);
   const paginatedSessions = useMemo(() => {
@@ -604,7 +678,7 @@ export function ProjectView({
 
                 {isFilterExpanded ? (
                   <div className="filter-bar">
-                    <label className="field-group compact-field" style={{ flex: 2, minWidth: "160px" }}>
+                    <label className="field-group compact-field filter-search-field">
                       <span>{t("session.search")}</span>
                       <input
                         value={searchTerm}
@@ -622,7 +696,6 @@ export function ProjectView({
                       >
                         <option value="updatedAt">{t("session.sortUpdatedAt")}</option>
                         <option value="createdAt">{t("session.sortCreatedAt")}</option>
-                        <option value="summaryCount">{t("session.sortSummaryCount")}</option>
                         <option value="summary">{t("session.sortSummary")}</option>
                       </select>
                     </label>
@@ -632,13 +705,44 @@ export function ProjectView({
                       <select
                         className="filter-select"
                         value={selectedUpdatedRange}
-                        onChange={(event) => setSelectedUpdatedRange(event.currentTarget.value as SessionUpdatedRange)}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value as SessionUpdatedRange;
+                          setSelectedUpdatedRange(value);
+                          if (value !== "custom") {
+                            setCustomRangeStart("");
+                            setCustomRangeEnd("");
+                            setLastValidCustomRange({ start: "", end: "" });
+                          }
+                        }}
                       >
                         <option value="all">{t("session.filter.updatedRange.all")}</option>
                         <option value="week">{t("session.filter.updatedRange.week")}</option>
                         <option value="month">{t("session.filter.updatedRange.month")}</option>
+                        <option value="custom">{t("session.filter.updatedRange.custom")}</option>
                       </select>
                     </label>
+
+                    {selectedUpdatedRange === "custom" ? (
+                      <div className="filter-date-range">
+                        <label className="field-group compact-field">
+                          <span>{t("session.filter.updatedRange.start")}</span>
+                          <input type="date" value={customRangeStart} onChange={(event) => {
+                            const start = event.currentTarget.value;
+                            setCustomRangeStart(start);
+                            if (!customRangeEnd || start <= customRangeEnd) setLastValidCustomRange({ start, end: customRangeEnd });
+                          }} />
+                        </label>
+                        <label className="field-group compact-field">
+                          <span>{t("session.filter.updatedRange.end")}</span>
+                          <input type="date" value={customRangeEnd} onChange={(event) => {
+                            const end = event.currentTarget.value;
+                            setCustomRangeEnd(end);
+                            if (!customRangeStart || customRangeStart <= end) setLastValidCustomRange({ start: customRangeStart, end });
+                          }} />
+                        </label>
+                        {customRangeStart && customRangeEnd && customRangeStart > customRangeEnd ? <span className="filter-range-error">{t("session.filter.updatedRange.invalid")}</span> : null}
+                      </div>
+                    ) : null}
 
                     <div className="filter-bar-toggle-group">
                       <button
@@ -651,15 +755,18 @@ export function ProjectView({
 
                       <button
                         type="button"
-                        className={`tag-filter-chip filter-chip-button ${hideEmptySessions ? "active" : ""}`}
-                        onClick={() => onHideEmptySessionsChange(!hideEmptySessions)}
+                        className={`tag-filter-chip filter-chip-button ${showEmptySessions ? "active" : ""}`}
+                        onClick={() => onShowEmptySessionsChange(!showEmptySessions)}
                       >
-                        {t("session.filter.hideEmpty")}
-                        {hideEmptySessions && hiddenCount > 0 ? (
+                        {t("session.filter.showEmpty")}
+                        {!showEmptySessions && hiddenCount > 0 ? (
                           <span className="hidden-count-hint">
                             {" "}({t("session.filter.hiddenCount").replace("{count}", String(hiddenCount))})
                           </span>
                         ) : null}
+                      </button>
+                      <button type="button" className={`tag-filter-chip filter-chip-button ${searchInContent ? "active" : ""}`} onClick={() => setSearchInContent((value) => !value)}>
+                        {t("session.filter.searchContent")}{isContentSearching ? ` (${t("session.filter.searching")})` : ""}
                       </button>
                     </div>
                   </div>

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
@@ -13,6 +14,21 @@ use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_me
 use crate::sessions::configure_msys_stackdump_suppression;
 use crate::settings::detect_vscode_path;
 use crate::types::*;
+
+pub(crate) fn extract_copilot_session_texts(session_dir: &Path) -> Vec<String> {
+    let Ok(file) = fs::File::open(session_dir.join("events.jsonl")) else { return Vec::new() };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .filter_map(|entry| {
+            let event_type = entry.get("type").and_then(|value| value.as_str())?;
+            if !matches!(event_type, "user.message" | "assistant.message") { return None; }
+            let data = entry.get("data")?;
+            data.get("content").or_else(|| data.get("message")).and_then(crate::sessions::text_from_value)
+        })
+        .collect()
+}
 
 /// 判斷是否需要執行全掃描
 pub(crate) fn should_full_scan(cache: &Option<ProviderCache>, force_full: bool) -> bool {

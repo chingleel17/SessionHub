@@ -43,3 +43,4 @@
 
 **無影響**
 - `sortKey` 與 `hideEmptySessions` 皆為 React 元件內 state，未持久化至 settings.json 或 SQLite，因此移除排序選項與翻轉預設值不需要資料遷移
+- `metadata.db` 的 schema 與資料量完全不變。對話內容搜尋採即時掃描且不落地（design.md 決策七），逐字稿內容不複製進 DB、不快取、不建索引，因此不會造成 DB 膨脹，也不存在快取與 provider 原始檔的一致性問題
