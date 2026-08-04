@@ -284,6 +284,30 @@ export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): T
       filePathType: "absolute",
     };
 
+    if (entry.status === "differs" && entry.source.exists && entry.target.exists) {
+      delete leaf.filePath;
+      delete leaf.filePathType;
+      leaf.defaultOpen = true;
+      leaf.children = [
+        {
+          id: `agents-md:${entry.source.path}`,
+          label: "AGENTS.md",
+          icon: "agents",
+          tone: "in_progress",
+          filePath: entry.source.path,
+          filePathType: "absolute",
+        },
+        {
+          id: `agents-md:${entry.target.path}`,
+          label: "CLAUDE.md",
+          icon: "agents",
+          tone: "in_progress",
+          filePath: entry.target.path,
+          filePathType: "absolute",
+        },
+      ];
+    }
+
     if (parentKey) {
       groups.get(parentKey)?.children?.push(leaf);
     } else {
