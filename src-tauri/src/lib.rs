@@ -38,27 +38,43 @@ pub(crate) const TRAY_PANEL_HEIGHT: f64 = 480.0;
 /// mini panel 與螢幕邊緣的邏輯間距
 pub(crate) const TRAY_PANEL_MARGIN: f64 = 12.0;
 
-/// 將設定變更定向通知 overlay webview，避免動態建立視窗遺漏 AppHandle 廣播。
-pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &AppSettings) {
-    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
-        let _ = overlay.emit("quota-overlay-settings-changed", settings);
+/// 動態建立的 webview label 清單，作為定向送出事件的單一來源。
+/// 新增動態視窗時只需在此處加入 label，所有共用此清單的 emit 函式即自動涵蓋。
+pub(crate) const DYNAMIC_WEBVIEW_LABELS: &[&str] = &[QUOTA_OVERLAY_LABEL, TRAY_PANEL_LABEL];
+
+/// 對 `DYNAMIC_WEBVIEW_LABELS` 中每個存在的 webview 定向送出指定事件與 payload。
+///
+/// 呼叫端通常會同時透過 `AppHandle::emit` 廣播，因此同一個動態 webview 可能收到
+/// 廣播與定向送出各一次、共兩次相同事件。這是預期行為（廣播對動態建立的 webview
+/// 不可靠，定向送出是必要的補強），因此接收端 listener 必須是 idempotent
+/// （例如 invalidate query、setQueryData 覆蓋整包資料），不可假設事件僅送達一次。
+fn emit_to_dynamic_webviews<S: serde::Serialize + Clone>(
+    app: &tauri::AppHandle,
+    event: &str,
+    payload: S,
+) {
+    for label in DYNAMIC_WEBVIEW_LABELS {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.emit(event, payload.clone());
+        }
     }
 }
 
-/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過快照更新。
+/// 將設定變更定向通知 overlay 與 tray panel webview，避免動態建立視窗遺漏 AppHandle 廣播。
+pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &AppSettings) {
+    emit_to_dynamic_webviews(app, "quota-overlay-settings-changed", settings);
+}
+
+/// 同時廣播並定向通知 overlay 與 tray panel，讓動態建立的 webview 不會錯過快照更新。
 pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
     let _ = app.emit("quota-snapshots-updated", ());
-    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
-        let _ = overlay.emit("quota-snapshots-updated", ());
-    }
+    emit_to_dynamic_webviews(app, "quota-snapshots-updated", ());
 }
 
-/// 同時廣播並定向通知 overlay，讓動態建立的 webview 不會錯過介入提醒清單變動。
+/// 同時廣播並定向通知 overlay 與 tray panel，讓動態建立的 webview 不會錯過介入提醒清單變動。
 pub(crate) fn emit_intervention_list_changed(app: &tauri::AppHandle, items: &[InterventionItem]) {
     let _ = app.emit("intervention-list-changed", items);
-    if let Some(overlay) = app.get_webview_window(QUOTA_OVERLAY_LABEL) {
-        let _ = overlay.emit("intervention-list-changed", items);
-    }
+    emit_to_dynamic_webviews(app, "intervention-list-changed", items);
 }
 
 /// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。

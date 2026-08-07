@@ -7,6 +7,7 @@ import { IconButton } from "./ui/IconButton";
 
 type TrayQuotaPanelProps = {
   snapshots: QuotaSnapshot[];
+  enabledProviders: string[];
   onRefresh: () => void;
   onOpenSettings: () => void;
 };
@@ -97,9 +98,9 @@ function WindowRow({ provider, window }: { provider: string; window: QuotaWindow
   );
 }
 
-export function TrayQuotaPanel({ snapshots, onRefresh, onOpenSettings }: TrayQuotaPanelProps) {
+export function TrayQuotaPanel({ snapshots, enabledProviders, onRefresh, onOpenSettings }: TrayQuotaPanelProps) {
   const { t, locale } = useI18n();
-  const visibleSnapshots = sortSnapshots(snapshots);
+  const visibleSnapshots = sortSnapshots(snapshots.filter((snapshot) => enabledProviders.includes(snapshot.provider)));
   const latestFetchedAt = visibleSnapshots
     .map((snapshot) => snapshot.fetchedAt)
     .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
