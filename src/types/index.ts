@@ -150,13 +150,21 @@ export type SkillEntry = {
     skillMdPath: string;
     fileCount: number;
     targets: TargetStatus[];
-    description?: string | null;
+  description?: string | null;
+  providerId?: string | null;
+  locations: ResourceLocation[];
+  effectivePath?: string | null;
+  cliState?: ResourceState | null;
+  cliSource?: DiscoverySource | null;
 };
 
 export type SkillsScanResult = {
     sourceRoot: string;
     skills: SkillEntry[];
-    targets: TargetInfo[];
+  targets: TargetInfo[];
+  enabledProviders: string[];
+  discoveries: ResourceDiscovery[];
+  diagnostics: DiscoveryDiagnostic[];
 };
 
 export type CommandEntry = {
@@ -164,13 +172,48 @@ export type CommandEntry = {
     sourcePath: string;
     syncSourcePath: string;
     targets: TargetStatus[];
-    description?: string | null;
+  description?: string | null;
+  providerId?: string | null;
+  locations: ResourceLocation[];
+  effectivePath?: string | null;
+  cliState?: ResourceState | null;
+  cliSource?: DiscoverySource | null;
 };
 
 export type CommandsScanResult = {
     sourceRoot: string;
     commands: CommandEntry[];
-    targets: TargetInfo[];
+  targets: TargetInfo[];
+  enabledProviders: string[];
+  discoveries: ResourceDiscovery[];
+  diagnostics: DiscoveryDiagnostic[];
+};
+
+export type ResourceKind = "skill" | "command" | "mcp";
+export type DiscoveryScope = "global" | "project" | "effective";
+export type DiscoverySource = "cli" | "file";
+export type ResourceState = "available" | "configured" | "disabled";
+export type ResourceLocation = {
+  providerId: string;
+  scope: DiscoveryScope;
+  root: string;
+  path: string;
+};
+export type ResourceDiscovery = {
+  providerId: string;
+  kind: ResourceKind;
+  scope: DiscoveryScope;
+  locations: ResourceLocation[];
+  effectivePath?: string | null;
+  source: DiscoverySource;
+  state: ResourceState;
+  editable: boolean;
+};
+export type DiscoveryDiagnostic = {
+  providerId: string;
+  kind: ResourceKind;
+  scope: DiscoveryScope;
+  message: string;
 };
 
 export type SyncItem = {
@@ -229,7 +272,11 @@ export type McpScope =
 export type McpServerEntry = {
     name: string;
     enabled: boolean;
-    configJson: string;
+  configJson: string;
+  effective?: boolean | null;
+  source?: string | null;
+  scope?: DiscoveryScope;
+  editable: boolean;
 };
 
 export type McpProviderConfig = {
@@ -237,7 +284,9 @@ export type McpProviderConfig = {
     configPath: string;
     configExists: boolean;
     servers: McpServerEntry[];
-    error?: string | null;
+  error?: string | null;
+  enabled: boolean;
+  diagnostics: DiscoveryDiagnostic[];
 };
 
 export type AnalyticsGroupBy = "day" | "week" | "month";

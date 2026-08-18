@@ -10,6 +10,7 @@ mod mcp_config;
 mod openspec_scan;
 mod platform;
 mod provider;
+mod resource_discovery;
 mod quota;
 mod sessions;
 mod settings;
@@ -511,6 +512,7 @@ pub fn run() {
             scan_global_agents_md,
             scan_agents_skills,
             scan_agents_commands,
+            get_resource_scan_signature,
             sync_agents_items,
             read_agents_file,
             write_agents_file,

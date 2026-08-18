@@ -2,17 +2,12 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::env;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::MutexGuard;
 use std::thread;
 use std::time::Duration;
 
-fn test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn lock_test() -> MutexGuard<'static, ()> {
-    test_lock()
+    crate::shared_env_test_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -30,6 +25,151 @@ fn write_file(path: &Path, content: &str) {
         fs::create_dir_all(parent).expect("create parent");
     }
     fs::write(path, content).expect("write file");
+}
+
+#[test]
+fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
+    let _guard = lock_test();
+    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
+        .map(|key| (key, env::var_os(key)));
+    let root = unique_test_dir("provider-aware-union");
+    write_file(&root.join(".codex/skills/shared/SKILL.md"), "codex");
+    write_file(&root.join(".agents/skills/shared/SKILL.md"), "agents");
+    write_file(&root.join(".github/skills/copilot/SKILL.md"), "copilot");
+    write_file(&root.join(".gemini/commands/review.toml"), "prompt = \"review\"");
+
+    let appdata = unique_test_dir("provider-aware-appdata");
+    fs::create_dir_all(&appdata).expect("appdata");
+    unsafe {
+        env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata);
+        env::set_var("APPDATA", &appdata);
+        env::set_var("USERPROFILE", &root);
+    }
+    let mut settings = AppSettings::default().expect("settings");
+    settings.agents_source_root = root.join(".agents").to_string_lossy().to_string();
+    settings.copilot_root = root.join(".copilot").to_string_lossy().to_string();
+    settings.codex_root = root.join(".codex").to_string_lossy().to_string();
+    settings.claude_root = root.join(".claude").to_string_lossy().to_string();
+    settings.opencode_root = root.join(".opencode").to_string_lossy().to_string();
+    settings.antigravity_root = root.join(".gemini").to_string_lossy().to_string();
+    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path")).expect("settings parent");
+    fs::write(
+        crate::settings::settings_file_path().expect("settings path"),
+        serde_json::to_vec_pretty(&settings).expect("settings JSON"),
+    )
+    .expect("write settings");
+
+    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
+    let result = scan_agents_skills_with_providers(&scope, &[CODEX_PROVIDER.to_string(), COPILOT_PROVIDER.to_string()]).expect("skills");
+    assert_eq!(result.enabled_providers, vec![CODEX_PROVIDER, COPILOT_PROVIDER]);
+    assert!(result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(CODEX_PROVIDER) && skill.locations.len() == 2));
+    assert!(result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(COPILOT_PROVIDER)));
+    assert!(!result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(CLAUDE_PROVIDER)));
+
+    let commands = scan_agents_commands_with_providers(&scope, &["antigravity".to_string()]).expect("commands");
+    assert_eq!(commands.enabled_providers, vec!["antigravity"]);
+    assert_eq!(commands.commands[0].name, "review");
+    assert!(commands.commands[0].source_path.ends_with("review.toml"));
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&appdata);
+    for (key, value) in saved_vars {
+        unsafe {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_aware_scan_supports_command_formats_and_disabled_providers() {
+    let _guard = lock_test();
+    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
+        .map(|key| (key, env::var_os(key)));
+    let root = unique_test_dir("provider-aware-formats");
+    write_file(&root.join(".opencode/command/singular.md"), "singular");
+    write_file(&root.join(".opencode/commands/plural.md"), "plural");
+    write_file(&root.join(".github/prompts/copilot.prompt.md"), "copilot");
+    write_file(&root.join(".gemini/commands/review.toml"), "prompt = \"review\"");
+    write_file(&root.join(".claude/commands/disabled.md"), "disabled");
+
+    let appdata = unique_test_dir("provider-aware-formats-appdata");
+    fs::create_dir_all(&appdata).expect("appdata");
+    unsafe {
+        env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata);
+        env::set_var("APPDATA", &appdata);
+        env::set_var("USERPROFILE", &root);
+    }
+    let mut settings = AppSettings::default().expect("settings");
+    settings.opencode_root = root.join(".opencode").to_string_lossy().to_string();
+    settings.copilot_root = root.join(".copilot").to_string_lossy().to_string();
+    settings.antigravity_root = root.join(".gemini").to_string_lossy().to_string();
+    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path")).expect("settings parent");
+    fs::write(
+        crate::settings::settings_file_path().expect("settings path"),
+        serde_json::to_vec_pretty(&settings).expect("settings JSON"),
+    )
+    .expect("write settings");
+
+    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
+    let result = scan_agents_commands_with_providers(
+        &scope,
+        &[OPENCODE_PROVIDER.to_string(), COPILOT_PROVIDER.to_string(), "antigravity".to_string()],
+    )
+    .expect("commands");
+    let names = result.commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>();
+    assert!(names.contains(&"singular"));
+    assert!(names.contains(&"plural"));
+    assert!(names.contains(&"copilot"));
+    assert!(names.contains(&"review"));
+    assert!(!names.contains(&"disabled"));
+    assert!(result.commands.iter().find(|command| command.name == "copilot").expect("copilot").source_path.ends_with("copilot.prompt.md"));
+    assert!(result.commands.iter().find(|command| command.name == "review").expect("gemini").source_path.ends_with("review.toml"));
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&appdata);
+    for (key, value) in saved_vars {
+        unsafe {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
+    }
+}
+
+#[test]
+fn resource_scan_signature_changes_when_resource_file_changes() {
+    let _guard = lock_test();
+    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
+        .map(|key| (key, env::var_os(key)));
+    let root = unique_test_dir("resource-signature");
+    let appdata = unique_test_dir("resource-signature-appdata");
+    write_file(&root.join(".agents/skills/shared/SKILL.md"), "first");
+    fs::create_dir_all(&appdata).expect("appdata");
+    unsafe {
+        env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata);
+        env::set_var("APPDATA", &appdata);
+        env::set_var("USERPROFILE", &root);
+    }
+    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
+    let before = resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()]).expect("before signature");
+    write_file(&root.join(".agents/skills/shared/SKILL.md"), "second content");
+    let after = resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()]).expect("after signature");
+    assert_ne!(before, after);
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&appdata);
+    for (key, value) in saved_vars {
+        unsafe {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

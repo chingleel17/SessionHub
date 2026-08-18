@@ -11,8 +11,9 @@ use crate::settings::{
     default_app_data_dir, default_opencode_config_root, resolve_codex_root, resolve_copilot_root,
 };
 use crate::types::{
-    AppSettings, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
+    AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
 };
+use crate::resource_discovery::{discover_cli, normalize_enabled_providers, DiscoveryDiagnostic, DiscoveryScope, ResourceKind};
 
 pub(crate) const MCP_PROVIDERS: &[&str] = &[
     CLAUDE_PROVIDER,
@@ -39,6 +40,10 @@ pub(crate) struct McpServerEntry {
     pub(crate) name: String,
     pub(crate) enabled: bool,
     pub(crate) config_json: String,
+    pub(crate) effective: Option<bool>,
+    pub(crate) source: Option<String>,
+    pub(crate) scope: Option<DiscoveryScope>,
+    pub(crate) editable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,6 +54,8 @@ pub(crate) struct McpProviderConfig {
     pub(crate) config_exists: bool,
     pub(crate) servers: Vec<McpServerEntry>,
     pub(crate) error: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) diagnostics: Vec<DiscoveryDiagnostic>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,10 +337,30 @@ fn json_to_toml_item(value: &Value) -> Result<Item, String> {
 pub(crate) fn list_mcp_configs_internal(
     scope: &McpScope,
 ) -> Result<Vec<McpProviderConfig>, String> {
+    list_mcp_configs_with_providers_internal(
+        scope,
+        MCP_PROVIDERS.iter().map(|provider| provider.to_string()).collect::<Vec<_>>().as_slice(),
+        false,
+    )
+}
+
+pub(crate) fn list_mcp_configs_with_providers(
+    scope: &McpScope,
+    enabled_providers: &[String],
+) -> Result<Vec<McpProviderConfig>, String> {
+    list_mcp_configs_with_providers_internal(scope, enabled_providers, true)
+}
+
+fn list_mcp_configs_with_providers_internal(
+    scope: &McpScope,
+    enabled_providers: &[String],
+    include_cli: bool,
+) -> Result<Vec<McpProviderConfig>, String> {
     let disabled_store = load_disabled_store()?;
     let mut results = Vec::with_capacity(MCP_PROVIDERS.len());
-    for &provider in MCP_PROVIDERS {
-        results.push(list_one_provider(provider, scope, &disabled_store));
+    let (enabled, _) = normalize_enabled_providers(enabled_providers);
+    for provider in enabled.iter().filter(|provider| MCP_PROVIDERS.contains(&provider.as_str())) {
+        results.push(list_one_provider(provider, scope, &disabled_store, include_cli));
     }
     Ok(results)
 }
@@ -342,8 +369,9 @@ fn list_one_provider(
     provider: &str,
     scope: &McpScope,
     disabled_store: &DisabledStore,
+    include_cli: bool,
 ) -> McpProviderConfig {
-    match list_one_provider_inner(provider, scope, disabled_store) {
+    match list_one_provider_inner(provider, scope, disabled_store, include_cli) {
         Ok(config) => config,
         Err(error) => McpProviderConfig {
             provider_id: provider.to_string(),
@@ -351,6 +379,8 @@ fn list_one_provider(
             config_exists: false,
             servers: Vec::new(),
             error: Some(error),
+            enabled: true,
+            diagnostics: Vec::new(),
         },
     }
 }
@@ -359,6 +389,7 @@ fn list_one_provider_inner(
     provider: &str,
     scope: &McpScope,
     disabled_store: &DisabledStore,
+    include_cli: bool,
 ) -> Result<McpProviderConfig, String> {
     let spec = provider_spec(provider)?;
     let path = mcp_config_path(provider, scope)?;
@@ -387,6 +418,10 @@ fn list_one_provider_inner(
             enabled,
             config_json: serde_json::to_string_pretty(&value)
                 .map_err(|error| format!("failed to serialize server config: {error}"))?,
+            effective: None,
+            source: None,
+            scope: None,
+            editable: true,
         });
     }
 
@@ -403,6 +438,10 @@ fn list_one_provider_inner(
                     enabled: false,
                     config_json: serde_json::to_string_pretty(value)
                         .map_err(|error| format!("failed to serialize server config: {error}"))?,
+                    effective: None,
+                    source: None,
+                    scope: None,
+                    editable: true,
                 });
             }
         }
@@ -410,12 +449,56 @@ fn list_one_provider_inner(
 
     servers.sort_by(|a, b| a.name.cmp(&b.name));
 
+    let cli_scope = match scope {
+        McpScope::Global => DiscoveryScope::Global,
+        McpScope::Project { .. } => DiscoveryScope::Project,
+    };
+    let project_cwd = match scope {
+        McpScope::Project { project_cwd } => Some(project_cwd.as_str()),
+        McpScope::Global => None,
+    };
+    let codex_trusted = if provider == CODEX_PROVIDER {
+        project_cwd.map(is_codex_project_trusted).transpose()?.unwrap_or(true)
+    } else {
+        true
+    };
+    let (mut diagnostics, cli_entries) = match (include_cli, provider, codex_trusted) {
+        (true, COPILOT_PROVIDER, _) | (true, CODEX_PROVIDER, true) => match discover_cli(provider, ResourceKind::Mcp, cli_scope, project_cwd) {
+            Ok(entries) => (Vec::new(), entries),
+            Err(error) => (vec![error], Vec::new()),
+        },
+        _ => (Vec::new(), Vec::new()),
+    };
+    for server in &mut servers {
+        if let Some(cli) = cli_entries.iter().find(|entry| entry.name.eq_ignore_ascii_case(&server.name)) {
+            server.effective = Some(true);
+            server.source = cli.source.clone();
+            server.scope = Some(cli_scope);
+        }
+    }
+    let configured_names = servers.iter().map(|server| server.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
+    for cli in cli_entries.iter().filter(|entry| !configured_names.contains(&entry.name.to_lowercase())) {
+            servers.push(McpServerEntry {
+                name: cli.name.clone(),
+                enabled: cli.enabled.unwrap_or(true),
+                config_json: "{}".to_string(),
+                effective: Some(true),
+                source: cli.source.clone(),
+                scope: Some(cli_scope),
+                editable: false,
+            });
+    }
     Ok(McpProviderConfig {
         provider_id: provider.to_string(),
         config_path: normalize_display_path(&path),
         config_exists,
         servers,
         error: None,
+        enabled: true,
+        diagnostics: {
+            diagnostics.shrink_to_fit();
+            diagnostics
+        },
     })
 }
 
@@ -1049,5 +1132,34 @@ mod tests {
             .find(|c| c.provider_id == CLAUDE_PROVIDER)
             .unwrap();
         assert!(claude.servers.is_empty());
+    }
+
+    #[test]
+    fn list_respects_enabled_provider_intersection() {
+        let env = EnvGuard::new("enabled-provider-filter");
+        fs::write(
+            env.home().join(".claude.json"),
+            r#"{"mcpServers":{"claude-server":{"command":"claude"}}}"#,
+        )
+        .unwrap();
+        let result = list_mcp_configs_with_providers(
+            &McpScope::Global,
+            &[OPENCODE_PROVIDER.to_string(), ANTIGRAVITY_PROVIDER.to_string()],
+        )
+        .expect("list filtered providers");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].provider_id, OPENCODE_PROVIDER);
+        assert!(result[0].servers.is_empty());
+    }
+
+    #[test]
+    fn unsupported_mcp_provider_does_not_create_empty_config() {
+        let _env = EnvGuard::new("antigravity-mcp-filter");
+        let result = list_mcp_configs_with_providers(
+            &McpScope::Global,
+            &[ANTIGRAVITY_PROVIDER.to_string()],
+        )
+        .expect("list unsupported provider");
+        assert!(result.is_empty());
     }
 }

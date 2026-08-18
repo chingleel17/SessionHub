@@ -1,11 +1,12 @@
 use crate::mcp_config::{
-    delete_mcp_server_internal, is_codex_project_trusted, list_mcp_configs_internal,
+    delete_mcp_server_internal, is_codex_project_trusted, list_mcp_configs_with_providers,
     set_mcp_server_enabled_internal, upsert_mcp_server_internal, McpProviderConfig, McpScope,
 };
 
 #[tauri::command]
 pub async fn list_mcp_configs(scope: McpScope) -> Result<Vec<McpProviderConfig>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_mcp_configs_internal(&scope))
+    let settings = crate::commands::settings::get_settings_internal()?;
+    tauri::async_runtime::spawn_blocking(move || list_mcp_configs_with_providers(&scope, &settings.enabled_providers))
         .await
         .map_err(|error| format!("failed to join list MCP configs task: {error}"))?
 }

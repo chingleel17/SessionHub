@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { MessageKey } from "../locales/zh-TW";
 import type { BridgeEventLogEntry, ProviderQuota, QuotaSnapshot } from "../types";
+import { getProviderAbbr } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 
 import { QuotaOverview } from "./QuotaOverview";
@@ -27,14 +28,6 @@ const STATUS_COLORS: Record<string, string> = {
   full_refresh: "var(--color-green, #3fb950)",
   skipped_dedup: "var(--color-muted, #8b949e)",
   skipped_rate_limit: "var(--color-muted, #8b949e)",
-};
-
-const PROVIDER_ABBR: Record<string, string> = {
-  claude: "CC",
-  copilot: "GH",
-  opencode: "OC",
-  codex: "CX",
-  antigravity: "AG",
 };
 
 const PROVIDER_COLOR: Record<string, string> = {
@@ -131,7 +124,7 @@ function getNearestResetCreditExpiry(snapshot: QuotaSnapshot): string | null {
 
 function QuotaChip({ quota, noLimitLabel }: { quota: ProviderQuota; noLimitLabel: string }) {
   const totalTokens = quota.inputTokens + quota.outputTokens;
-  const abbr = PROVIDER_ABBR[quota.provider] ?? quota.provider.slice(0, 2).toUpperCase();
+  const abbr = getProviderAbbr(quota.provider);
   const hasCost = quota.costUsd > 0;
   const hasLimit = quota.monthlyLimitTokens != null;
 
@@ -183,7 +176,7 @@ function QuotaSnapshotChip({
   resetsLabel: string;
   t: (key: MessageKey, params?: Record<string, string | number>) => string;
 }) {
-  const abbr = PROVIDER_ABBR[snap.provider] ?? snap.provider.slice(0, 2).toUpperCase();
+  const abbr = getProviderAbbr(snap.provider);
   const windows = statusBarWindowsForSnapshot(snap);
   const topWindow = windows[0];
   const pct = topWindow ? Math.round(topWindow.utilization * 100) : null;

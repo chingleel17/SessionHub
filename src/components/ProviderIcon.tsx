@@ -1,3 +1,5 @@
+import { getProviderAbbr } from "../utils/providerLabel";
+
 type ProviderIconProps = {
   provider: string;
   label: string;
@@ -5,14 +7,7 @@ type ProviderIconProps = {
 };
 
 export function ProviderIcon({ provider, label, className }: ProviderIconProps) {
-  const initialsByProvider: Record<string, string> = {
-    copilot: "CP",
-    opencode: "OC",
-    codex: "CX",
-    claude: "CL",
-    antigravity: "AG",
-  };
-  const initials = initialsByProvider[provider] ?? label.trim().slice(0, 2).toUpperCase();
+  const initials = getProviderAbbr(provider);
 
   return (
     <span

@@ -144,6 +144,7 @@ type Props = {
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
   codexTrusted: boolean;
+  onAgentsTabChange: (tab: "agents-md" | "skills" | "commands" | "mcp") => void;
   globalAgentsData: AgentsScopeDataBundle;
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
@@ -283,6 +284,7 @@ export function ProjectView({
   onDeleteMcpServer,
   onSetMcpServerEnabled,
   codexTrusted,
+  onAgentsTabChange,
   globalAgentsData,
   activePlanSessionId,
   onActivePlanChange,
@@ -934,6 +936,7 @@ export function ProjectView({
           onDeleteMcpServer={onDeleteMcpServer}
           onSetMcpServerEnabled={onSetMcpServerEnabled}
           codexTrusted={codexTrusted}
+          onActiveTabChange={onAgentsTabChange}
           globalData={globalAgentsData}
         />
       ) : activeSubTab.startsWith("plan:") ? (

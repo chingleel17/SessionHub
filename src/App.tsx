@@ -34,6 +34,7 @@ import type {
   SessionSearchTarget,
   SessionTodo,
   SkillsScanResult,
+  ResourceKind,
   SisyphusData,
   SyncActionResult,
   SyncReport,
@@ -274,6 +275,8 @@ function App() {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
   const [globalAgentsPrefs, setGlobalAgentsPrefs] = useState<ProjectAgentsPrefs>(DEFAULT_PROJECT_AGENTS_PREFS);
+  const [globalAgentsTab, setGlobalAgentsTab] = useState<"agents-md" | "skills" | "commands" | "mcp">("agents-md");
+  const [projectAgentsTabs, setProjectAgentsTabs] = useState<Record<string, "agents-md" | "skills" | "commands" | "mcp">>({});
   const [syncConflictDialog, setSyncConflictDialog] = useState<{
     conflicts: SyncActionResult[];
     canRememberChoice: boolean;
@@ -567,6 +570,9 @@ function App() {
       showToast(t("toast.sessionArchived"));
       forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      await queryClient.invalidateQueries({ queryKey: ["agents-skills"] });
+      await queryClient.invalidateQueries({ queryKey: ["agents-commands"] });
+      await queryClient.invalidateQueries({ queryKey: ["mcp-configs"] });
     },
   });
 
@@ -848,10 +854,14 @@ function App() {
   const projectAgentsSubTabActive =
     Boolean(activeProject?.pathLabel) &&
     (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false);
+  const projectAgentsTab = activeProject ? projectAgentsTabs[activeProject.key] ?? "agents-md" : "agents-md";
+  const projectAgentsSkillsActive = projectAgentsTab === "skills";
+  const projectAgentsCommandsActive = projectAgentsTab === "commands";
+  const projectAgentsMcpActive = projectAgentsTab === "mcp";
 
   const projectAgentsPrefsQuery = useQuery({
     queryKey: ["agents-prefs", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
+    enabled: projectAgentsSubTabActive && (projectAgentsTab === "agents-md" || projectAgentsTab === "skills" || projectAgentsTab === "commands" || projectAgentsTab === "mcp"),
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -860,34 +870,82 @@ function App() {
 
   const projectAgentsMdQuery = useQuery({
     queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
+    enabled: projectAgentsSubTabActive && projectAgentsTab === "agents-md",
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
     queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
   });
 
-  const projectAgentsSkillsQuery = useQuery({
-    queryKey: ["agents-skills", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
-    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+  const projectAgentsSkillsSignatureQuery = useQuery({
+    queryKey: ["agents-signature", "project", activeProject?.pathLabel ?? "", "skill", settingsQuery.data?.enabledProviders ?? []],
+    enabled: projectAgentsSubTabActive && projectAgentsSkillsActive,
+    staleTime: 2_000,
+    refetchInterval: 5_000,
+    queryFn: () => invoke<string>("get_resource_scan_signature", {
+      scope: { kind: "project", projectCwd: activeProject?.pathLabel },
+      kind: "skill" as ResourceKind,
+      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
+    }),
   });
 
+  const projectAgentsCommandsSignatureQuery = useQuery({
+    queryKey: ["agents-signature", "project", activeProject?.pathLabel ?? "", "command", settingsQuery.data?.enabledProviders ?? []],
+    enabled: projectAgentsSubTabActive && projectAgentsCommandsActive,
+    staleTime: 2_000,
+    refetchInterval: 5_000,
+    queryFn: () => invoke<string>("get_resource_scan_signature", {
+      scope: { kind: "project", projectCwd: activeProject?.pathLabel },
+      kind: "command" as ResourceKind,
+      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
+    }),
+  });
+
+  const globalAgentsSkillsSignatureQuery = useQuery({
+    queryKey: ["agents-signature", "global", "skill", settingsQuery.data?.enabledProviders ?? []],
+    enabled: (activeView === "agents-global" && globalAgentsTab === "skills") || (projectAgentsSubTabActive && projectAgentsSkillsActive),
+    staleTime: 2_000,
+    refetchInterval: 5_000,
+    queryFn: () => invoke<string>("get_resource_scan_signature", {
+      scope: { kind: "global" },
+      kind: "skill" as ResourceKind,
+      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
+    }),
+  });
+
+  const globalAgentsCommandsSignatureQuery = useQuery({
+    queryKey: ["agents-signature", "global", "command", settingsQuery.data?.enabledProviders ?? []],
+    enabled: (activeView === "agents-global" && globalAgentsTab === "commands") || (projectAgentsSubTabActive && projectAgentsCommandsActive),
+    staleTime: 2_000,
+    refetchInterval: 5_000,
+    queryFn: () => invoke<string>("get_resource_scan_signature", {
+      scope: { kind: "global" },
+      kind: "command" as ResourceKind,
+      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
+    }),
+  });
+
+  const projectAgentsSkillsQuery = useQuery({
+     queryKey: ["agents-skills", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? [], projectAgentsSkillsSignatureQuery.data ?? ""],
+    enabled: projectAgentsSubTabActive && projectAgentsSkillsActive,
+     staleTime: 30 * 60_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previous) => previous,
+      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
+   });
+
   const projectAgentsCommandsQuery = useQuery({
-    queryKey: ["agents-commands", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
+     queryKey: ["agents-commands", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? [], projectAgentsCommandsSignatureQuery.data ?? ""],
+    enabled: projectAgentsSubTabActive && projectAgentsCommandsActive,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
-    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
+     queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
   const globalAgentsMdQuery = useQuery({
     queryKey: ["agents-md", "global"],
-    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+    enabled: (activeView === "agents-global" && globalAgentsTab === "agents-md") || (projectAgentsSubTabActive && projectAgentsTab === "agents-md"),
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
@@ -895,21 +953,21 @@ function App() {
   });
 
   const globalAgentsSkillsQuery = useQuery({
-    queryKey: ["agents-skills", "global"],
-    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
-    staleTime: 5 * 60_000,
+     queryKey: ["agents-skills", "global", settingsQuery.data?.enabledProviders ?? [], globalAgentsSkillsSignatureQuery.data ?? ""],
+    enabled: (activeView === "agents-global" && globalAgentsTab === "skills") || (projectAgentsSubTabActive && projectAgentsSkillsActive),
+     staleTime: 30 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
-    queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" } }),
+     queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
   const globalAgentsCommandsQuery = useQuery({
-    queryKey: ["agents-commands", "global"],
-    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
-    staleTime: 5 * 60_000,
+     queryKey: ["agents-commands", "global", settingsQuery.data?.enabledProviders ?? [], globalAgentsCommandsSignatureQuery.data ?? ""],
+    enabled: (activeView === "agents-global" && globalAgentsTab === "commands") || (projectAgentsSubTabActive && projectAgentsCommandsActive),
+     staleTime: 30 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous,
-    queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" } }),
+     queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
   const agentsSourceRootConfigured = Boolean((settingsForm.agentsSourceRoot ?? "").trim());
@@ -935,17 +993,17 @@ function App() {
   });
 
   const globalMcpConfigsQuery = useQuery({
-    queryKey: ["mcp-configs", "global"],
-    enabled: activeView === "agents-global" || projectAgentsSubTabActive,
+     queryKey: ["mcp-configs", "global", settingsQuery.data?.enabledProviders ?? []],
+    enabled: (activeView === "agents-global" && globalAgentsTab === "mcp") || (projectAgentsSubTabActive && projectAgentsMcpActive),
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     placeholderData: (previous) => previous,
-    queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "global" } }),
+     queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "global" } }),
   });
 
   const projectMcpConfigsQuery = useQuery({
-    queryKey: ["mcp-configs", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
+     queryKey: ["mcp-configs", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? []],
+    enabled: projectAgentsSubTabActive && projectAgentsMcpActive,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     placeholderData: (previous) => previous,
@@ -954,7 +1012,7 @@ function App() {
 
   const codexProjectTrustQuery = useQuery({
     queryKey: ["codex-project-trust", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive,
+    enabled: projectAgentsSubTabActive && projectAgentsMcpActive,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     placeholderData: (previous) => previous,
@@ -1187,6 +1245,7 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["agents-md", scopeKey] }),
       queryClient.invalidateQueries({ queryKey: ["agents-skills", scopeKey] }),
       queryClient.invalidateQueries({ queryKey: ["agents-commands", scopeKey] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp-configs", scopeKey] }),
     ]);
   };
 
@@ -1814,6 +1873,7 @@ function App() {
     mcpProviders: globalMcpConfigsQuery.data ?? [],
     mcpLoading: globalMcpConfigsQuery.isLoading,
     onRefreshMcp: async () => { await globalMcpConfigsQuery.refetch(); },
+    onActiveTabChange: setGlobalAgentsTab,
     onUpsertMcpServer: (provider, name, originalName, configJson) =>
       upsertMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name, originalName, configJson }),
     onDeleteMcpServer: (provider, name) =>
@@ -2032,6 +2092,11 @@ function App() {
                 })
               }
               codexTrusted={codexProjectTrustQuery.data ?? false}
+              onAgentsTabChange={(tab) => {
+                if (activeProject) {
+                  setProjectAgentsTabs((current) => ({ ...current, [activeProject.key]: tab }));
+                }
+              }}
               globalAgentsData={globalAgentsData}
               activePlanSessionId={activePlanSessionId}
               onActivePlanChange={setActivePlanSessionId}

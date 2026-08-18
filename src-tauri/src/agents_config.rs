@@ -18,6 +18,11 @@ use crate::types::{
     AppSettings, AGENTS_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
     OPENCODE_PROVIDER,
 };
+use crate::resource_discovery::{
+    command_roots as discovery_command_roots, discover_cli, normalize_enabled_providers,
+    skill_roots as discovery_skill_roots, DiscoveryDiagnostic, DiscoveryScope,
+    DiscoverySource, ResourceDiscovery, ResourceKind, ResourceLocation, ResourceState,
+};
 
 const AGENTS_FILE_NAME: &str = "AGENTS.md";
 const CLAUDE_FILE_NAME: &str = "CLAUDE.md";
@@ -106,6 +111,11 @@ pub(crate) struct SkillEntry {
     pub(crate) file_count: u64,
     pub(crate) targets: Vec<TargetStatus>,
     pub(crate) description: Option<String>,
+    pub(crate) provider_id: Option<String>,
+    pub(crate) locations: Vec<ResourceLocation>,
+    pub(crate) effective_path: Option<String>,
+    pub(crate) cli_state: Option<ResourceState>,
+    pub(crate) cli_source: Option<DiscoverySource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -114,6 +124,9 @@ pub(crate) struct SkillsScanResult {
     pub(crate) source_root: String,
     pub(crate) skills: Vec<SkillEntry>,
     pub(crate) targets: Vec<TargetInfo>,
+    pub(crate) enabled_providers: Vec<String>,
+    pub(crate) discoveries: Vec<ResourceDiscovery>,
+    pub(crate) diagnostics: Vec<DiscoveryDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -137,6 +150,11 @@ pub(crate) struct CommandEntry {
     pub(crate) sync_source_path: String,
     pub(crate) targets: Vec<TargetStatus>,
     pub(crate) description: Option<String>,
+    pub(crate) provider_id: Option<String>,
+    pub(crate) locations: Vec<ResourceLocation>,
+    pub(crate) effective_path: Option<String>,
+    pub(crate) cli_state: Option<ResourceState>,
+    pub(crate) cli_source: Option<DiscoverySource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -145,6 +163,9 @@ pub(crate) struct CommandsScanResult {
     pub(crate) source_root: String,
     pub(crate) commands: Vec<CommandEntry>,
     pub(crate) targets: Vec<TargetInfo>,
+    pub(crate) enabled_providers: Vec<String>,
+    pub(crate) discoveries: Vec<ResourceDiscovery>,
+    pub(crate) diagnostics: Vec<DiscoveryDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -349,6 +370,153 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
     };
     let source_root = skills_source_root(scope, &settings)?;
     let targets = skill_target_roots(scope, &settings)?;
+    let target_infos = targets.iter().map(|(target_id, root)| TargetInfo {
+        target_id: target_id.clone(), root: normalize_display_path(root), root_exists: root.exists(),
+    }).collect::<Vec<_>>();
+    let mut discovered = BTreeMap::<String, PathBuf>::new();
+    collect_skill_dirs(&source_root, &mut discovered);
+    for (_, target_root) in &targets { collect_skill_dirs(target_root, &mut discovered); }
+    let skills = discovered.into_iter().map(|(name, discovered_dir)| {
+        let skill_dir = source_root.join(&name);
+        let preview_dir = if skill_dir.join(SKILL_FILE_NAME).is_file() { skill_dir.clone() } else { discovered_dir };
+        let source_fp = fingerprint_directory(&skill_dir, Some(&source_root), &prefs.ignored_paths)?;
+        let statuses = targets.iter().map(|(target_id, target_root)| compare_directory_target(
+            target_id, target_root, &skill_dir, &target_root.join(&name), &source_fp, &prefs.ignored_paths,
+        )).collect::<Result<Vec<_>, _>>()?;
+        let skill_md_path = preview_dir.join(SKILL_FILE_NAME);
+        Ok(SkillEntry {
+            name, source_dir: normalize_display_path(&skill_dir), skill_md_path: normalize_display_path(&skill_md_path),
+            file_count: source_fp.file_count, targets: statuses, description: read_frontmatter_description(&skill_md_path),
+            provider_id: None, locations: Vec::new(), effective_path: None, cli_state: None, cli_source: None,
+        })
+    }).collect::<Result<Vec<_>, String>>()?;
+    Ok(SkillsScanResult {
+        source_root: normalize_display_path(&source_root), skills, targets: target_infos,
+        enabled_providers: vec![CLAUDE_PROVIDER.to_string()], discoveries: Vec::new(), diagnostics: Vec::new(),
+    })
+}
+
+pub(crate) fn scan_agents_skills_with_providers(scope: &AgentsScope, enabled_providers: &[String]) -> Result<SkillsScanResult, String> {
+    let (enabled_providers, unknown_providers) = normalize_enabled_providers(enabled_providers);
+    let settings = load_agents_settings()?;
+    let project_cwd = match scope {
+        AgentsScope::Project { project_cwd } => Some(Path::new(project_cwd)),
+        AgentsScope::Global => None,
+    };
+    let roots = discovery_skill_roots(
+        match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        project_cwd,
+        &settings,
+        &enabled_providers,
+    )?;
+    let canonical_root = match scope {
+        AgentsScope::Project { project_cwd } => PathBuf::from(project_cwd).join(".agents").join("skills"),
+        AgentsScope::Global => resolve_agents_source_root(Some(&settings.agents_source_root))?.join("skills"),
+    };
+    let target_roots = skill_target_roots(scope, &settings)?
+        .into_iter()
+        .filter(|(provider, _)| enabled_providers.contains(provider))
+        .collect::<Vec<_>>();
+    let target_infos = target_roots.iter().map(|(target_id, root)| TargetInfo { target_id: target_id.clone(), root: normalize_display_path(root), root_exists: root.exists() }).collect::<Vec<_>>();
+    let mut skills = Vec::new();
+    let mut diagnostics = unknown_providers.iter().map(|provider| DiscoveryDiagnostic {
+        provider_id: provider.clone(),
+        kind: ResourceKind::Skill,
+        scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        message: "unknown provider ignored".to_string(),
+    }).collect::<Vec<_>>();
+    for provider in &enabled_providers {
+        let provider_roots = roots.iter().filter(|(id, _)| id == provider).collect::<Vec<_>>();
+        let mut discovered = BTreeMap::<String, Vec<PathBuf>>::new();
+        for (_, root) in provider_roots {
+            let mut found = BTreeMap::new();
+            collect_skill_dirs(root, &mut found);
+            for (name, path) in found {
+                discovered.entry(name).or_default().push(path);
+            }
+        }
+        let cli_resources = if provider == OPENCODE_PROVIDER {
+            match discover_cli(provider, ResourceKind::Skill, match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global }, project_cwd.and_then(|path| path.to_str())) {
+                Ok(resources) => resources,
+                Err(error) => { diagnostics.push(error); Vec::new() }
+            }
+        } else { Vec::new() };
+        for (name, locations) in discovered {
+            let primary = locations.first().cloned().unwrap_or_default();
+            let source_dir = if canonical_root.join(&name).join(SKILL_FILE_NAME).is_file() { canonical_root.join(&name) } else { primary.clone() };
+            let source_fp = fingerprint_directory(&source_dir, None, &[])?;
+            let location_items = locations.iter().map(|path| ResourceLocation {
+                provider_id: provider.clone(),
+                scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+                root: normalize_display_path(path.parent().unwrap_or(path)),
+                path: normalize_display_path(path),
+            }).collect::<Vec<_>>();
+            let cli = cli_resources.iter().find(|item| item.name.eq_ignore_ascii_case(&name));
+            let statuses = target_roots.iter().map(|(target_id, target_root)| compare_directory_target(
+                target_id,
+                target_root,
+                &source_dir,
+                &target_root.join(&name),
+                &source_fp,
+                &[],
+            )).collect::<Result<Vec<_>, _>>()?;
+            skills.push(SkillEntry {
+                name: name.clone(),
+                source_dir: normalize_display_path(&source_dir),
+                skill_md_path: normalize_display_path(&source_dir.join(SKILL_FILE_NAME)),
+                file_count: source_fp.file_count,
+                targets: statuses,
+                description: read_frontmatter_description(&source_dir.join(SKILL_FILE_NAME)),
+                provider_id: Some(provider.clone()),
+                locations: location_items,
+                effective_path: cli.and_then(|item| item.effective_path.clone()),
+                cli_state: cli.map(|_| ResourceState::Available),
+                cli_source: cli.map(|_| DiscoverySource::Cli),
+            });
+        }
+        let discovered_names = skills.iter().filter(|skill| skill.provider_id.as_deref() == Some(provider)).map(|skill| skill.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
+        for cli in cli_resources.iter().filter(|item| !discovered_names.contains(&item.name.to_lowercase())) {
+            skills.push(SkillEntry {
+                name: cli.name.clone(),
+                source_dir: cli.effective_path.clone().unwrap_or_default(),
+                skill_md_path: cli.effective_path.clone().unwrap_or_default(),
+                file_count: 0,
+                targets: Vec::new(),
+                description: None,
+                provider_id: Some(provider.clone()),
+                locations: Vec::new(),
+                effective_path: cli.effective_path.clone(),
+                cli_state: Some(ResourceState::Available),
+                cli_source: Some(DiscoverySource::Cli),
+            });
+        }
+    }
+    let discoveries = skills.iter().filter_map(|entry| entry.provider_id.as_ref().map(|provider| ResourceDiscovery {
+        provider_id: provider.clone(),
+        kind: ResourceKind::Skill,
+        scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        locations: entry.locations.clone(),
+        effective_path: entry.effective_path.clone(),
+        source: entry.cli_source.unwrap_or(DiscoverySource::File),
+        state: entry.cli_state.unwrap_or(ResourceState::Configured),
+        editable: true,
+    })).collect();
+    return Ok(SkillsScanResult {
+        source_root: normalize_display_path(&roots.first().map(|(_, root)| root.clone()).unwrap_or_else(|| PathBuf::from("."))),
+        skills,
+        targets: target_infos,
+        enabled_providers,
+        discoveries,
+        diagnostics,
+    });
+
+    /*
+    let prefs = match scope {
+        AgentsScope::Project { project_cwd } => load_project_agents_prefs_internal(project_cwd)?,
+        AgentsScope::Global => ProjectAgentsPrefs::default(),
+    };
+    let source_root = skills_source_root(scope, &settings)?;
+    let targets = skill_target_roots(scope, &settings)?;
     let target_infos = targets
         .iter()
         .map(|(target_id, root)| TargetInfo {
@@ -398,6 +566,11 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
             file_count: source_fp.file_count,
             targets: statuses,
             description,
+            provider_id: None,
+            locations: Vec::new(),
+            effective_path: None,
+            cli_state: None,
+            cli_source: None,
         });
     }
 
@@ -405,7 +578,56 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
         source_root: normalize_display_path(&source_root),
         skills,
         targets: target_infos,
+        enabled_providers,
+        discoveries: Vec::new(),
+        diagnostics: Vec::new(),
     })
+    */
+}
+
+pub(crate) fn resource_scan_signature(
+    scope: &AgentsScope,
+    kind: ResourceKind,
+    enabled_providers: &[String],
+) -> Result<String, String> {
+    let settings = load_agents_settings()?;
+    let (providers, _) = normalize_enabled_providers(enabled_providers);
+    let project_cwd = match scope {
+        AgentsScope::Project { project_cwd } => Some(Path::new(project_cwd)),
+        AgentsScope::Global => None,
+    };
+    let roots = match kind {
+        ResourceKind::Skill => discovery_skill_roots(
+            match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+            project_cwd, &settings, &providers,
+        )?,
+        ResourceKind::Command => discovery_command_roots(
+            match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+            project_cwd, &settings, &providers,
+        )?,
+        ResourceKind::Mcp => Vec::new(),
+    };
+    let mut hasher = Sha256::new();
+    for (provider, root) in roots {
+        hasher.update(provider.as_bytes());
+        hasher.update(root.to_string_lossy().as_bytes());
+        if !root.is_dir() { hasher.update([0]); continue; }
+        for entry in WalkDir::new(&root).follow_links(false).sort_by_file_name().into_iter().filter_map(Result::ok) {
+            if !entry.file_type().is_file() { continue; }
+            let path = entry.path();
+            let valid = match kind {
+                ResourceKind::Skill => path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE_NAME),
+                ResourceKind::Command => path.extension().is_some_and(|ext| ext == "md" || ext == "toml"),
+                ResourceKind::Mcp => false,
+            };
+            if !valid { continue; }
+            let metadata = fs::metadata(path).map_err(|error| format!("failed to read resource metadata {}: {error}", path.display()))?;
+            hasher.update(path.to_string_lossy().as_bytes());
+            hasher.update(metadata.len().to_le_bytes());
+            hasher.update(system_time_to_millis(metadata.modified().ok().unwrap_or(UNIX_EPOCH.into())).unwrap_or(0).to_le_bytes());
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// 檢查 `~/.agents` 是否為指向全域自訂正本位置的 symlink，供設定頁 banner 呈現連結狀態。
@@ -612,6 +834,180 @@ pub(crate) fn scan_agents_commands_internal(
     let settings = load_agents_settings()?;
     let source_root = commands_source_root(scope, &settings)?;
     let targets = command_target_roots(scope, &settings)?;
+    let target_infos = targets.iter().map(|(target_id, root)| TargetInfo {
+        target_id: target_id.clone(), root: normalize_display_path(root), root_exists: root.exists(),
+    }).collect::<Vec<_>>();
+    let mut discovered = BTreeMap::<String, PathBuf>::new();
+    if source_root.is_dir() {
+        for entry in WalkDir::new(&source_root).follow_links(false).sort_by_file_name().into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if !entry.file_type().is_file() || path.extension().and_then(|value| value.to_str()) != Some("md") { continue; }
+            let Some(relative) = path.strip_prefix(&source_root).ok() else { continue; };
+            if let Some(name) = strip_command_file_suffix(relative, "") { discovered.entry(name).or_insert_with(|| path.to_path_buf()); }
+        }
+    }
+    for (target_id, target_root) in &targets {
+        if !target_root.is_dir() { continue; }
+        for entry in WalkDir::new(target_root).follow_links(false).sort_by_file_name().into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if !entry.file_type().is_file() || path.extension().and_then(|value| value.to_str()) != Some("md") { continue; }
+            let Some(relative) = path.strip_prefix(target_root).ok() else { continue; };
+            if let Some(name) = strip_command_file_suffix(relative, target_id) { discovered.entry(name).or_insert_with(|| path.to_path_buf()); }
+        }
+    }
+    let commands = discovered.into_iter().map(|(name, preview_path)| {
+        let source_relative = command_relative_path(&name, "");
+        let sync_source_path = source_root.join(&source_relative);
+        let source_fp = fingerprint_file(&sync_source_path);
+        let preview_source_path = if source_fp.exists { sync_source_path.clone() } else { preview_path };
+        let statuses = targets.iter().map(|(target_id, target_root)| {
+            let target_path = target_root.join(command_relative_path(&name, target_id));
+            let (status, target_newer) = classify_file_status(&source_fp, &fingerprint_file(&target_path));
+            TargetStatus { target_id: target_id.clone(), target_root: normalize_display_path(target_root), status, target_newer, reason: None }
+        }).collect();
+        Ok(CommandEntry {
+            name, source_path: normalize_display_path(&preview_source_path), sync_source_path: normalize_display_path(&sync_source_path),
+            targets: statuses, description: read_frontmatter_description(&preview_source_path), provider_id: None,
+            locations: Vec::new(), effective_path: None, cli_state: None, cli_source: None,
+        })
+    }).collect::<Result<Vec<_>, String>>()?;
+    Ok(CommandsScanResult {
+        source_root: normalize_display_path(&source_root), commands, targets: target_infos,
+        enabled_providers: vec![CLAUDE_PROVIDER.to_string(), CODEX_PROVIDER.to_string(), OPENCODE_PROVIDER.to_string(), COPILOT_PROVIDER.to_string()],
+        discoveries: Vec::new(), diagnostics: Vec::new(),
+    })
+}
+
+pub(crate) fn scan_agents_commands_with_providers(
+    scope: &AgentsScope,
+    enabled_providers: &[String],
+) -> Result<CommandsScanResult, String> {
+    let settings = load_agents_settings()?;
+    let (enabled_providers, unknown_providers) = normalize_enabled_providers(enabled_providers);
+    let project_cwd = match scope {
+        AgentsScope::Project { project_cwd } => Some(Path::new(project_cwd)),
+        AgentsScope::Global => None,
+    };
+    let roots = discovery_command_roots(
+        match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        project_cwd,
+        &settings,
+        &enabled_providers,
+    )?;
+    let target_roots = command_target_roots(scope, &settings)?
+        .into_iter()
+        .filter(|(provider, _)| enabled_providers.contains(provider))
+        .collect::<Vec<_>>();
+    let target_infos = target_roots.iter().map(|(target_id, root)| TargetInfo {
+        target_id: target_id.clone(), root: normalize_display_path(root), root_exists: root.exists(),
+    }).collect::<Vec<_>>();
+    let canonical_root = commands_source_root(scope, &settings)?;
+    let mut commands = Vec::new();
+    let mut diagnostics = unknown_providers.iter().map(|provider| DiscoveryDiagnostic {
+        provider_id: provider.clone(),
+        kind: ResourceKind::Command,
+        scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        message: "unknown provider ignored".to_string(),
+    }).collect::<Vec<_>>();
+    for provider in &enabled_providers {
+        let suffix = if provider == COPILOT_PROVIDER { ".prompt.md" } else if provider == "antigravity" { ".toml" } else { ".md" };
+        let provider_roots = roots.iter().filter(|(id, _)| id == provider).collect::<Vec<_>>();
+        let mut found = BTreeMap::<String, Vec<PathBuf>>::new();
+        for (_, root) in provider_roots {
+            if !root.is_dir() { continue; }
+            for entry in WalkDir::new(root).follow_links(false).sort_by_file_name().into_iter().filter_map(Result::ok) {
+                if !entry.file_type().is_file() { continue; }
+                let Some(name) = entry.path().strip_prefix(root).ok().and_then(|path| path.to_str()) else { continue; };
+                if !name.ends_with(suffix) { continue; }
+                found.entry(name[..name.len() - suffix.len()].replace('\\', "/")).or_default().push(entry.path().to_path_buf());
+            }
+        }
+        let cli_resources = if provider == OPENCODE_PROVIDER {
+            match discover_cli(provider, ResourceKind::Command, match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global }, project_cwd.and_then(|path| path.to_str())) {
+                Ok(resources) => resources,
+                Err(error) => { diagnostics.push(error); Vec::new() }
+            }
+        } else { Vec::new() };
+        for (name, locations) in found {
+            let primary = locations.first().cloned().unwrap_or_default();
+            let sync_source_path = canonical_root.join(command_relative_path(&name, ""));
+            let source_fp = fingerprint_file(&sync_source_path);
+            let preview_path = if source_fp.exists { sync_source_path.clone() } else { primary.clone() };
+            let cli = cli_resources.iter().find(|item| item.name.eq_ignore_ascii_case(&name));
+            let location_items = locations.iter().map(|path| ResourceLocation {
+                provider_id: provider.clone(),
+                scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+                root: normalize_display_path(path.parent().unwrap_or(path)),
+                path: normalize_display_path(path),
+            }).collect::<Vec<_>>();
+            commands.push(CommandEntry {
+                name: name.clone(),
+                source_path: normalize_display_path(&preview_path),
+                sync_source_path: normalize_display_path(&sync_source_path),
+                targets: target_roots.iter().map(|(target_id, target_root)| {
+                    let target_path = target_root.join(command_relative_path(&name, target_id));
+                    let (status, target_newer) = classify_file_status(&source_fp, &fingerprint_file(&target_path));
+                    TargetStatus {
+                        target_id: target_id.clone(),
+                        target_root: normalize_display_path(target_root),
+                        status,
+                        target_newer,
+                        reason: None,
+                    }
+                }).collect(),
+                description: read_frontmatter_description(&preview_path),
+                provider_id: Some(provider.clone()),
+                locations: location_items,
+                effective_path: cli.and_then(|item| item.effective_path.clone()),
+                cli_state: cli.map(|_| ResourceState::Available),
+                cli_source: cli.map(|_| DiscoverySource::Cli),
+            });
+        }
+        let command_names = commands.iter().filter(|command| command.provider_id.as_deref() == Some(provider)).map(|command| command.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
+        for cli in cli_resources.iter().filter(|item| !command_names.contains(&item.name.to_lowercase())) {
+            commands.push(CommandEntry {
+                name: cli.name.clone(),
+                source_path: cli.effective_path.clone().unwrap_or_default(),
+                sync_source_path: normalize_display_path(&canonical_root.join(command_relative_path(&cli.name, ""))),
+                targets: target_roots.iter().map(|(target_id, target_root)| TargetStatus {
+                    target_id: target_id.clone(),
+                    target_root: normalize_display_path(target_root),
+                    status: SyncStatus::SourceMissing,
+                    target_newer: false,
+                    reason: None,
+                }).collect(),
+                description: None,
+                provider_id: Some(provider.clone()),
+                locations: Vec::new(),
+                effective_path: cli.effective_path.clone(),
+                cli_state: Some(ResourceState::Available),
+                cli_source: Some(DiscoverySource::Cli),
+            });
+        }
+    }
+    commands.sort_by(|left, right| left.name.cmp(&right.name));
+    let discoveries = commands.iter().filter_map(|entry| entry.provider_id.as_ref().map(|provider| ResourceDiscovery {
+        provider_id: provider.clone(),
+        kind: ResourceKind::Command,
+        scope: match scope { AgentsScope::Project { .. } => DiscoveryScope::Project, AgentsScope::Global => DiscoveryScope::Global },
+        locations: entry.locations.clone(),
+        effective_path: entry.effective_path.clone(),
+        source: entry.cli_source.unwrap_or(DiscoverySource::File),
+        state: entry.cli_state.unwrap_or(ResourceState::Configured),
+        editable: !entry.locations.is_empty(),
+    })).collect();
+    return Ok(CommandsScanResult {
+        source_root: normalize_display_path(&canonical_root),
+        commands,
+        targets: target_infos,
+        enabled_providers,
+        discoveries,
+        diagnostics,
+    });
+
+    /*
+    let source_root = commands_source_root(scope, &settings)?;
+    let targets = command_target_roots(scope, &settings)?;
     let target_infos = targets
         .iter()
         .map(|(target_id, root)| TargetInfo {
@@ -706,6 +1102,11 @@ pub(crate) fn scan_agents_commands_internal(
             sync_source_path: normalize_display_path(&sync_source_path),
             targets: statuses,
             description,
+            provider_id: None,
+            locations: Vec::new(),
+            effective_path: None,
+            cli_state: None,
+            cli_source: None,
         });
     }
 
@@ -714,7 +1115,11 @@ pub(crate) fn scan_agents_commands_internal(
         source_root: normalize_display_path(&source_root),
         commands,
         targets: target_infos,
+        enabled_providers,
+        discoveries: Vec::new(),
+        diagnostics: Vec::new(),
     })
+    */
 }
 
 pub(crate) fn sync_agents_items_internal(request: &SyncRequest) -> Result<SyncReport, String> {

@@ -7,8 +7,6 @@ import { CollapsibleSection } from "./CollapsibleSection";
 import { Button } from "./ui/Button";
 import { IconButton } from "./ui/IconButton";
 
-const MCP_PROVIDER_IDS = ["claude", "codex", "opencode", "copilot"] as const;
-
 type McpServerFormType = "http" | "npx" | "binary" | "custom";
 
 /** 單一 scope（專案或全域）的 MCP 資料與 handlers。 */
@@ -254,19 +252,24 @@ function assembleConfig(
 
 export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
   const { t } = useI18n();
+  const providerIds = useMemo(() => groups.flatMap((group) => group.providers.map((provider) => provider.providerId)).filter((id, index, all) => all.indexOf(id) === index), [groups]);
   const [activeProvider, setActiveProvider] = useState<string>(() => {
     const stored = window.localStorage.getItem(getActiveProviderStorageKey());
-    return stored && (MCP_PROVIDER_IDS as readonly string[]).includes(stored) ? stored : "claude";
+    return stored ?? "";
   });
 
   useEffect(() => {
     window.localStorage.setItem(getActiveProviderStorageKey(), activeProvider);
   }, [activeProvider]);
 
+  useEffect(() => {
+    if (!providerIds.includes(activeProvider)) setActiveProvider(providerIds[0] ?? "");
+  }, [activeProvider, providerIds]);
+
   return (
     <div className="mcp-config-content">
       <div className="sub-tab-bar agents-top-tabs">
-        {MCP_PROVIDER_IDS.map((providerId) => (
+        {providerIds.map((providerId) => (
           <button
             key={providerId}
             type="button"
@@ -527,6 +530,11 @@ function McpProviderPanel({
       {currentConfig?.error ? (
         <div className="mcp-provider-error">{currentConfig.error}</div>
       ) : null}
+      {currentConfig?.diagnostics.map((diagnostic) => (
+        <div key={`${diagnostic.providerId}:${diagnostic.kind}:${diagnostic.scope}`} className="mcp-provider-notice">
+          {diagnostic.message}
+        </div>
+      ))}
 
       {group.isLoading ? <div className="explorer-content-loading">{t("plansSpecs.loading")}</div> : null}
 
@@ -552,22 +560,42 @@ function McpProviderPanel({
                   <tr key={entry.name}>
                     <td>{entry.name}</td>
                     <td>
-                      <span className={`agents-status-pill agents-status-pill--${entry.enabled ? "done" : "neutral"}`}>
-                        {entry.enabled ? t("mcp.status.enabled") : t("mcp.status.disabled")}
-                      </span>
+                      <div className="settings-actions agents-toolbar-actions">
+                        <span className={`agents-status-pill agents-status-pill--${entry.enabled ? "done" : "neutral"}`}>
+                          {entry.enabled ? t("mcp.status.enabled") : t("mcp.status.disabled")}
+                        </span>
+                        {entry.effective === true ? (
+                          <span
+                            className="agents-status-pill agents-status-pill--done"
+                            title={[entry.source, entry.scope].filter(Boolean).join(" · ") || undefined}
+                          >
+                            {t("mcp.status.effective")}
+                          </span>
+                        ) : null}
+                        {entry.scope ? (
+                          <span className="agents-status-pill agents-status-pill--neutral">
+                            {t(`mcp.scope.${entry.scope}` as never)}
+                          </span>
+                        ) : null}
+                        {!entry.editable ? (
+                          <span className="agents-status-pill agents-status-pill--neutral">
+                            {t("mcp.status.readOnly")}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td>
                       <span className="mcp-server-summary" title={summary}>{summary}</span>
                     </td>
                     <td>
                       <div className="settings-actions agents-toolbar-actions">
-                        <button type="button" className="ghost-button" disabled={busy} onClick={() => setEditor(editorFromEntry(entry))}>
+                        <button type="button" className="ghost-button" disabled={busy || !entry.editable} onClick={() => setEditor(editorFromEntry(entry))}>
                           {t("mcp.action.edit")}
                         </button>
-                        <button type="button" className="ghost-button" disabled={busy} onClick={() => void handleToggleEnabled(entry)}>
+                        <button type="button" className="ghost-button" disabled={busy || !entry.editable} onClick={() => void handleToggleEnabled(entry)}>
                           {entry.enabled ? t("mcp.action.disable") : t("mcp.action.enable")}
                         </button>
-                        <button type="button" className="danger-button" disabled={busy} onClick={() => setDeleteTarget(entry)}>
+                        <button type="button" className="danger-button" disabled={busy || !entry.editable} onClick={() => setDeleteTarget(entry)}>
                           {t("mcp.action.delete")}
                         </button>
                       </div>

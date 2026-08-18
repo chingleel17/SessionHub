@@ -74,6 +74,7 @@ export type AgentsScopeDataBundle = {
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
   codexTrusted?: boolean;
+  onActiveTabChange?: (tab: AgentsTab) => void;
 };
 
 type Props = AgentsScopeDataBundle & {
@@ -86,8 +87,6 @@ type Props = AgentsScopeDataBundle & {
 };
 
 type MatrixEntry = SkillEntry | CommandsScanResult["commands"][number];
-
-const AGENTS_TARGET_ID = "agents";
 
 const DEFAULT_PREFS: ProjectAgentsPrefs = {
   conflictChoice: null,
@@ -151,33 +150,41 @@ function matchesSearch(entry: MatrixEntry, query: string): boolean {
   return haystack.includes(query);
 }
 
-// 設計稿固定四平台順序（Agents.dc.html）。
-const CHIP_PLATFORMS = ["claude", "codex", "opencode", "copilot"] as const;
-
 type ChipState = "loaded" | "needsSync" | "notInstalled";
 
-/** 依 target 的同步狀態與是否啟用，對應為三種晶片視覺狀態（design D1）。 */
-function chipStateFromStatus(status: SyncStatus | undefined, enabled: boolean): ChipState {
-  if (!enabled) return "notInstalled";
-  switch (status) {
-    case "in-sync":
-    case "linked":
-    case "canonical":
-      return "loaded";
-    case "differs":
-    case "target-missing":
-    case "link-broken":
-    case "error":
-      return "needsSync";
-    default:
-      // source-missing / not-in-source / undefined
-      return "notInstalled";
+type GroupedMatrixEntry = MatrixEntry & {
+  providerEntries: MatrixEntry[];
+};
+
+function groupMatrixEntries(entries: MatrixEntry[]): GroupedMatrixEntry[] {
+  const grouped = new Map<string, GroupedMatrixEntry>();
+  for (const entry of entries) {
+    const key = entry.name.toLowerCase();
+    const current = grouped.get(key);
+    if (current) {
+      current.providerEntries.push(entry);
+      current.locations = [...current.locations, ...entry.locations];
+      current.targets = [...current.targets, ...entry.targets];
+      current.effectivePath ??= entry.effectivePath;
+      current.cliState ??= entry.cliState;
+      current.cliSource ??= entry.cliSource;
+      current.description ??= entry.description;
+    } else {
+      grouped.set(key, { ...entry, providerEntries: [entry], locations: [...entry.locations], targets: [...entry.targets] });
+    }
   }
+  return [...grouped.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function syncStatusForProvider(entry: GroupedMatrixEntry, provider: string): SyncStatus | undefined {
+  return entry.providerEntries
+    .find((candidate) => candidate.providerId === provider)
+    ?.targets.find((target) => target.targetId === provider)?.status;
 }
 
 export function AgentsConfigView(props: Props) {
   const { t } = useI18n();
-  const { onReadFile, onWriteFile, onOpenExternal, onRevealPath, globalData, ...projectOrGlobalData } = props;
+  const { onReadFile, onWriteFile, onOpenExternal, onRevealPath, globalData, onActiveTabChange, ...projectOrGlobalData } = props;
   const primary = projectOrGlobalData as AgentsScopeDataBundle;
   const scopeStoragePrefix = getScopeStorageKey(primary.scope, "");
 
@@ -198,7 +205,8 @@ export function AgentsConfigView(props: Props) {
 
   useEffect(() => {
     window.localStorage.setItem(getScopeStorageKey(primary.scope, "tab"), activeTab);
-  }, [activeTab, scopeStoragePrefix]);
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange, scopeStoragePrefix]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(getScopeStorageKey(primary.scope, "tab"));
@@ -384,21 +392,7 @@ export function AgentsConfigView(props: Props) {
   // ─── Skills / Commands 頁籤：VS Code 式清單 + 同步 modal ─────────────────
 
   const resolveTargetInfos = (tab: "skills" | "commands", data: AgentsScopeDataBundle): TargetInfo[] => {
-    if (tab === "skills") {
-      const backendTargets = data.skillsData?.targets ?? [];
-      const hasBackendAgentsTarget = backendTargets.some((target) => target.targetId === AGENTS_TARGET_ID);
-      if (!hasBackendAgentsTarget && data.skillsData) {
-        const sourceRootExists = data.skillsData.skills.some((skill) =>
-          (skill.targets ?? []).every((status) => status.status !== "source-missing"),
-        );
-        return [
-          { targetId: AGENTS_TARGET_ID, root: data.skillsData.sourceRoot, rootExists: sourceRootExists },
-          ...backendTargets,
-        ];
-      }
-      return backendTargets;
-    }
-    return data.commandsData?.targets ?? [];
+    return tab === "skills" ? data.skillsData?.targets ?? [] : data.commandsData?.targets ?? [];
   };
 
   const resolveMatrixEntries = (tab: "skills" | "commands", data: AgentsScopeDataBundle): MatrixEntry[] => {
@@ -406,25 +400,14 @@ export function AgentsConfigView(props: Props) {
     return data.commandsData?.commands ?? [];
   };
 
-  const resolveTargetStatuses = (tab: "skills" | "commands", data: AgentsScopeDataBundle, entry: MatrixEntry): TargetStatus[] => {
-    const backendStatuses = entry.targets ?? [];
-    if (tab !== "skills" || !data.skillsData) return backendStatuses;
-    const hasBackendAgentsTarget = (data.skillsData.targets ?? []).some((target) => target.targetId === AGENTS_TARGET_ID);
-    if (hasBackendAgentsTarget) return backendStatuses;
-    const isNotInSource = backendStatuses.some((status) => status.status === "source-missing");
-    const virtualStatus: TargetStatus = {
-      targetId: AGENTS_TARGET_ID,
-      targetRoot: data.skillsData.sourceRoot,
-      status: isNotInSource ? "not-in-source" : "canonical",
-      targetNewer: false,
-    };
-    return [virtualStatus, ...backendStatuses];
+  const resolveTargetStatuses = (entry: MatrixEntry): TargetStatus[] => {
+    return entry.targets ?? [];
   };
 
   const renderListGroup = (tab: "skills" | "commands", data: AgentsScopeDataBundle) => {
     const isLoading = tab === "skills" ? data.isSkillsLoading : data.isCommandsLoading;
     const onRefresh = tab === "skills" ? data.onRefreshSkills : data.onRefreshCommands;
-    const allEntries = resolveMatrixEntries(tab, data);
+    const allEntries = groupMatrixEntries(resolveMatrixEntries(tab, data));
     const query = searchQuery.trim().toLowerCase();
     const entries = allEntries.filter((entry) => matchesSearch(entry, query));
 
@@ -438,15 +421,12 @@ export function AgentsConfigView(props: Props) {
       });
     };
 
-    const legend = (
-      <span className="agents-sync-legend">
-        {(["loaded", "needsSync", "notInstalled"] as const).map((state) => (
-          <span key={state} className="agents-sync-legend-item">
-            <span className={`agents-target-chip-dot agents-target-chip-dot--${state}`} />
-            {t(`agents.legend.${state}` as never)}
-          </span>
-        ))}
-      </span>
+    const syncLegend = (
+      <div className="agents-sync-legend" aria-label={t("agents.legend.label" as never)}>
+        <span className="agents-sync-legend-item"><span className="agents-target-chip-dot agents-target-chip-dot--loaded" />{t("agents.legend.loaded" as never)}</span>
+        <span className="agents-sync-legend-item"><span className="agents-target-chip-dot agents-target-chip-dot--needsSync" />{t("agents.legend.needsSync" as never)}</span>
+        <span className="agents-sync-legend-item"><span className="agents-target-chip-dot agents-target-chip-dot--notInstalled" />{t("agents.legend.notInstalled" as never)}</span>
+      </div>
     );
 
     const actionButtons = (
@@ -454,19 +434,25 @@ export function AgentsConfigView(props: Props) {
         <button type="button" className="ghost-button" onClick={() => setSyncModalTab(tab)}>
           {t("agents.action.sync")}
         </button>
+        {syncLegend}
         <button type="button" className="ghost-button agents-icon-button" onClick={() => void onRefresh()} title={t("app.actions.refresh")}>
           <RefreshIcon size={15} />
         </button>
       </div>
     );
+    const diagnostics = tab === "skills" ? data.skillsData?.diagnostics ?? [] : data.commandsData?.diagnostics ?? [];
 
     return (
       <div className="agents-list-group">
         <div className="agents-skills-compat-note agents-skills-compat-note--withActions">
           <span>{t(tab === "skills" ? "agents.skills.compatNote" : "agents.commands.compatNote")}</span>
-          {legend}
           {actionButtons}
         </div>
+        {diagnostics.map((diagnostic) => (
+          <div key={`${diagnostic.providerId}:${diagnostic.kind}:${diagnostic.scope}`} className="mcp-provider-error">
+            {diagnostic.message}
+          </div>
+        ))}
 
         {tab === "skills" && data.agentsRootLinkStatus && data.agentsRootLinkStatus.status !== "linked" ? (
           <div className={`agents-root-link-banner agents-root-link-banner--${data.agentsRootLinkStatus.status}`}>
@@ -505,16 +491,26 @@ export function AgentsConfigView(props: Props) {
         {!isLoading && entries.length > 0 ? (
           <ul className="agents-vscode-list">
             {entries.map((entry) => {
-              const statuses = resolveTargetStatuses(tab, data, entry);
-              const enabledTargets = data.prefs.enabledTargets ?? [];
-              const chips = CHIP_PLATFORMS.map((platform) => {
-                const status = statuses.find((item) => item.targetId === platform)?.status;
-                const enabled = enabledTargets.includes(platform);
-                const state = chipStateFromStatus(status, enabled);
+              const providers = tab === "skills"
+                ? (data.skillsData?.enabledProviders ?? [])
+                : (data.commandsData?.enabledProviders ?? []);
+              const chips = providers.map((platform) => {
+                const resource = entry.providerEntries.find((candidate) => candidate.providerId === platform);
+                const providerLocations = resource?.locations.filter((location) => location.providerId === platform) ?? [];
+                const syncStatus = syncStatusForProvider(entry, platform);
+                const needsSync = syncStatus === "target-missing" || syncStatus === "differs" || syncStatus === "link-broken";
+                const state: ChipState = !resource ? "notInstalled" : needsSync ? "needsSync" : "loaded";
                 return {
                   platform,
                   state,
-                  tooltip: t("agents.chip.tooltip", { platform, state: t(`agents.chip.${state}` as never) }),
+                  tooltip: t("agents.chip.tooltip", {
+                    platform,
+                    state: !resource
+                      ? t("agents.chip.notInstalled" as never)
+                      : resource.cliState === "available"
+                      ? `${t("agents.chip.available" as never)}${resource.effectivePath ? ` (${resource.effectivePath})` : ""}`
+                      : `${t("agents.chip.loaded" as never)}${providerLocations.length > 0 ? ` (${providerLocations.map((location) => `${location.scope}: ${location.path}`).join("; ")})` : ""}`,
+                  }),
                 };
               });
               return (
@@ -527,8 +523,8 @@ export function AgentsConfigView(props: Props) {
                     <span className="agents-target-chips">
                       {chips.map((chip) => (
                         <span key={chip.platform} className={`agents-target-chip agents-target-chip--${chip.state}`} title={chip.tooltip}>
-                          <span className="agents-target-chip-dot" />
-                          {chip.platform}
+                           <span className={`agents-target-chip-dot agents-target-chip-dot--${chip.state}`} />
+                           {chip.platform}
                         </span>
                       ))}
                     </span>
@@ -565,8 +561,8 @@ export function AgentsConfigView(props: Props) {
                   data={data}
                   label={scopeGroupLabel(data.scope)}
                   targetInfos={resolveTargetInfos(tab, data)}
-                  entries={resolveMatrixEntries(tab, data)}
-                  resolveTargetStatuses={(entry) => resolveTargetStatuses(tab, data, entry)}
+                   entries={groupMatrixEntries(resolveMatrixEntries(tab, data))}
+                   resolveTargetStatuses={resolveTargetStatuses}
                   onOpenExternal={onOpenExternal}
                   t={t}
                 />
@@ -668,7 +664,7 @@ export function AgentsConfigView(props: Props) {
         globalData ? (
           <div className="agents-scope-groups">
             {groups.map((data) => {
-              const count = resolveMatrixEntries(activeTab, data).length;
+              const count = groupMatrixEntries(resolveMatrixEntries(activeTab, data)).length;
               return (
                 <CollapsibleGroup key={scopeGroupKey(data.scope)} scope={data.scope} storageKey={groupExpandKey(activeTab)} count={count} label={scopeGroupLabel(data.scope)}>
                   {renderListGroup(activeTab, data)}
@@ -892,16 +888,14 @@ function SyncModalGroup({
                       >
                         {target.targetId}
                       </button>
-                      {target.targetId === AGENTS_TARGET_ID && tab === "skills" ? null : (
-                        <label className="checkbox-group checkbox-group--inline agents-target-toggle">
-                          <input
-                            type="checkbox"
-                            checked={(prefs.enabledTargets ?? []).includes(target.targetId)}
-                            disabled={!target.rootExists}
-                            onChange={(event) => void toggleTarget(target.targetId, event.currentTarget.checked)}
-                          />
-                        </label>
-                      )}
+                      <label className="checkbox-group checkbox-group--inline agents-target-toggle">
+                        <input
+                          type="checkbox"
+                          checked={(prefs.enabledTargets ?? []).includes(target.targetId)}
+                          disabled={!target.rootExists}
+                          onChange={(event) => void toggleTarget(target.targetId, event.currentTarget.checked)}
+                        />
+                      </label>
                     </div>
                   </th>
                 ))}

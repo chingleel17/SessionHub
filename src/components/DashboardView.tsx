@@ -7,6 +7,7 @@ import type {
   SessionActivityStatus,
   SessionInfo,
 } from "../types";
+import { getProviderAbbr, getProviderLabel } from "../utils/providerLabel";
 import { DashboardAnalyticsPanel } from "./DashboardAnalyticsPanel";
 import { QuotaOverview } from "./QuotaOverview";
 
@@ -103,6 +104,8 @@ function saveColumnWidths(widths: number[]) {
 // ─── KanbanProjectCard ────────────────────────────────────────────────────────
 
 const SESSIONS_PER_PROJECT_CARD = 3;
+/** 專案卡片標題列可容納的 provider 標籤數，超出者以 +N 呈現以免擠壓專案名。 */
+const PROVIDERS_PER_PROJECT_CARD = 2;
 
 function KanbanProjectCard({
   projectName,
@@ -126,6 +129,8 @@ function KanbanProjectCard({
   const { t } = useI18n();
 
   const providers = [...new Set(sessions.map((s) => s.provider))];
+  const visibleProviders = providers.slice(0, PROVIDERS_PER_PROJECT_CARD);
+  const hiddenProviders = providers.slice(PROVIDERS_PER_PROJECT_CARD);
   const lastUpdated = sessions
     .map((s) => s.updatedAt)
     .filter((v): v is string => Boolean(v))
@@ -145,15 +150,29 @@ function KanbanProjectCard({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpenProject(projectKey); }}
         title={t("dashboard.kanban.openProject")}
       >
-        <strong className="kanban-project-name">{projectName}</strong>
-        {branchLabel ? <span className="kanban-project-time">{branchLabel}</span> : null}
+        <strong className="kanban-project-name" title={projectName}>{projectName}</strong>
+        {branchLabel ? (
+          <span className="kanban-project-branch" title={branchLabel}>{branchLabel}</span>
+        ) : null}
         <span className="kanban-project-count">{sessions.length}</span>
         <div className="kanban-project-providers">
-          {providers.map((p) => (
-            <span key={p} className={`provider-tag provider-tag--${p}`}>
-              {p === "opencode" ? "OC" : p === "codex" ? "CX" : "CP"}
+          {visibleProviders.map((p) => (
+            <span
+              key={p}
+              className={`provider-tag provider-tag--${p}`}
+              title={getProviderLabel(p)}
+            >
+              {getProviderAbbr(p)}
             </span>
           ))}
+          {hiddenProviders.length > 0 ? (
+            <span
+              className="kanban-project-providers-more"
+              title={hiddenProviders.map(getProviderLabel).join("、")}
+            >
+              +{hiddenProviders.length}
+            </span>
+          ) : null}
         </div>
         {lastUpdated ? <span className="kanban-project-time">{lastUpdated.slice(0, 10)}</span> : null}
         <span className="kanban-project-goto">›</span>

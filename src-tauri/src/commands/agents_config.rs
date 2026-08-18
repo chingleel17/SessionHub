@@ -1,12 +1,14 @@
 use crate::agents_config::{
     check_agents_root_link_internal, link_agents_root_internal, load_project_agents_prefs_internal,
-    read_agents_file_internal, save_project_agents_prefs_internal, scan_agents_commands_internal,
-    scan_agents_md_internal, scan_agents_skills_internal, scan_global_agents_md_internal,
+    read_agents_file_internal, save_project_agents_prefs_internal,
+    scan_agents_commands_with_providers, scan_agents_md_internal,
+    scan_agents_skills_with_providers, scan_global_agents_md_internal, resource_scan_signature,
     sync_agents_items_internal, write_agents_file_internal, AgentsMdScanResult,
     AgentsRootLinkStatus, AgentsScope, CommandsScanResult, ProjectAgentsPrefs,
     SaveProjectAgentsPrefsResult, SkillsScanResult, SyncReport, SyncRequest,
 };
 use crate::commands::settings::get_settings_internal;
+use crate::resource_discovery::ResourceKind;
 
 #[tauri::command]
 pub async fn scan_agents_md(project_cwd: String) -> Result<AgentsMdScanResult, String> {
@@ -23,17 +25,28 @@ pub async fn scan_global_agents_md() -> Result<AgentsMdScanResult, String> {
 }
 
 #[tauri::command]
-pub async fn scan_agents_skills(scope: AgentsScope) -> Result<SkillsScanResult, String> {
-    tauri::async_runtime::spawn_blocking(move || scan_agents_skills_internal(&scope))
+pub async fn scan_agents_skills(scope: AgentsScope, enabled_providers: Vec<String>) -> Result<SkillsScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_agents_skills_with_providers(&scope, &enabled_providers))
         .await
         .map_err(|error| format!("failed to join agents skills scan task: {error}"))?
 }
 
 #[tauri::command]
-pub async fn scan_agents_commands(scope: AgentsScope) -> Result<CommandsScanResult, String> {
-    tauri::async_runtime::spawn_blocking(move || scan_agents_commands_internal(&scope))
+pub async fn scan_agents_commands(scope: AgentsScope, enabled_providers: Vec<String>) -> Result<CommandsScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_agents_commands_with_providers(&scope, &enabled_providers))
         .await
         .map_err(|error| format!("failed to join agents commands scan task: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_resource_scan_signature(
+    scope: AgentsScope,
+    kind: ResourceKind,
+    enabled_providers: Vec<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || resource_scan_signature(&scope, kind, &enabled_providers))
+        .await
+        .map_err(|error| format!("failed to join resource signature task: {error}"))?
 }
 
 #[tauri::command]

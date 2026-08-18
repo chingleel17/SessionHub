@@ -4300,7 +4300,19 @@ html.embedded-quota-view .quota-overlay-no-drag {
 .kanban-project-name {
   font-size: 13px;
   font-weight: 600;
-  flex: 1;
+  /* 專案名與分支名共享剩餘空間；專案名保留最小可讀寬度，
+     分支名與 provider 標籤過多時優先犧牲分支名 */
+  flex: 2 1 0;
+  min-width: 5ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kanban-project-branch {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  /* 分支名分配到的空間約為專案名的一半，過長時同樣以省略號截斷 */
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4317,6 +4329,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
 .kanban-project-providers {
   display: flex;
   gap: 3px;
+  flex-shrink: 0;
+}
+/* 超出顯示上限的 provider 數量提示，完整清單以 title 呈現 */
+.kanban-project-providers-more {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 .kanban-project-time {
@@ -5180,11 +5199,29 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: #d1d5db;
 }
 
+.agents-target-chip--available {
+  color: #16a34a;
+}
+
 .agents-target-chip--loaded {
   color: #16a34a;
 }
 
-.agents-target-chip--loaded .agents-target-chip-dot,
+.mcp-provider-notice {
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.agents-target-chip--available .agents-target-chip-dot,
+.agents-target-chip-dot--available {
+  background: #16a34a;
+}
+
 .agents-target-chip-dot--loaded {
   background: #16a34a;
 }
@@ -5198,13 +5235,42 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: #2563eb;
 }
 
-.agents-target-chip--notInstalled {
+.agents-target-chip--needsSync,
+.agents-target-chip-dot--needsSync {
+  color: #2563eb;
+}
+
+.agents-target-chip--configured {
   color: var(--color-text-tertiary, #9ca3af);
 }
 
-.agents-target-chip--notInstalled .agents-target-chip-dot,
+.agents-target-chip--configured .agents-target-chip-dot,
+.agents-target-chip-dot--configured {
+  background: #d1d5db;
+}
+
 .agents-target-chip-dot--notInstalled {
   background: #d1d5db;
+}
+
+.agents-target-chip--visible {
+  color: var(--color-text-tertiary, #9ca3af);
+}
+
+.agents-target-chip--visible .agents-target-chip-dot {
+  background: #9ca3af;
+}
+
+.agents-target-chip--missing {
+  color: var(--color-text-tertiary, #9ca3af);
+}
+
+.agents-target-chip--missing .agents-target-chip-dot {
+  background: #d1d5db;
+}
+
+.agents-target-chip--notInstalled {
+  color: var(--color-text-tertiary, #9ca3af);
 }
 
 /* ── 全域清單標頭圖例 ───────────────────────────────────────── */
@@ -5287,17 +5353,20 @@ html.embedded-quota-view .quota-overlay-no-drag {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+  background: var(--color-surface-panel);
 }
 
 .agents-preview-modal .agents-detail-header {
   border-radius: var(--radius-modal) var(--radius-modal) 0 0;
   flex-shrink: 0;
+  background: var(--color-surface-panel);
 }
 
 /* preview modal 內的 ContentViewer 佔滿剩餘高度，滾動由內容區負責（滾動條落在圓角內） */
 .agents-preview-modal .explorer-content {
   flex: 1;
   min-height: 0;
+  background: var(--color-surface-panel);
 }
 
 .agents-detail-close {

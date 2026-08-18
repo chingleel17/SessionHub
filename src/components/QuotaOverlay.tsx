@@ -6,6 +6,7 @@ import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useI18n } from "../i18n/I18nProvider";
 import type { InterventionItem, OverlayStyle, QuotaSnapshot } from "../types";
+import { getProviderAbbr } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { LockIcon, MoveIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
@@ -32,14 +33,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   codex: "Codex",
   opencode: "OpenCode",
   antigravity: "Antigravity",
-};
-
-const PROVIDER_ABBR: Record<string, string> = {
-  claude: "CC",
-  copilot: "GH",
-  opencode: "OC",
-  codex: "CX",
-  antigravity: "AG",
 };
 
 const PROVIDER_COLOR: Record<string, string> = {
@@ -268,7 +261,7 @@ export function QuotaOverlay({
           {isCompact ? (
             <div className="quota-overlay-compact-list">
               {visibleSnapshots.map((snapshot) => {
-                const abbr = PROVIDER_ABBR[snapshot.provider] ?? snapshot.provider.slice(0, 2).toUpperCase();
+                const abbr = getProviderAbbr(snapshot.provider);
                 const primaryUtilization = getPrimaryUtilization(snapshot);
                 const hasData = snapshot.status === "ok" || snapshot.status === "rate_limited";
                 const tooltip = [
