@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, TRUE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible, SetForegroundWindow, ShowWindow,
     SW_RESTORE,
@@ -11,7 +11,7 @@ pub struct FocusState {
     pub found: HWND,
 }
 
-unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> windows_sys::core::BOOL {
     let state = &mut *(lparam as usize as *mut FocusState);
     if IsWindowVisible(hwnd) == 0 {
         return TRUE;
