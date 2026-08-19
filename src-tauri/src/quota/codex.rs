@@ -4,6 +4,7 @@ use crate::types::{
     AppSettings, QuotaSnapshot, QuotaWindow, ResetCreditEntry, ResetCredits, CODEX_PROVIDER,
 };
 
+use super::http;
 use super::QuotaAdapter;
 
 pub(crate) struct CodexAdapter;
@@ -236,22 +237,37 @@ fn parse_reset_credits_response(body: &serde_json::Value) -> ResetCredits {
 }
 
 fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>, String> {
-    let mut request = ureq::get(RESET_CREDITS_URL)
-        .set("Authorization", &format!("Bearer {}", creds.access_token))
-        .set("Accept", "application/json");
+    let mut request = http::get(RESET_CREDITS_URL, None)
+        .header("Authorization", &format!("Bearer {}", creds.access_token))
+        .header("Accept", "application/json");
 
     if let Some(account_id) = &creds.account_id {
-        request = request.set("ChatGPT-Account-Id", account_id);
+        request = request.header("ChatGPT-Account-Id", account_id);
     }
 
     let response = match request.call() {
         Ok(response) => response,
-        Err(ureq::Error::Status(404, _)) => return Ok(None),
         Err(error) => return Err(format!("Codex reset credits API 呼叫失敗: {error}")),
     };
 
+    let mut response = match http::classify(response) {
+        http::ApiOutcome::Success(response) => response,
+        // 404 代表該帳號無 reset credits 功能，屬正常情形
+        http::ApiOutcome::UnexpectedStatus(404) => return Ok(None),
+        http::ApiOutcome::Unauthorized => {
+            return Err("Codex reset credits API 被拒絕: 未授權".to_string())
+        }
+        http::ApiOutcome::RateLimited { .. } => {
+            return Err("Codex reset credits API 請求過於頻繁，請稍後再試".to_string())
+        }
+        http::ApiOutcome::UnexpectedStatus(status) => {
+            return Err(format!("Codex reset credits API 呼叫失敗: HTTP {status}"))
+        }
+    };
+
     let body: serde_json::Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|error| format!("failed to parse Codex reset credits response: {error}"))?;
     let reset_credits = parse_reset_credits_response(&body);
 
@@ -273,25 +289,35 @@ impl QuotaAdapter for CodexAdapter {
             Err(e) => return no_auth_snapshot(format!("無法讀取 Codex 憑證: {e}")),
         };
 
-        let mut request = ureq::get("https://chatgpt.com/backend-api/wham/usage")
-            .set("Authorization", &format!("Bearer {}", creds.access_token))
-            .set("Accept", "application/json");
+        let mut request = http::get("https://chatgpt.com/backend-api/wham/usage", None)
+            .header("Authorization", &format!("Bearer {}", creds.access_token))
+            .header("Accept", "application/json");
 
         if let Some(account_id) = &creds.account_id {
-            request = request.set("ChatGPT-Account-Id", account_id);
+            request = request.header("ChatGPT-Account-Id", account_id);
         }
 
         let response = match request.call() {
             Ok(r) => r,
-            Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-                return no_auth_snapshot("Codex token 被拒絕，請重新登入 Codex CLI (codex login)");
-            }
             Err(e) => {
                 return error_snapshot(format!("Codex usage API 呼叫失敗: {e}"));
             }
         };
 
-        let body: serde_json::Value = match response.into_json() {
+        let mut response = match http::classify(response) {
+            http::ApiOutcome::Success(response) => response,
+            http::ApiOutcome::Unauthorized => {
+                return no_auth_snapshot("Codex token 被拒絕，請重新登入 Codex CLI (codex login)");
+            }
+            http::ApiOutcome::RateLimited { .. } => {
+                return error_snapshot("Codex usage API 請求過於頻繁，請稍後再試");
+            }
+            http::ApiOutcome::UnexpectedStatus(status) => {
+                return error_snapshot(format!("Codex usage API 呼叫失敗: HTTP {status}"));
+            }
+        };
+
+        let body: serde_json::Value = match response.body_mut().read_json() {
             Ok(v) => v,
             Err(e) => return error_snapshot(format!("failed to parse Codex API response: {e}")),
         };

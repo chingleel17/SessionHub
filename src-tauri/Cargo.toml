@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-ureq = { version = "2", features = ["native-tls", "json"] }
+ureq = { version = "3.4.0", features = ["native-tls", "json", "gzip"], default-features = false }
 walkdir = "2"
 sha2 = "0.10"
 toml_edit = "0.25.12"

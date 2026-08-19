@@ -5,6 +5,7 @@ pub mod cache;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub(crate) mod http;
 pub mod opencode;
 
 pub(crate) trait QuotaAdapter: Send + Sync {

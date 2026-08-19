@@ -2,6 +2,7 @@ use std::env;
 
 use crate::types::{AppSettings, ExtraCredits, QuotaSnapshot, QuotaWindow, CLAUDE_PROVIDER};
 
+use super::http;
 use super::QuotaAdapter;
 
 pub(crate) struct ClaudeAdapter;
@@ -36,11 +37,8 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
     }
 }
 
-fn rate_limit_message(resp: &ureq::Response) -> String {
-    match resp
-        .header("Retry-After")
-        .and_then(|v| v.parse::<u64>().ok())
-    {
+fn rate_limit_message(retry_after_seconds: Option<u64>) -> String {
+    match retry_after_seconds {
         Some(secs) => format!("Anthropic usage API 請求過於頻繁，請於 {secs} 秒後再試"),
         None => "Anthropic usage API 請求過於頻繁，請稍後再試".to_string(),
     }
@@ -160,13 +158,27 @@ fn refresh_oauth_token(refresh_token: &str) -> Result<String, String> {
     let body = serde_json::to_string(&payload)
         .map_err(|e| format!("failed to serialize refresh request: {e}"))?;
 
-    let response = ureq::post(CLAUDE_OAUTH_TOKEN_URL)
-        .set("Content-Type", "application/json")
-        .send_string(&body)
+    let response = http::post(CLAUDE_OAUTH_TOKEN_URL, None)
+        .header("Content-Type", "application/json")
+        .send(&body)
         .map_err(|e| format!("OAuth token refresh request failed: {e}"))?;
 
+    let mut response = match http::classify(response) {
+        http::ApiOutcome::Success(response) => response,
+        http::ApiOutcome::Unauthorized => {
+            return Err("OAuth token refresh 被拒絕，refresh token 可能已失效".to_string())
+        }
+        http::ApiOutcome::RateLimited { .. } => {
+            return Err("OAuth token refresh 請求過於頻繁，請稍後再試".to_string())
+        }
+        http::ApiOutcome::UnexpectedStatus(status) => {
+            return Err(format!("OAuth token refresh 失敗: HTTP {status}"))
+        }
+    };
+
     let json: serde_json::Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|e| format!("failed to parse token refresh response: {e}"))?;
 
     json.get("access_token")
@@ -299,47 +311,58 @@ impl QuotaAdapter for ClaudeAdapter {
         };
 
         let call_usage_api = |access_token: &str| {
-            ureq::get("https://api.anthropic.com/api/oauth/usage")
-                .set("Authorization", &format!("Bearer {access_token}"))
-                .set("anthropic-beta", "oauth-2025-04-20")
+            http::get("https://api.anthropic.com/api/oauth/usage", None)
+                .header("Authorization", &format!("Bearer {access_token}"))
+                .header("anthropic-beta", "oauth-2025-04-20")
                 .call()
+                .map(http::classify)
         };
 
-        let response = match call_usage_api(&token) {
-            Ok(r) => r,
-            Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
+        let outcome = match call_usage_api(&token) {
+            Ok(outcome) => outcome,
+            Err(e) => return error_snapshot(format!("Anthropic usage API 呼叫失敗: {e}")),
+        };
+
+        let mut response = match outcome {
+            http::ApiOutcome::Success(response) => response,
+            http::ApiOutcome::Unauthorized => {
                 // access token rejected — try refresh once more if we have a refresh token
-                if let Some(ref rt) = creds.refresh_token {
-                    match refresh_oauth_token(rt) {
-                        Ok(new_at) => match call_usage_api(&new_at) {
-                            Ok(r) => r,
-                            Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-                                return no_auth_snapshot(
-                                    "Token 刷新後仍被拒絕，請重新登入 Claude Code",
-                                );
-                            }
-                            Err(ureq::Error::Status(429, resp)) => {
-                                return rate_limited_snapshot(rate_limit_message(&resp));
-                            }
-                            Err(e) => return error_snapshot(format!("usage API 錯誤: {e}")),
-                        },
-                        Err(e) => return no_auth_snapshot(format!("Token 刷新失敗: {e}")),
-                    }
-                } else {
+                let Some(ref rt) = creds.refresh_token else {
                     return no_auth_snapshot(
                         "Claude OAuth token 被拒絕，請重新登入 Claude Code (claude /login)",
                     );
+                };
+                let new_token = match refresh_oauth_token(rt) {
+                    Ok(new_token) => new_token,
+                    Err(e) => return no_auth_snapshot(format!("Token 刷新失敗: {e}")),
+                };
+                match call_usage_api(&new_token) {
+                    Ok(http::ApiOutcome::Success(response)) => response,
+                    Ok(http::ApiOutcome::Unauthorized) => {
+                        return no_auth_snapshot("Token 刷新後仍被拒絕，請重新登入 Claude Code");
+                    }
+                    Ok(http::ApiOutcome::RateLimited {
+                        retry_after_seconds,
+                    }) => {
+                        return rate_limited_snapshot(rate_limit_message(retry_after_seconds));
+                    }
+                    Ok(http::ApiOutcome::UnexpectedStatus(status)) => {
+                        return error_snapshot(format!("usage API 錯誤: HTTP {status}"));
+                    }
+                    Err(e) => return error_snapshot(format!("usage API 錯誤: {e}")),
                 }
             }
-            Err(ureq::Error::Status(429, resp)) => {
-                return rate_limited_snapshot(rate_limit_message(&resp));
+            http::ApiOutcome::RateLimited {
+                retry_after_seconds,
+            } => {
+                return rate_limited_snapshot(rate_limit_message(retry_after_seconds));
             }
-            Err(e) => {
-                return error_snapshot(format!("Anthropic usage API 呼叫失敗: {e}"));
+            http::ApiOutcome::UnexpectedStatus(status) => {
+                return error_snapshot(format!("Anthropic usage API 呼叫失敗: HTTP {status}"));
             }
         };
 
-        let body: serde_json::Value = match response.into_json() {
+        let body: serde_json::Value = match response.body_mut().read_json() {
             Ok(v) => v,
             Err(e) => {
                 return error_snapshot(format!("failed to parse Anthropic API response: {e}"))
