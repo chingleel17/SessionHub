@@ -4,6 +4,7 @@ type RequiredKeys = "copilotRoot" | "opencodeRoot" | "codexRoot" | "showArchived
 
 export const DEFAULT_APP_SETTINGS: Required<Omit<AppSettings, RequiredKeys>> = {
   terminalPath: "",
+  terminalLauncher: "shell",
   externalEditorPath: "",
   pinnedProjects: [],
   providerIntegrations: [],

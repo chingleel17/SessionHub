@@ -20,14 +20,18 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod git;
+pub mod herdr;
 pub mod opencode;
+pub mod terminal;
 
 pub(crate) use antigravity::*;
 pub(crate) use claude::*;
 pub(crate) use codex::*;
 pub(crate) use copilot::*;
 pub(crate) use git::*;
+pub(crate) use herdr::*;
 pub(crate) use opencode::*;
+pub(crate) use terminal::*;
 
 pub(crate) fn extract_session_texts(provider: &str, session_dir: &Path) -> Vec<String> {
     match provider {

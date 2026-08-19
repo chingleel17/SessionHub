@@ -1097,6 +1097,31 @@ function App() {
     gcTime: Infinity,
   });
 
+  const providerDirectoryQueries = useQueries({
+    queries: [
+      ["copilot", settingsForm.copilotRoot],
+      ["opencode", settingsForm.opencodeRoot],
+      ["codex", settingsForm.codexRoot],
+      ["claude", settingsForm.claudeRoot],
+      ["antigravity", settingsForm.antigravityRoot],
+    ].map(([provider, path]) => ({
+      queryKey: ["directory_exists", provider, path],
+      enabled: Boolean(path),
+      queryFn: () => invoke<boolean>("check_directory_exists", { path }),
+      staleTime: 10_000,
+    })),
+  });
+
+  const providerDirectoryExists = useMemo(
+    () => Object.fromEntries(
+      providerDirectoryQueries.map((query, index) => [
+        ["copilot", "opencode", "codex", "claude", "antigravity"][index],
+        query.data,
+      ]),
+    ) as Record<string, boolean | undefined>,
+    [providerDirectoryQueries],
+  );
+
   const jqAvailableQuery = useQuery({
     queryKey: ["jq_available"],
     enabled: activeView === "settings",
@@ -1377,7 +1402,7 @@ function App() {
   const handleFocusTerminal = async (session: SessionInfo) => {
     const hint = session.cwd?.split("\\").pop() ?? session.id;
     try {
-      await invoke("focus_terminal_window", { titleHint: hint });
+      await invoke("focus_terminal_window", { titleHint: `${session.id}\n${hint}` });
     } catch {
       showToast(t("toast.terminalFocusFailed"));
     }
@@ -1563,7 +1588,10 @@ function App() {
     }
 
     if (next.terminalPath) {
-      const isValid = await invoke<boolean>("validate_terminal_path", { path: next.terminalPath });
+      const isValid = await invoke<boolean>("validate_terminal_path", {
+        path: next.terminalPath,
+        launcher: next.terminalLauncher ?? "shell",
+      });
       if (!isValid) {
         showToast(t("toast.terminalInvalid"));
         return;
@@ -1992,6 +2020,9 @@ function App() {
               onBrowseFile={handleBrowseFile}
               onDetectTerminal={() => detectTerminalMutation.mutate()}
               onDetectVscode={() => detectVscodeMutation.mutate()}
+              onDetectTools={() => void toolAvailabilityQuery.refetch()}
+              toolAvailability={toolAvailabilityQuery.data ?? null}
+              providerDirectoryExists={providerDirectoryExists}
               onProviderAction={handleProviderAction}
               onOpenProviderPath={(integration) => void handleOpenProviderPath(integration)}
               onEditProviderPath={(integration) => void handleEditProviderPath(integration)}

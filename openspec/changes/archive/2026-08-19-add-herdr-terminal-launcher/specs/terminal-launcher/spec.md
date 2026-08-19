@@ -1,100 +1,4 @@
-## Purpose
-
-定義 SessionHub 的 shell 與 herdr 終端啟動分派、啟動參數、錯誤處理、驗證及多工具啟動環境行為。
-
-## Requirements
-
-### Requirement: 終端執行檔驗證
-
-系統 SHALL 在儲存設定前驗證使用者指定的終端執行檔路徑，驗證方式依終端啟動器種類而異。
-
-#### Scenario: 有效的終端路徑
-
-- **WHEN** 啟動器為 shell 且使用者輸入終端路徑並儲存
-- **THEN** 系統驗證路徑對應的可執行檔存在
-
-#### Scenario: herdr 啟動器允許 PATH 解析的指令名
-
-- **WHEN** 啟動器為 herdr 且指定的啟動指令為不含目錄的裸指令名
-- **THEN** 系統以 PATH 解析該指令是否可用，不要求其為可瀏覽的檔案路徑
-- **AND** 解析成功即視為通過驗證
-
-#### Scenario: herdr 指令無法解析
-
-- **WHEN** 啟動器為 herdr 且指定的指令在 PATH 與檔案系統中皆無法解析
-- **THEN** 系統回報驗證失敗，並提示 herdr 不可用
-
-### Requirement: 終端類型白名單與啟動參數
-
-在 shell 啟動器模式下，系統 SHALL 依終端類型（pwsh / cmd / bash）選用對應的啟動參數，以 file_stem 白名單識別終端類型。此白名單在 herdr 啟動器模式下不適用。
-
-#### Scenario: 識別 PowerShell
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem（不含副檔名）為 `pwsh` 或 `powershell`
-- **THEN** 以 `-NoExit -Command cd '<cwd>'` 啟動並切換目錄
-
-#### Scenario: 識別 cmd
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `cmd`
-- **THEN** 以 `/K cd /d <cwd>` 啟動並切換目錄
-
-#### Scenario: 識別 bash / sh / zsh
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `bash` 或 `sh`，且以純終端方式啟動
-- **THEN** 以 `-i` 啟動
-
-#### Scenario: 未知終端類型
-
-- **WHEN** 啟動器為 shell 且 file_stem 不在白名單內，或以既有 shell 啟動器送出初始指令
-- **THEN** 以 `-NoExit -Command cd '<cwd>'` 啟動；若有初始指令，於目錄切換後以 `cd '<cwd>'; <command>` 執行
-
-#### Scenario: herdr 模式不套用白名單
-
-- **WHEN** 啟動器為 herdr
-- **THEN** 系統不依 `terminal_path` 的 file_stem 推導啟動參數
-
-### Requirement: 依 provider 類型提供複製指令
-
-系統 SHALL 在 session 操作中提供「複製啟動指令」功能，指令格式依 session 的 provider 而異。
-
-#### Scenario: Copilot session 複製指令
-
-- **WHEN** 使用者點擊 Copilot session 的「複製指令」
-- **THEN** 複製 `gh copilot session resume <session-id>` 至剪貼簿
-
-#### Scenario: OpenCode session 複製指令
-
-- **WHEN** 使用者點擊 OpenCode session 的「複製指令」
-- **THEN** 複製 `opencode --session <session-id>` 至剪貼簿
-
-### Requirement: 多工具啟動指令路由
-
-系統 SHALL 在 `open_in_tool` command 中依 tool_type 決定啟動邏輯，統一處理所有工具的啟動參數，並在決定啟動參數後依當前啟動器種類送出。
-
-#### Scenario: terminal 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `terminal`
-- **THEN** 依當前啟動器開啟終端（shell 模式套用 terminal_path + file_stem 白名單；herdr 模式建立 tab）
-
-#### Scenario: opencode 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `opencode`
-- **THEN** 在啟動器提供的終端環境中執行 `opencode --cwd <cwd>`
-
-#### Scenario: gh-copilot 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `gh-copilot` 且 session_id 不為空
-- **THEN** 在啟動器提供的終端環境中執行 `gh copilot session resume <session_id>`
-
-#### Scenario: gemini 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `gemini`
-- **THEN** 在啟動器提供的終端環境中執行 `gemini`，工作目錄設為 cwd
-
-#### Scenario: explorer 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `explorer`
-- **THEN** 直接 spawn `explorer.exe <cwd>`，不開啟終端視窗
+## ADDED Requirements
 
 ### Requirement: 終端啟動器種類分派
 
@@ -176,16 +80,96 @@
 - **THEN** 系統 SHALL NOT 自動改以 shell 啟動器啟動
 - **AND** 由使用者依錯誤訊息決定後續處置
 
+## MODIFIED Requirements
+
+### Requirement: 終端執行檔驗證
+
+系統 SHALL 在儲存設定前驗證使用者指定的終端執行檔路徑，驗證方式依終端啟動器種類而異。
+
+#### Scenario: 有效的終端路徑
+
+- **WHEN** 啟動器為 shell 且使用者輸入終端路徑並儲存
+- **THEN** 系統驗證路徑對應的可執行檔存在
+
+#### Scenario: herdr 啟動器允許 PATH 解析的指令名
+
+- **WHEN** 啟動器為 herdr 且指定的啟動指令為不含目錄的裸指令名
+- **THEN** 系統以 PATH 解析該指令是否可用，不要求其為可瀏覽的檔案路徑
+- **AND** 解析成功即視為通過驗證
+
+#### Scenario: herdr 指令無法解析
+
+- **WHEN** 啟動器為 herdr 且指定的指令在 PATH 與檔案系統中皆無法解析
+- **THEN** 系統回報驗證失敗，並提示 herdr 不可用
+
+### Requirement: 終端類型白名單與啟動參數
+
+在 shell 啟動器模式下，系統 SHALL 依終端類型（pwsh / cmd / bash）選用對應的啟動參數，以 file_stem 白名單識別終端類型。此白名單在 herdr 啟動器模式下不適用。
+
+#### Scenario: 識別 PowerShell
+
+- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem（不含副檔名）為 `pwsh` 或 `powershell`
+- **THEN** 以 `-NoExit -Command Set-Location -Path <cwd>` 啟動並切換目錄
+
+#### Scenario: 識別 cmd
+
+- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `cmd`
+- **THEN** 以 `/K cd /d <cwd>` 啟動並切換目錄
+
+#### Scenario: 識別 bash / sh / zsh
+
+- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `bash`、`sh` 或 `zsh`
+- **THEN** 以 `--init-file <(echo "cd <cwd>")` 或 `--rcfile` 方式啟動
+
+#### Scenario: 未知終端類型
+
+- **WHEN** 啟動器為 shell 且 file_stem 不在白名單內
+- **THEN** 直接以 cwd 作為工作目錄啟動終端，不附加額外參數
+
+#### Scenario: herdr 模式不套用白名單
+
+- **WHEN** 啟動器為 herdr
+- **THEN** 系統不依 `terminal_path` 的 file_stem 推導啟動參數
+
+### Requirement: 多工具啟動指令路由
+
+系統 SHALL 在 `open_in_tool` command 中依 tool_type 決定啟動邏輯，統一處理所有工具的啟動參數，並在決定啟動參數後依當前啟動器種類送出。
+
+#### Scenario: terminal 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `terminal`
+- **THEN** 依當前啟動器開啟終端（shell 模式套用 terminal_path + file_stem 白名單；herdr 模式建立 tab）
+
+#### Scenario: opencode 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `opencode`
+- **THEN** 在啟動器提供的終端環境中執行 `opencode --cwd <cwd>`
+
+#### Scenario: gh-copilot 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `gh-copilot` 且 session_id 不為空
+- **THEN** 在啟動器提供的終端環境中執行 `gh copilot session resume <session_id>`
+
+#### Scenario: gemini 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `gemini`
+- **THEN** 在啟動器提供的終端環境中執行 `gemini`，工作目錄設為 cwd
+
+#### Scenario: explorer 類型路由
+
+- **WHEN** open_in_tool 收到 tool_type 為 `explorer`
+- **THEN** 直接 spawn `explorer.exe <cwd>`，不開啟終端視窗，且不受啟動器種類影響
+
 ### Requirement: Windows 終端與 CLI 啟動環境一致性
 
 系統 SHALL 讓一般終端啟動、多工具啟動及 session resume 共用相同的 Windows MSYS stackdump 緩解環境組態，避免任一啟動入口遺漏。此要求適用於 shell 啟動器所建立的 console 程序。
 
 #### Scenario: 開啟一般終端
-- **WHEN** `open_terminal` 在 Windows 啟動使用者設定的終端
+- **WHEN** `open_terminal` 在 Windows 以 shell 啟動器啟動使用者設定的終端
 - **THEN** 新程序套用 MSYS stackdump 緩解環境
 
 #### Scenario: 開啟或恢復 AI coding CLI
-- **WHEN** `open_in_tool` 或 `resume_session_in_terminal` 在 Windows 啟動受支援的 AI coding CLI
+- **WHEN** `open_in_tool` 或 `resume_session_in_terminal` 在 Windows 以 shell 啟動器啟動受支援的 AI coding CLI
 - **THEN** 新程序套用與一般終端相同的 MSYS stackdump 緩解環境
 
 #### Scenario: 啟動參數維持不變
@@ -193,6 +177,5 @@
 - **THEN** 各 terminal 與 provider 原有的命令、參數、工作目錄及 Windows console creation flags 維持不變
 
 #### Scenario: herdr 模式的環境套用範圍
-
 - **WHEN** 啟動器為 herdr
 - **THEN** 系統不需為該次啟動建立新的 Windows console 程序，因此不套用 console creation flags

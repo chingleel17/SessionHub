@@ -44,6 +44,7 @@ export type AppSettings = {
     opencodeRoot: string;
     codexRoot: string;
     terminalPath?: string | null;
+    terminalLauncher?: string | null;
     externalEditorPath?: string | null;
     showArchived: boolean;
     pinnedProjects?: string[];
@@ -327,6 +328,8 @@ export type ToolAvailability = {
     codex: boolean;
     gemini: boolean;
     vscode: boolean;
+    herdr: boolean;
+    herdrServerRunning: boolean;
 };
 
 export type ProviderIntegrationState =

@@ -94,6 +94,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) codex_root: String,
     pub(crate) terminal_path: Option<String>,
+    #[serde(default)]
+    pub(crate) terminal_launcher: Option<String>,
     pub(crate) external_editor_path: Option<String>,
     pub(crate) show_archived: bool,
     #[serde(default)]

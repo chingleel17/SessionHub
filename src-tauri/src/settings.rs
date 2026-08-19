@@ -7,6 +7,29 @@ use std::os::windows::process::CommandExt;
 
 use crate::types::*;
 
+pub(crate) const TERMINAL_LAUNCHER_SHELL: &str = "shell";
+pub(crate) const TERMINAL_LAUNCHER_HERDR: &str = "herdr";
+
+pub(crate) fn resolve_terminal_launcher(value: Option<&str>) -> &'static str {
+    match value {
+        Some(value) if value.eq_ignore_ascii_case(TERMINAL_LAUNCHER_HERDR) => {
+            TERMINAL_LAUNCHER_HERDR
+        }
+        _ => TERMINAL_LAUNCHER_SHELL,
+    }
+}
+
+pub(crate) fn command_exists_on_path(command: &str) -> bool {
+    let mut process = Command::new("where");
+    process
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    process.creation_flags(CREATE_NO_WINDOW);
+    process.status().map(|status| status.success()).unwrap_or(false)
+}
+
 pub(crate) fn default_copilot_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -267,6 +290,7 @@ impl AppSettings {
             launch_on_startup: false,
             start_minimized_on_startup: true,
             terminal_path,
+            terminal_launcher: Some(TERMINAL_LAUNCHER_SHELL.to_string()),
             external_editor_path,
             show_archived: false,
             pinned_projects: Vec::new(),
@@ -298,6 +322,28 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_terminal_launcher_falls_back_to_shell() {
+        assert_eq!(resolve_terminal_launcher(Some("unknown")), TERMINAL_LAUNCHER_SHELL);
+        assert_eq!(resolve_terminal_launcher(None), TERMINAL_LAUNCHER_SHELL);
+        assert_eq!(resolve_terminal_launcher(Some("herdr")), TERMINAL_LAUNCHER_HERDR);
+    }
+
+    #[test]
+    fn missing_terminal_launcher_is_compatible_with_old_settings() {
+        let settings = AppSettings::default().expect("default settings");
+        let mut value = serde_json::to_value(settings).expect("serialize settings");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("terminalLauncher");
+        let parsed = serde_json::from_value::<AppSettings>(value).expect("parse old settings");
+        assert_eq!(
+            resolve_terminal_launcher(parsed.terminal_launcher.as_deref()),
+            TERMINAL_LAUNCHER_SHELL
+        );
+    }
 
     #[test]
     fn resolve_agents_source_root_uses_configured_path_when_present() {
@@ -342,8 +388,13 @@ pub(crate) fn load_settings_internal() -> Result<AppSettings, String> {
     let content = std::fs::read_to_string(&settings_path)
         .map_err(|error| format!("failed to read settings file: {error}"))?;
 
-    serde_json::from_str::<AppSettings>(&content)
-        .map_err(|error| format!("failed to parse settings file: {error}"))
+    let mut settings = serde_json::from_str::<AppSettings>(&content)
+        .map_err(|error| format!("failed to parse settings file: {error}"))?;
+    settings.terminal_launcher = Some(resolve_terminal_launcher(
+        settings.terminal_launcher.as_deref(),
+    )
+    .to_string());
+    Ok(settings)
 }
 
 pub(crate) fn save_settings_internal(settings: &AppSettings) -> Result<(), String> {
@@ -362,8 +413,17 @@ pub(crate) fn save_settings_internal(settings: &AppSettings) -> Result<(), Strin
 /// 合法終端機可執行檔名稱白名單（不區分大小寫）
 pub(crate) const VALID_TERMINAL_STEMS: &[&str] = &["pwsh", "powershell", "cmd", "bash", "sh"];
 
-pub(crate) fn validate_terminal_path_internal(path: &str) -> bool {
+pub(crate) fn validate_terminal_path_internal(path: &str, launcher: Option<&str>) -> bool {
     let candidate = PathBuf::from(path);
+
+    if resolve_terminal_launcher(launcher) == TERMINAL_LAUNCHER_HERDR {
+        return command_exists_on_path("herdr")
+            && (candidate.is_file()
+                || (!candidate.components().any(|component| {
+                    matches!(component, std::path::Component::RootDir | std::path::Component::Prefix(_))
+                })
+                    && command_exists_on_path(path)));
+    }
 
     if !candidate.exists() || !candidate.is_file() {
         return false;

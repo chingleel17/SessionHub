@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ProviderIntegrationState,
   ProviderIntegrationStatus,
+  ToolAvailability,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
 import { ChevronRightIcon, DeleteIcon, EditNotesIcon, FolderIcon, MoonIcon, RefreshIcon, SunIcon } from "./Icons";
@@ -25,6 +26,9 @@ type Props = {
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
+  onDetectTools: () => void;
+  toolAvailability: ToolAvailability | null;
+  providerDirectoryExists: Record<string, boolean | undefined>;
   onProviderAction: (provider: string, action: ProviderIntegrationAction) => void;
   onOpenProviderPath: (integration: ProviderIntegrationStatus) => void;
   onEditProviderPath: (integration: ProviderIntegrationStatus) => void;
@@ -138,6 +142,9 @@ export function SettingsView({
   onBrowseFile,
   onDetectTerminal,
   onDetectVscode,
+  onDetectTools,
+  toolAvailability,
+  providerDirectoryExists,
   onProviderAction,
   onOpenProviderPath,
   onEditProviderPath,
@@ -206,7 +213,12 @@ export function SettingsView({
                     />
                     <span>{t(labelKey)}</span>
                   </label>
-                  <span className="checkbox-group-path" title={path}>{path}</span>
+                   <span className="checkbox-group-path" title={path}>{path}</span>
+                   <span className="checkbox-group-status">
+                     {providerDirectoryExists[id] === true
+                       ? t("settings.status.detected")
+                       : t("settings.status.notDetected")}
+                   </span>
                   <IconButton
                     label={t("settings.actions.browseDirectory")}
                     className="checkbox-group-edit"
@@ -245,6 +257,40 @@ export function SettingsView({
               </button>
             </div>
           </label>
+
+          <div className="settings-field">
+            <label htmlFor="terminal-launcher-select">
+              {t("settings.fields.terminalLauncher")}
+              <small className="settings-field-desc">{t("settings.fields.terminalLauncherDesc")}</small>
+            </label>
+            <div className="field-with-action">
+              <Select
+                id="terminal-launcher-select"
+                className="settings-select"
+                value={settingsForm.terminalLauncher ?? "shell"}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, terminalLauncher: event.currentTarget.value })
+                }
+              >
+                <option value="shell">{t("settings.launcher.shell")}</option>
+                <option
+                  value="herdr"
+                  disabled={toolAvailability != null && !toolAvailability.herdr && settingsForm.terminalLauncher !== "herdr"}
+                >
+                  {t(
+                    toolAvailability?.herdr
+                      ? toolAvailability.herdrServerRunning
+                        ? "settings.launcher.herdr"
+                        : "settings.launcher.herdrServerStopped"
+                      : "settings.launcher.herdrMissing",
+                  )}
+                </option>
+              </Select>
+              <button type="button" className="ghost-button" onClick={onDetectTools}>
+                {t("settings.actions.detectTools")}
+              </button>
+            </div>
+          </div>
 
           <label className="field-group">
             <span>{t("settings.fields.externalEditorPath")}</span>
@@ -379,14 +425,14 @@ export function SettingsView({
                 onFormChange({ ...settingsForm, defaultLauncher: e.currentTarget.value })
               }
             >
-              <option value="terminal">Terminal</option>
-              <option value="vscode">外部編輯器</option>
-              <option value="explorer">Explorer</option>
-              <option value="opencode">OpenCode</option>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-              <option value="copilot">Copilot</option>
-              <option value="gemini">Gemini</option>
+              <option value="terminal">{t("settings.launcher.defaultTerminal")}</option>
+              <option value="vscode">{t("settings.launcher.defaultEditor")}</option>
+              <option value="explorer">{t("settings.launcher.defaultExplorer")}</option>
+              <option value="opencode">{t("settings.launcher.defaultOpencode")}</option>
+              <option value="claude">{t("settings.launcher.defaultClaude")}</option>
+              <option value="codex">{t("settings.launcher.defaultCodex")}</option>
+              <option value="copilot">{t("settings.launcher.defaultCopilot")}</option>
+              <option value="gemini">{t("settings.launcher.defaultGemini")}</option>
             </Select>
           </div>
 

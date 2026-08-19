@@ -13,6 +13,17 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-19
+
+### 新增
+
+- herdr 終端啟動器：設定可選擇以系統 shell 或 herdr tab 開啟終端機，session 與工具終端改由統一的 launch_terminal 啟動並記錄 tab 對應，聚焦時自動切換至對應的 herdr tab
+- Quota Overlay 新增 topmost 看門執行緒，定期重申視窗 Z-order，避免被其他視窗覆蓋
+
+### 調整
+
+- 設定頁顯示各工具目錄的偵測狀態與 herdr 可用性，終端機相關文字改為 i18n 翻譯
+
 ## [0.1.8] - 2026-07-17
 
 ### 調整
@@ -49,7 +60,8 @@
 - 多語系介面（繁體中文／English）
 - Minimal UI 設計系統：統一 design token、玻璃浮層、Linear 式分頁、自訂 scrollbar、`prefers-reduced-motion` 支援
 
-[Unreleased]: https://github.com/chingleel17/SessionHub/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/chingleel17/SessionHub/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/chingleel17/SessionHub/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/chingleel17/SessionHub/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/chingleel17/SessionHub/releases/tag/v0.1.7
 [0.1.6]: https://github.com/chingleel17/SessionHub/releases/tag/v0.1.6

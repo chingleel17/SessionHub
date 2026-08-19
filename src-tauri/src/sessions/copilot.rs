@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 use rusqlite::Connection;
 
 use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_meta};
-use crate::sessions::configure_msys_stackdump_suppression;
-use crate::settings::detect_vscode_path;
+use crate::sessions::{
+    launch_terminal, project_terminal_label, remember_herdr_tab, TerminalLaunchSpec,
+};
+use crate::settings::{detect_vscode_path, load_settings_internal, resolve_terminal_launcher,
+    TERMINAL_LAUNCHER_SHELL};
 use crate::types::*;
 
 pub(crate) fn extract_copilot_session_texts(session_dir: &Path) -> Vec<String> {
@@ -401,41 +401,28 @@ pub(crate) fn delete_empty_sessions_internal(
 
 // ── Plan / Terminal 操作 ─────────────────────────────────────────────────────
 
-pub(crate) fn open_terminal_internal(terminal_path: &str, cwd: &str) -> Result<(), String> {
-    let terminal = PathBuf::from(terminal_path);
-    let stem = terminal
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
-
-    let mut cmd = Command::new(terminal_path);
-
-    match stem.as_str() {
-        "cmd" => {
-            cmd.args(["/K", &format!("cd /d \"{}\"", cwd)]);
-        }
-        "bash" | "sh" => {
-            cmd.arg("-i").current_dir(cwd);
-        }
-        _ => {
-            cmd.args(["-NoExit", "-Command", &format!("cd '{}'", cwd)])
-                .current_dir(cwd);
-        }
+pub(crate) fn open_terminal_internal(
+    terminal_path: &str,
+    cwd: &str,
+    session_id: Option<&str>,
+    tab_state: &crate::types::HerdrTabState,
+) -> Result<(), String> {
+    let launcher = load_settings_internal()
+        .ok()
+        .map(|settings| resolve_terminal_launcher(settings.terminal_launcher.as_deref()))
+        .unwrap_or(TERMINAL_LAUNCHER_SHELL);
+    let tab = launch_terminal(
+        launcher,
+        terminal_path,
+        TerminalLaunchSpec {
+            cwd,
+            command: None,
+            label: &project_terminal_label(cwd, None),
+        },
+    )?;
+    if let Some(tab) = tab {
+        remember_herdr_tab(tab_state, session_id, cwd, &tab.tab_id)?;
     }
-
-    if stem != "bash" && stem != "sh" {
-        cmd.current_dir(cwd);
-    }
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
-
-    configure_msys_stackdump_suppression(&mut cmd);
-
-    cmd.spawn()
-        .map_err(|error| format!("failed to open terminal: {error}"))?;
-
     Ok(())
 }
 

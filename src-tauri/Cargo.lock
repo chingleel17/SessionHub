@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "session-hub"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "chrono",
  "image",

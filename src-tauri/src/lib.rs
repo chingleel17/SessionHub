@@ -120,8 +120,10 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
         let _ = existing.show();
         // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
         let _ = existing.set_skip_taskbar(true);
+        reassert_overlay_topmost(&existing);
         apply_overlay_locked(&existing, settings.quota_overlay_locked);
         emit_overlay_settings_changed(app, settings);
+        spawn_overlay_topmost_watchdog(app.clone());
         return;
     }
 
@@ -173,6 +175,60 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     let _ = window.show();
     // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
     let _ = window.set_skip_taskbar(true);
+    // 新建視窗已由 builder 的 always_on_top(true) 設定，此處不需再重申
+    spawn_overlay_topmost_watchdog(app.clone());
+}
+
+/// 重申 overlay 的 topmost Z-order，不搶焦點也不改變位置與尺寸。
+///
+/// Windows 上 topmost 會被其他程式的前景切換、全螢幕應用或 explorer 重啟擠到後面，
+/// 且不會自動恢復（過去只能重開程式）。此函式可安全地重複呼叫。
+/// 註：獨佔全螢幕（exclusive fullscreen）仍會壓過任何 topmost 視窗，非本函式所能處理。
+pub(crate) fn reassert_overlay_topmost(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(hwnd) = window.hwnd() {
+            crate::platform::win32_topmost::reassert_topmost(hwnd.0 as isize);
+            return;
+        }
+    }
+    let _ = window.set_always_on_top(true);
+}
+
+/// overlay topmost 看門執行緒：定期重申一次，確保 overlay 不會被其他視窗蓋住。
+///
+/// 以 `AtomicBool` 守門避免 `create_quota_overlay` 反覆呼叫時累積多條執行緒；
+/// overlay 不存在時單純略過，不重建視窗，因此關閉 overlay 後即為無害 no-op。
+///
+/// `hwnd()` / `is_visible()` 等視窗查詢需經 Tauri runtime 轉派到主執行緒並等待回覆，
+/// 從背景執行緒直接呼叫會在啟動期間與視窗初始化互相阻塞而造成卡頓，
+/// 因此整段重申改用 `run_on_main_thread` 投遞（非阻塞），並延後首次執行避開啟動尖峰。
+pub(crate) fn spawn_overlay_topmost_watchdog(app: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    /// 首次重申前的等待時間，避開啟動期間的視窗初始化
+    const WATCHDOG_STARTUP_DELAY_SECS: u64 = 10;
+    /// 重申間隔
+    const WATCHDOG_INTERVAL_SECS: u64 = 5;
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(WATCHDOG_STARTUP_DELAY_SECS));
+        loop {
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(window) = handle.get_webview_window(QUOTA_OVERLAY_LABEL) {
+                    if window.is_visible().unwrap_or(false) {
+                        reassert_overlay_topmost(&window);
+                    }
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_secs(WATCHDOG_INTERVAL_SECS));
+        }
+    });
 }
 
 /// 依鎖定狀態設定滑鼠穿透（鎖定 = 穿透）
@@ -373,6 +429,7 @@ pub fn run() {
         )
         .manage(WatcherState::default())
         .manage(std::sync::Arc::new(ScanCache::default()))
+        .manage(HerdrTabState::default())
         .manage(DbState::new().expect("failed to init metadata db"))
         .manage(QuotaCache::default())
         .manage(InterventionRegistry::default())
@@ -1063,10 +1120,12 @@ mod tests {
         fs::write(&terminal_path, "").expect("failed to create fake terminal");
 
         assert!(validate_terminal_path_internal(
-            terminal_path.to_string_lossy().as_ref()
+            terminal_path.to_string_lossy().as_ref(),
+            None,
         ));
         assert!(!validate_terminal_path_internal(
-            test_dir.join("missing.exe").to_string_lossy().as_ref()
+            test_dir.join("missing.exe").to_string_lossy().as_ref(),
+            None,
         ));
 
         fs::remove_dir_all(&test_dir).expect("failed to cleanup terminal test dir");

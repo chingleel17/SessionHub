@@ -142,8 +142,8 @@ pub fn detect_vscode() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn validate_terminal_path(path: String) -> bool {
-    validate_terminal_path_internal(&path)
+pub fn validate_terminal_path(path: String, launcher: Option<String>) -> bool {
+    validate_terminal_path_internal(&path, launcher.as_deref())
 }
 
 #[tauri::command]
