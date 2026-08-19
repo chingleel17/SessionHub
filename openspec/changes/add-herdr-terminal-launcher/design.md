@@ -80,19 +80,29 @@ struct TerminalLaunchSpec<'a> {
 
 **替代方案**：改用 herdr socket API（`herdr api`）。捨棄 — CLI 已足夠且已實測驗證，socket 協定（protocol 19）另有版本相容性負擔，違反 YAGNI。
 
-### D4: 聚焦以 `--focus` 達成，不改動既有 Win32 邏輯
+### D4: 聚焦改以 tab 識別碼定位，不改動既有 Win32 邏輯
 
-**選擇**：herdr 模式下 `tab create` 帶 `--focus`，`focus_terminal_window_internal` 在 herdr 模式直接回傳可辨識的錯誤（由前端 toast 呈現），不進入 EnumWindows 比對。
+**選擇**：herdr 模式下 `tab create` 帶 `--focus`；並保存建立時取得的 `result.tab.tab_id`，於使用者觸發聚焦時以 `herdr tab focus <tab_id>` 定位。`focus_terminal_window_internal` 在 herdr 模式不進入 EnumWindows 比對。
 
-**理由**：herdr 單視窗多 pane，標題比對會聚焦到錯誤 pane —— 比「不聚焦」更糟，因為使用者以為切換成功。既有 Win32 程式碼保持不動，只在入口加 launcher 判斷。
+**理由**：herdr 單視窗多 pane，標題比對會聚焦到錯誤 pane —— 比「不聚焦」更糟，因為使用者以為切換成功。已實測 `herdr tab focus <tab_id>` 可用：對 `wB:t3` 執行後 `tab list` 顯示該 tab `focused: true`，故無須將聚焦列為不支援。既有 Win32 程式碼保持不動，只在入口加 launcher 判斷。
 
-**已知限制**：herdr 模式下「聚焦既有 session 終端」無法精準定位（見 R2）。
+**tab_id 保存範圍**：以應用程式執行期記憶體內的 session → tab_id 對應表保存（例如 AppState 中的 map），不寫入 SQLite。理由是 herdr tab 的生命週期不長於 herdr server，跨應用程式重啟後的舊 tab_id 無保證仍有效；持久化只會帶來失效資料的處理成本。對應不存在時回傳明確錯誤（見 specs）。
+
+**替代方案**：以 tab label 反查 `tab list`。捨棄 — label 不保證唯一，且多開同一專案時會誤判。
 
 ### D5: 驗證依 launcher 分流
 
 **選擇**：`validate_terminal_path` command 增加 launcher 參數（或新增一個對應 command）。launcher 為 `herdr` 時：跳過 `VALID_TERMINAL_STEMS` 白名單，改以「PATH 解析或檔案存在」判定，可重用既有的 `which_exists` 類 helper。
 
 **理由**：`validate_terminal_path_internal` 目前同時卡「檔案存在」與「stem 白名單」，`herdr` 兩項皆不符。不分流的話設定頁會拒絕合法設定。既有 `validate_terminal_path_returns_true_for_existing_file` 測試針對 shell 行為，需維持通過。
+
+### D7: launcher 由後端自 settings 讀取，不透過 IPC 參數傳遞
+
+**選擇**：`open_in_tool`、`resume_session_in_terminal`、`focus_terminal_window` 三個 command 於後端以 `load_settings_internal` 讀取 `terminal_launcher`，不新增 IPC 參數。唯獨 `validate_terminal_path` 以參數接收 launcher。
+
+**理由**：後端本就能讀設定，透過 IPC 傳遞會讓三個 command 簽章各多一個參數，且前端傳來的值可能與已儲存的設定不同步（例如設定頁編輯中尚未儲存）。`validate_terminal_path` 是例外 —— 它驗證的正是「尚未儲存的表單值」，必須由前端傳入當前選取的 launcher 與路徑。
+
+**替代方案**：四個 command 一律由前端傳入。捨棄 — 三個啟動／聚焦入口應以「已儲存的設定」為準，前端傳值會引入漂移。
 
 ### D6: 前端沿用既有 IPC 集中慣例
 
@@ -104,7 +114,7 @@ struct TerminalLaunchSpec<'a> {
 
 - **[herdr 為 preview 版，CLI 輸出格式可能變動]** → 只依賴 `result.root_pane.pane_id` 單一欄位；解析失敗時回傳含原始 stderr 片段的錯誤，便於診斷而非靜默失敗。
 
-- **[herdr 模式下無法精準聚焦既有 session 的 pane]** → 本變更明確不支援，回傳清楚錯誤訊息而非聚焦到錯誤 pane。若日後有需求，可記錄 session → pane_id 對應並改用 herdr 的 pane 聚焦指令，屬後續變更。
+- **[tab_id 僅存於記憶體，應用程式重啟後既有 tab 無法聚焦]** → 屬已知取捨（見 D4）。此情境回傳「無對應 tab 識別碼」的明確錯誤並提示手動切換，不聚焦到錯誤 tab。
 
 - **[`pane run` 送出後無法確認指令是否真的成功執行]** → herdr 僅回報「指令已送出」。設計上接受此語意（與現行 `spawn()` 同樣不等待 CLI 就緒），不額外輪詢 `pane read`，避免引入不確定的等待邏輯。
 

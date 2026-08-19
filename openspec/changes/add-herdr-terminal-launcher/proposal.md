@@ -9,7 +9,7 @@ herdr 無法透過現有機制支援：它不是「shell + inline command」形�
 - 新增「終端啟動器種類」概念：設定新增 `terminal_launcher` 欄位（`"shell"` | `"herdr"`），與既有 `terminal_path` 並存。預設為 `"shell"`，維持現有行為不變。
 - 新增 herdr 啟動路徑：以 `herdr tab create --cwd <PATH> --label <TEXT> --focus` 建立 tab，解析回傳 JSON 取得 `result.root_pane.pane_id`，再以 `herdr pane run <PANE_ID> <COMMAND>` 送出該工具的啟動指令。純開終端（無 initial command）時只需建立 tab。
 - 抽出共用啟動指令組裝函式，讓 `open_in_tool_internal`、`open_terminal_internal`、`resume_session_in_terminal_internal` 共用同一套 launcher 分派邏輯，取代目前約 8 處重複的 `file_stem` switch 區塊。
-- 終端聚焦行為依 launcher 分流：herdr 模式下改以 `tab create --focus` 達成聚焦，跳過依視窗標題比對的 Win32 聚焦流程（herdr 只有單一視窗、多個 pane，標題比對必然找錯目標）。
+- 終端聚焦行為依 launcher 分流：herdr 模式下以 `tab create --focus` 建立時聚焦，並保存 tab 識別碼供後續以 `herdr tab focus <tab_id>` 精準聚焦，跳過依視窗標題比對的 Win32 聚焦流程（herdr 只有單一視窗、多個 pane，標題比對必然找錯目標）。
 - 終端路徑驗證依 launcher 分流：`terminal_launcher` 為 `"herdr"` 時允許 PATH 解析的裸指令名，不強制要求可瀏覽的檔案路徑。
 - herdr 不可用時（未安裝、server 未執行、tab create 失敗）回傳明確錯誤訊息，由前端 toast 呈現，不靜默失敗。
 - 設定頁新增 launcher 選擇控制項，並補上 zh-TW / en-US 兩份 locale 字串。
@@ -25,7 +25,7 @@ herdr 無法透過現有機制支援：它不是「shell + inline command」形�
 ### Modified Capabilities
 
 - `terminal-launcher`: 啟動邏輯從「單一 shell + file_stem 白名單」擴充為「先依 launcher 種類分派，再於 shell 模式沿用 file_stem 白名單」；新增 herdr 兩段式啟動流程與其失敗處理要求。
-- `terminal-focus`: 新增依 launcher 分流的聚焦要求 — herdr 模式改由建立 tab 時聚焦，不套用既有的視窗標題比對邏輯。
+- `terminal-focus`: 新增依 launcher 分流的聚焦要求 — herdr 模式以 tab 識別碼聚焦，不套用既有的視窗標題比對邏輯。
 - `app-settings`: 設定欄位定義新增 `terminal_launcher: Option<String>`，並調整終端路徑驗證要求使其依 launcher 分流。
 
 ## Impact
