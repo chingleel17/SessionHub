@@ -104,11 +104,43 @@ struct TerminalLaunchSpec<'a> {
 
 **替代方案**：四個 command 一律由前端傳入。捨棄 — 三個啟動／聚焦入口應以「已儲存的設定」為準，前端傳值會引入漂移。
 
+### D8: 未偵測到 herdr 時停用並標示，不隱藏選項
+
+**選擇**：沿用 `ProjectView.tsx:592-598` 的既有慣例（`disabled` + `(未安裝)` 標示），launcher 選項在 herdr 不可用時停用並標示「未偵測到」；且當前已選取的值一律照常渲染。
+
+**理由**：關鍵不在一致性，而在**可復原性**。若隱藏選項，使用者選了 herdr 後再移除 herdr，`settings.json` 中 `terminal_launcher` 仍是 `"herdr"`，UI 卻沒有任何路徑可切回 shell —— 應用程式會卡在「開不了終端也改不掉設定」的狀態。始終渲染當前選取值可避免此死角。
+
+**替代方案**：完全隱藏。捨棄 — 需另加保護邏輯（偵測到不可用時自動改寫設定）才能避免上述死角，複雜度更高且會靜默更動使用者設定。
+
+### D9: 區分「未安裝」與「服務未執行」兩種狀態
+
+**選擇**：可用性偵測分兩層 —— 先以 `which_exists("herdr")` 判定是否安裝，已安裝再以 `herdr status server` 的輸出判定服務是否執行（實測輸出首行為 `status: running`，exit code 0）。
+
+**理由**：兩種狀態的補救方式不同（安裝 vs 啟動）。若合併為單一「不可用」，使用者會依錯誤訊息去重新安裝一個其實已安裝的工具。
+
+**快取更新**：`check_tool_availability` 目前是 `App.tsx:1095` 的快取查詢，新裝的 herdr 不會即時反映。於儲存設定時使該查詢失效，並比照終端機路徑欄位既有的「自動偵測」按鈕（`SettingsView.tsx:239-245`）提供手動重新偵測。
+
+### D10: Provider 勾選區以資料根目錄存在與否作為偵測訊號
+
+**選擇**：provider 勾選區顯示「資料根目錄是否存在」的狀態提示（可重用既有的 `directory_exists` / `check_directory_exists`），勾選框維持可用。**不**以 `which_exists` 判定 CLI 是否安裝來停用勾選。
+
+**理由**：`enabled_providers` 控制的是**掃描資料目錄**，與 CLI 是否在 PATH 上是兩件事。CLI 可能已移除但歷史 session 仍在，或以 shim 安裝而 `where` 解析不到（`vscode` 即為此例，故其偵測改用 `resolve_vscode_command()`）。若以 CLI 存在與否停用勾選，會使這些 provider 無法啟用，**使用者自己的 session 歷史被靜默隱藏**。
+
+**附帶影響**：`SettingsView.tsx:202-204` 的 `onChange` 在勾選時會觸發 `onProviderAction(id, "install")`，停用勾選框亦會連帶影響整合安裝流程 —— 這是另一個不應停用勾選的理由。
+
 ### D6: 前端沿用既有 IPC 集中慣例
 
 **選擇**：`SettingsView` 以受控元件呈現 launcher 選擇（props 驅動），實際 `invoke()` 仍集中在 `App.tsx`；文案透過 `t("key")`，同步新增 zh-TW 與 en-US 字串。
 
 **理由**：遵循專案既有慣例（子元件不得直接 invoke、JSX 不得硬編中文）。
+
+### D11: tab 標籤格式與「總是開新 tab」
+
+**選擇**：標籤以專案目錄名稱為主，該次啟動對應特定工具時附加工具識別（例如 `session_hub · claude`）。每次啟動一律建立新 tab，不重用既有 tab。
+
+**理由**：標籤只承擔「使用者辨識」職責，定位一律靠 tab_id（見 D4），因此標籤不需唯一。「總是開新」與 shell 啟動器每次開新視窗的語意一致，行為可預期；重用則需處理「該 tab 內已有程式在跑」的情境，複雜度不成比例。
+
+**已知取捨**：重複啟動同一專案會累積 tab，由使用者自行以 herdr 關閉（見 Risks）。
 
 ## Risks / Trade-offs
 
@@ -120,7 +152,11 @@ struct TerminalLaunchSpec<'a> {
 
 - **[抽出共用函式需改動 8 處既有啟動路徑，回歸風險集中]** → 每個分支的 command 字串在重構前後逐一比對保持一致；shell 路徑的行為（含 `creation_flags` 與 MSYS 環境）不變，可由既有測試與手動驗證覆蓋。
 
-- **[使用者選了 herdr 但未安裝]** → 儲存設定時即以 D5 的驗證擋下並提示；執行期再次失敗時回傳明確錯誤。不自動回退到 shell —— 靜默回退會讓使用者以為 herdr 生效。
+- **[使用者選了 herdr 但未安裝]** → 儲存設定時即以 D5 的驗證擋下並提示；執行期再次失敗時回傳明確錯誤，並依 D9 區分「未安裝」與「服務未執行」。不自動回退到 shell —— 靜默回退會讓使用者以為 herdr 生效。
+
+- **[重複啟動同一專案會累積 herdr tab]** → 依 D11 為刻意取捨，與 shell 模式累積視窗的既有行為一致。使用者可於 herdr 內自行關閉；若日後成為困擾，可依已有的 session → tab_id 對應表加入重用邏輯，屬後續變更。
+
+- **[已選 herdr 後移除 herdr 導致無法切回 shell]** → 依 D8，設定頁一律渲染當前選取值並標示不可用，保留切回 shell 的路徑。
 
 ## Migration Plan
 

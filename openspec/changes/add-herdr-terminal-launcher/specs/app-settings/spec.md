@@ -21,6 +21,53 @@
 - **WHEN** 系統顯示終端啟動器相關文案
 - **THEN** 文案透過翻譯鍵取得，且 zh-TW 與 en-US 兩份 locale 皆提供對應字串
 
+#### Scenario: 控制項位置與終端機路徑欄位並存
+
+- **WHEN** 設定頁渲染終端相關設定
+- **THEN** 啟動器選擇控制項顯示於終端機路徑欄位鄰近位置
+- **AND** 終端機路徑欄位在 herdr 模式下仍照常顯示且可編輯（herdr pane 內部仍執行該 shell）
+
+### Requirement: 未偵測到 herdr 時的選項呈現
+
+設定頁 SHALL 在未偵測到 herdr 時停用該選項並標示狀態，且 SHALL 始終渲染當前已選取的值，確保使用者可切換回其他啟動器。
+
+#### Scenario: 未偵測到 herdr
+
+- **WHEN** 工具可用性資料顯示 herdr 不可用，且當前設定不是 herdr
+- **THEN** 設定頁仍顯示 herdr 選項但標示為不可選取
+- **AND** 選項旁顯示「未偵測到」提示
+
+#### Scenario: 已安裝但服務未執行
+
+- **WHEN** herdr 存在於 PATH 但服務未執行
+- **THEN** 設定頁標示該狀態，提示訊息指引啟動 herdr 而非安裝
+
+#### Scenario: 當前設定為 herdr 但已不可用
+
+- **WHEN** 當前 `terminal_launcher` 為 `"herdr"` 但 herdr 已不可用
+- **THEN** 設定頁仍渲染該選取值並標示為不可用
+- **AND** 使用者可將啟動器切換回 `shell`
+
+### Requirement: Provider 資料根目錄偵測狀態提示
+
+設定頁 SHALL 於 provider 勾選區顯示各 provider 資料根目錄的偵測狀態，且 SHALL NOT 以 CLI 可執行檔是否存在作為勾選可用性的判定依據。
+
+#### Scenario: 資料根目錄存在
+
+- **WHEN** 設定頁渲染某 provider 且其設定的資料根目錄存在
+- **THEN** 該 provider 路徑旁顯示已偵測到的狀態提示
+
+#### Scenario: 資料根目錄不存在
+
+- **WHEN** 設定頁渲染某 provider 且其設定的資料根目錄不存在
+- **THEN** 該 provider 路徑旁顯示未偵測到的狀態提示
+- **AND** 該 provider 的勾選框維持可勾選
+
+#### Scenario: 勾選可用性不受 CLI 安裝狀態影響
+
+- **WHEN** 某 provider 的 CLI 可執行檔不存在於 PATH，但其資料根目錄存在
+- **THEN** 該 provider 仍可被勾選啟用，其既有 session 歷史不因此被隱藏
+
 ## MODIFIED Requirements
 
 ### Requirement: 設定欄位完整定義

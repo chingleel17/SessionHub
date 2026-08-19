@@ -44,7 +44,14 @@
 #### Scenario: tab 標示
 
 - **WHEN** 系統以 herdr 建立 tab
-- **THEN** 該 tab 帶有可辨識該次啟動目標的標籤，便於使用者在多個 tab 間識別
+- **THEN** 該 tab 的標籤由專案目錄名稱組成；若該次啟動對應特定工具或 provider，則標籤額外包含該工具識別
+- **AND** 標籤僅供使用者辨識，系統 SHALL NOT 以標籤作為定位 tab 的依據
+
+#### Scenario: 每次啟動建立新的 tab
+
+- **WHEN** 使用者對同一個專案或 session 重複觸發啟動
+- **THEN** 系統每次皆建立新的 tab，不重用既有 tab
+- **AND** 此行為與 shell 啟動器每次開啟新視窗的語意一致
 
 ### Requirement: herdr 不可用時的錯誤處理
 
@@ -53,13 +60,25 @@
 #### Scenario: herdr 未安裝
 
 - **WHEN** 使用者選用 herdr 啟動器但系統找不到 herdr 可執行檔
-- **THEN** 系統回傳指出 herdr 不可用的錯誤訊息
+- **THEN** 系統回傳指出 herdr 未偵測到的錯誤訊息，並指引安裝
 - **AND** 前端以 toast 呈現該錯誤
 
-#### Scenario: herdr server 未執行或建立 tab 失敗
+#### Scenario: herdr 已安裝但服務未執行
+
+- **WHEN** herdr 可執行檔存在但其服務未執行
+- **THEN** 系統回傳指出服務未執行的錯誤訊息，並指引啟動 herdr
+- **AND** 該訊息與「未安裝」情境可區分
+
+#### Scenario: 建立 tab 失敗或回應無法解析
 
 - **WHEN** herdr 回報非成功狀態，或其輸出無法解析出 pane 識別碼
 - **THEN** 系統回傳包含失敗原因的錯誤訊息，且不再嘗試送出後續指令
+
+#### Scenario: 不自動回退至 shell
+
+- **WHEN** herdr 啟動流程因任一原因失敗
+- **THEN** 系統 SHALL NOT 自動改以 shell 啟動器啟動
+- **AND** 由使用者依錯誤訊息決定後續處置
 
 ## MODIFIED Requirements
 

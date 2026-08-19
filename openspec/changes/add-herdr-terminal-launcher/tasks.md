@@ -22,7 +22,10 @@
 - [ ] 3.2 實作 `herdr_pane_run(pane_id, command)`：執行 `herdr pane run <PANE_ID> <COMMAND>`
 - [ ] 3.3 實作 `launch_via_herdr`：無 command 時只建立 tab；有 command 時建立 tab 後送出指令
 - [ ] 3.4 錯誤處理：herdr 可執行檔找不到、非零 exit code、JSON 無法解析或缺 `pane_id` 時，回傳含成因的錯誤訊息（附 stderr 片段）
-- [ ] 3.5 確認 herdr 路徑不套用 Windows console creation flags
+- [ ] 3.5 錯誤訊息區分「未偵測到」（不在 PATH）與「已安裝但服務未執行」（`herdr status server` 非 running），分別指引安裝或啟動
+- [ ] 3.6 確認 herdr 失敗時不自動回退至 shell 啟動器
+- [ ] 3.7 tab 標籤以專案目錄名稱為主、對應工具時附加工具識別（見 D11）
+- [ ] 3.8 確認 herdr 路徑不套用 Windows console creation flags
 
 ## 4. 聚焦行為分流
 
@@ -39,21 +42,38 @@
 - [ ] 5.3 herdr 指令無法解析時回報驗證失敗並提示 herdr 不可用
 - [ ] 5.4 確認既有測試 `validate_terminal_path_returns_true_for_existing_file` 仍通過
 
-## 6. 前端設定頁
+## 6. herdr 可用性偵測
 
-- [ ] 6.1 `src/components/SettingsView.tsx` 新增終端啟動器選擇控制項（受控元件，由 props 驅動）
-- [ ] 6.2 `src/App.tsx` 僅於 `validate_terminal_path` 的 `invoke()` 傳入當前表單的 launcher；`open_in_tool`、`resume_session_in_terminal`、`focus_terminal_window` 三個呼叫的簽章維持不變（launcher 由後端讀設定，見 D7）
-- [ ] 6.3 `src/locales/zh-TW.ts` 新增啟動器相關文案
-- [ ] 6.4 `src/locales/en-US.ts` 新增對應英文文案
-- [ ] 6.5 確認 JSX 中無硬編中文，所有文案透過 `t("key")` 取得
+- [ ] 6.1 `src-tauri/src/types.rs` 的 `ToolAvailability` 新增 `herdr: bool` 欄位
+- [ ] 6.2 `check_tool_availability_internal` 以 `which_exists("herdr")` 填入該欄位
+- [ ] 6.3 新增服務狀態偵測：已安裝時執行 `herdr status server`，解析輸出判定是否 running，回傳可區分的狀態值
+- [ ] 6.4 `src/types/index.ts` 的 `ToolAvailability` 同步新增對應欄位
+- [ ] 6.5 儲存設定時使 `check_tool_availability` 查詢快取失效（`App.tsx:1095`）
+- [ ] 6.6 設定頁提供手動重新偵測入口，比照終端機路徑欄位既有的「自動偵測」按鈕（`SettingsView.tsx:239-245`）
 
-## 7. 測試與驗證
+## 7. 前端設定頁
 
-- [ ] 7.1 新增單元測試：launcher 解析（未知值回退為 shell、缺漏欄位預設為 shell）
-- [ ] 7.2 新增單元測試：herdr `tab create` 回應 JSON 解析（成功取得 pane_id、缺欄位時回錯誤）
-- [ ] 7.3 執行 `cargo test` 確認後端測試全數通過
-- [ ] 7.4 執行前端品質檢查（lint / type-check / build）
-- [ ] 7.5 手動驗證 shell 模式：開終端、啟動 AI CLI、resume session、聚焦終端行為皆與變更前一致
-- [ ] 7.6 手動驗證 herdr 模式：開終端建立 tab、啟動 AI CLI 於 pane 執行、tab 標籤可辨識、聚焦既有 tab 成功切換、tab 已關閉時錯誤訊息正確呈現
-- [ ] 7.7 手動驗證 herdr 不可用情境（暫停 herdr server 或指定錯誤指令）錯誤訊息清楚
-- [ ] 7.8 更新 `src-tauri/src/AGENTS.md` 的 command 清單（若有新增或調整 command 簽章）
+- [ ] 7.1 `src/components/SettingsView.tsx` 新增終端啟動器選擇控制項（受控元件，由 props 驅動），置於終端機路徑欄位鄰近位置
+- [ ] 7.2 launcher 選項在 herdr 不可用時停用並標示「未偵測到」；服務未執行時標示對應狀態（見 D8 / D9）
+- [ ] 7.3 確認當前已選取的 launcher 值一律照常渲染，即使該 launcher 已不可用，使用者仍可切回 shell
+- [ ] 7.4 確認終端機路徑欄位在 herdr 模式下仍顯示且可編輯
+- [ ] 7.5 provider 勾選區於資料根目錄旁顯示偵測狀態提示（重用 `check_directory_exists`），勾選框維持可用
+- [ ] 7.6 確認 provider 勾選可用性未被 CLI 安裝狀態影響，且 `onProviderAction(id, "install")` 流程不受影響（見 D10）
+- [ ] 7.7 `src/App.tsx` 僅於 `validate_terminal_path` 的 `invoke()` 傳入當前表單的 launcher；`open_in_tool`、`resume_session_in_terminal`、`focus_terminal_window` 三個呼叫的簽章維持不變（launcher 由後端讀設定，見 D7）
+- [ ] 7.8 `src/locales/zh-TW.ts` 新增啟動器與偵測狀態相關文案
+- [ ] 7.9 `src/locales/en-US.ts` 新增對應英文文案
+- [ ] 7.10 確認 JSX 中無硬編中文，所有文案透過 `t("key")` 取得
+
+## 8. 測試與驗證
+
+- [ ] 8.1 新增單元測試：launcher 解析（未知值回退為 shell、缺漏欄位預設為 shell）
+- [ ] 8.2 新增單元測試：herdr `tab create` 回應 JSON 解析（成功取得 pane_id 與 tab_id、缺欄位時回錯誤）
+- [ ] 8.3 新增單元測試：`herdr status server` 輸出解析（running 與非 running 兩種情境）
+- [ ] 8.4 執行 `cargo test` 確認後端測試全數通過
+- [ ] 8.5 執行前端品質檢查（lint / type-check / build）
+- [ ] 8.6 手動驗證 shell 模式：開終端、啟動 AI CLI、resume session、聚焦終端行為皆與變更前一致
+- [ ] 8.7 手動驗證 herdr 模式：開終端建立 tab、啟動 AI CLI 於 pane 執行、tab 標籤可辨識、聚焦既有 tab 成功切換、tab 已關閉時錯誤訊息正確呈現
+- [ ] 8.8 手動驗證「未安裝」情境：暫時移除 herdr 於 PATH 的解析，確認設定頁標示未偵測到且選項停用
+- [ ] 8.9 手動驗證「服務未執行」情境：以 `herdr server stop` 停止服務，確認錯誤訊息指引啟動而非安裝
+- [ ] 8.10 手動驗證已選 herdr 但其不可用時，設定頁仍可切回 shell
+- [ ] 8.11 更新 `src-tauri/src/AGENTS.md` 的 command 清單（若有新增或調整 command 簽章）
