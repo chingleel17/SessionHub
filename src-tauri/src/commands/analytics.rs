@@ -5,7 +5,7 @@ use rusqlite::{params, Connection};
 
 use tauri::State;
 
-use crate::db::DbState;
+use crate::db::{i64_to_u64, DbState};
 use crate::types::{AnalyticsDataPoint, ModelMetricsEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,8 +103,8 @@ pub(crate) fn get_analytics_data_internal(
         .query_map(params![start_date, end_date, cwd], |row| {
             Ok(AnalyticsRow {
                 updated_at: row.get(0)?,
-                output_tokens: row.get(1)?,
-                input_tokens: row.get(2)?,
+                output_tokens: row.get::<_, Option<i64>>(1)?.map(i64_to_u64),
+                input_tokens: row.get::<_, Option<i64>>(2)?.map(i64_to_u64),
                 interaction_count: row.get(3)?,
                 model_metrics: row.get(4)?,
             })

@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use rusqlite::{params, Connection};
 
+use crate::db::{i64_to_u64, u64_to_i64};
 use crate::types::*;
 
 // ── Copilot stats cache ──────────────────────────────────────────────────────
@@ -60,10 +61,12 @@ pub(crate) fn get_session_stats_cache(
                 events_mtime,
                 SessionStats {
                     output_tokens: row
-                        .get(1)
+                        .get::<_, i64>(1)
+                        .map(i64_to_u64)
                         .map_err(|error| format!("failed to read output_tokens column: {error}"))?,
                     input_tokens: row
-                        .get(8)
+                        .get::<_, i64>(8)
+                        .map(i64_to_u64)
                         .map_err(|error| format!("failed to read input_tokens column: {error}"))?,
                     interaction_count: row.get(2).map_err(|error| {
                         format!("failed to read interaction_count column: {error}")
@@ -71,7 +74,7 @@ pub(crate) fn get_session_stats_cache(
                     tool_call_count: row.get(3).map_err(|error| {
                         format!("failed to read tool_call_count column: {error}")
                     })?,
-                    duration_minutes: row.get(4).map_err(|error| {
+                    duration_minutes: row.get::<_, i64>(4).map(i64_to_u64).map_err(|error| {
                         format!("failed to read duration_minutes column: {error}")
                     })?,
                     models_used,
@@ -125,11 +128,11 @@ pub(crate) fn upsert_session_stats_cache(
             params![
                 session_id,
                 events_mtime,
-                stats.output_tokens,
-                stats.input_tokens,
+                u64_to_i64(stats.output_tokens),
+                u64_to_i64(stats.input_tokens),
                 stats.interaction_count,
                 stats.tool_call_count,
-                stats.duration_minutes,
+                u64_to_i64(stats.duration_minutes),
                 models_used_json,
                 stats.reasoning_count,
                 tool_breakdown_json,
