@@ -22,6 +22,19 @@ pub(crate) struct WatcherState {
     pub(crate) last_quota_refresh_trigger: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
+/// herdr 啟動的 session 與 tab 識別碼對應，只在目前程序生命週期內有效。
+pub(crate) struct HerdrTabState {
+    pub(crate) session_tabs: Mutex<HashMap<String, String>>,
+}
+
+impl Default for HerdrTabState {
+    fn default() -> Self {
+        Self {
+            session_tabs: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 impl Default for WatcherState {
     fn default() -> Self {
         WatcherState {
@@ -103,4 +116,6 @@ pub struct ToolAvailability {
     pub codex: bool,
     pub gemini: bool,
     pub vscode: bool,
+    pub herdr: bool,
+    pub herdr_server_running: bool,
 }

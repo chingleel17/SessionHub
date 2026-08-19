@@ -66,6 +66,7 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         launch_on_startup: false,
         start_minimized_on_startup: true,
         terminal_path: None,
+        terminal_launcher: Some(crate::settings::TERMINAL_LAUNCHER_SHELL.to_string()),
         external_editor_path: None,
         show_archived: false,
         pinned_projects: Vec::new(),

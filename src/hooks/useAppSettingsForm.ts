@@ -109,6 +109,7 @@ export function useAppSettingsForm({
       enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
       ...merged,
       terminalPath: merged.terminalPath?.trim() || null,
+      terminalLauncher: merged.terminalLauncher?.trim() || "shell",
       externalEditorPath: merged.externalEditorPath?.trim() || null,
       pinnedProjects: overrides.pinnedProjects ?? pinnedProjects,
       antigravityRoot: merged.antigravityRoot.trim(),

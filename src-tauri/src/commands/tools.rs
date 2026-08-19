@@ -9,8 +9,14 @@ use tauri::{Emitter, Manager, State};
 use crate::openspec_scan::{
     read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
 };
-use crate::sessions::{configure_msys_stackdump_suppression, open_terminal_internal};
-use crate::settings::resolve_vscode_command;
+use crate::sessions::{
+    herdr_server_is_running, herdr_tab_focus, launch_terminal, project_terminal_label,
+    remember_herdr_tab, TerminalLaunchSpec,
+};
+use crate::settings::{
+    load_settings_internal, resolve_terminal_launcher, resolve_vscode_command,
+    TERMINAL_LAUNCHER_HERDR,
+};
 use crate::sisyphus::scan_sisyphus_internal;
 use crate::types::*;
 use crate::watcher::watch_project_files_internal;
@@ -33,13 +39,36 @@ pub(crate) fn check_tool_availability_internal() -> ToolAvailability {
         codex: which_exists("codex"),
         gemini: which_exists("gemini"),
         vscode: resolve_vscode_command().is_some(),
+        herdr: which_exists("herdr"),
+        herdr_server_running: which_exists("herdr") && herdr_server_is_running().unwrap_or(false),
     }
 }
 
-pub(crate) fn focus_terminal_window_internal(title_hint: &str) -> Result<(), String> {
+pub(crate) fn focus_terminal_window_internal(
+    title_hint: &str,
+    tab_state: &HerdrTabState,
+) -> Result<(), String> {
+    let launcher = load_settings_internal()
+        .ok()
+        .map(|settings| resolve_terminal_launcher(settings.terminal_launcher.as_deref()));
+    if launcher == Some(TERMINAL_LAUNCHER_HERDR) {
+        let (session_key, _) = title_hint.split_once('\n').unwrap_or((title_hint, ""));
+        let tab_id = tab_state
+            .session_tabs
+            .lock()
+            .map_err(|_| "failed to lock herdr tab state".to_string())?
+            .get(session_key)
+            .cloned()
+            .ok_or_else(|| {
+                "找不到此 session 對應的 herdr tab，請手動切換至 herdr 分頁".to_string()
+            })?;
+        return herdr_tab_focus(&tab_id);
+    }
+
     #[cfg(target_os = "windows")]
     {
-        crate::platform::win32_focus::focus_window_by_title(title_hint)
+        let (_, window_hint) = title_hint.split_once('\n').unwrap_or(("", title_hint));
+        crate::platform::win32_focus::focus_window_by_title(window_hint)
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -68,103 +97,36 @@ pub(crate) fn open_in_tool_internal(
     tool_type: &str,
     cwd: &str,
     terminal_path: Option<&str>,
-    _session_id: Option<&str>,
+    session_id: Option<&str>,
+    tab_state: &HerdrTabState,
 ) -> Result<(), String> {
+    let launcher = load_settings_internal()
+        .ok()
+        .map(|settings| resolve_terminal_launcher(settings.terminal_launcher.as_deref()))
+        .unwrap_or(crate::settings::TERMINAL_LAUNCHER_SHELL);
+    let terminal = terminal_path.unwrap_or("pwsh");
+    let launch_command = |command: Option<&str>, tool: Option<&str>| {
+        let tab = launch_terminal(
+            launcher,
+            terminal,
+            TerminalLaunchSpec {
+                cwd,
+                command,
+                label: &project_terminal_label(cwd, tool),
+            },
+        )?;
+        if let Some(tab) = tab {
+            remember_herdr_tab(tab_state, session_id, cwd, &tab.tab_id)?;
+        }
+        Ok(())
+    };
+
     match tool_type {
-        "terminal" => {
-            let path = terminal_path.unwrap_or("pwsh");
-            open_terminal_internal(path, cwd)
-        }
-        "opencode" => {
-            // OpenCode 在 Windows 常以 npm shim（opencode.cmd）安裝，
-            // std::process::Command 只會解析 .exe，因此改由終端機執行指令。
-            let term = terminal_path.unwrap_or("pwsh");
-            let term_stem = PathBuf::from(term)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            let mut cmd = Command::new(term);
-            cmd.current_dir(cwd);
-            if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && opencode", cwd)]);
-            } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; opencode", cwd)]);
-            }
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-            configure_msys_stackdump_suppression(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("failed to open opencode: {e}"))?;
-            Ok(())
-        }
-        "claude" => {
-            let term = terminal_path.unwrap_or("pwsh");
-            let term_stem = PathBuf::from(term)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            let mut cmd = Command::new(term);
-            cmd.current_dir(cwd);
-            if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && claude", cwd)]);
-            } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; claude", cwd)]);
-            }
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-            configure_msys_stackdump_suppression(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("failed to open claude: {e}"))?;
-            Ok(())
-        }
-        "codex" => {
-            let term = terminal_path.unwrap_or("pwsh");
-            let term_stem = PathBuf::from(term)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            let mut cmd = Command::new(term);
-            cmd.current_dir(cwd);
-            if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && codex", cwd)]);
-            } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; codex", cwd)]);
-            }
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-            configure_msys_stackdump_suppression(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("failed to open codex: {e}"))?;
-            Ok(())
-        }
-        "copilot" => {
-            let term = terminal_path.unwrap_or("pwsh");
-            let term_stem = PathBuf::from(term)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            let mut cmd = Command::new(term);
-            cmd.current_dir(cwd);
-            if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && copilot", cwd)]);
-            } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; copilot", cwd)]);
-            }
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-            configure_msys_stackdump_suppression(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("failed to open copilot: {e}"))?;
-            Ok(())
-        }
+        "terminal" => launch_command(None, None),
+        "opencode" => launch_command(Some("opencode"), Some("opencode")),
+        "claude" => launch_command(Some("claude"), Some("claude")),
+        "codex" => launch_command(Some("codex"), Some("codex")),
+        "copilot" => launch_command(Some("copilot"), Some("copilot")),
         "vscode" => {
             let editor = resolve_vscode_command()
                 .ok_or_else(|| "failed to open vscode: no VS Code executable found".to_string())?;
@@ -202,27 +164,7 @@ pub(crate) fn open_in_tool_internal(
                 .map_err(|e| format!("failed to open vscode: {e}"))?;
             Ok(())
         }
-        "gemini" => {
-            let term = terminal_path.unwrap_or("pwsh");
-            let term_stem = PathBuf::from(term)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-            let mut cmd = Command::new(term);
-            cmd.current_dir(cwd);
-            if term_stem == "cmd" {
-                cmd.args(["/K", &format!("cd /d \"{}\" && gemini", cwd)]);
-            } else {
-                cmd.args(["-NoExit", "-Command", &format!("cd '{}'; gemini", cwd)]);
-            }
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NEW_CONSOLE);
-            configure_msys_stackdump_suppression(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("failed to open gemini: {e}"))?;
-            Ok(())
-        }
+        "gemini" => launch_command(Some("gemini"), Some("gemini")),
         "explorer" => {
             Command::new("explorer")
                 .arg(cwd)
@@ -245,8 +187,11 @@ pub fn check_jq_available() -> bool {
 }
 
 #[tauri::command]
-pub fn focus_terminal_window(title_hint: String) -> Result<(), String> {
-    focus_terminal_window_internal(&title_hint)
+pub fn focus_terminal_window(
+    title_hint: String,
+    tab_state: State<'_, HerdrTabState>,
+) -> Result<(), String> {
+    focus_terminal_window_internal(&title_hint, &tab_state)
 }
 
 #[tauri::command]
@@ -260,12 +205,14 @@ pub fn open_in_tool(
     cwd: String,
     terminal_path: Option<String>,
     session_id: Option<String>,
+    tab_state: State<'_, HerdrTabState>,
 ) -> Result<(), String> {
     open_in_tool_internal(
         &tool_type,
         &cwd,
         terminal_path.as_deref(),
         session_id.as_deref(),
+        &tab_state,
     )
 }
 
@@ -285,31 +232,25 @@ pub(crate) fn resume_session_in_terminal_internal(
     session_id: &str,
     cwd: &str,
     terminal_path: Option<&str>,
+    tab_state: &HerdrTabState,
 ) -> Result<(), String> {
     let resume_cmd = resume_session_command(provider, session_id)?;
-    let term = terminal_path.unwrap_or("pwsh");
-    let term_stem = PathBuf::from(term)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
-
-    let mut cmd = Command::new(term);
-    cmd.current_dir(cwd);
-    if term_stem == "cmd" {
-        cmd.args(["/K", &format!("cd /d \"{}\" && {}", cwd, resume_cmd)]);
-    } else {
-        cmd.args([
-            "-NoExit",
-            "-Command",
-            &format!("cd '{}'; {}", cwd, resume_cmd),
-        ]);
+    let launcher = load_settings_internal()
+        .ok()
+        .map(|settings| resolve_terminal_launcher(settings.terminal_launcher.as_deref()))
+        .unwrap_or(crate::settings::TERMINAL_LAUNCHER_SHELL);
+    let tab = launch_terminal(
+        launcher,
+        terminal_path.unwrap_or("pwsh"),
+        TerminalLaunchSpec {
+            cwd,
+            command: Some(&resume_cmd),
+            label: &project_terminal_label(cwd, Some(provider)),
+        },
+    )?;
+    if let Some(tab) = tab {
+        remember_herdr_tab(tab_state, Some(session_id), cwd, &tab.tab_id)?;
     }
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
-    configure_msys_stackdump_suppression(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| format!("failed to resume session: {e}"))?;
     Ok(())
 }
 
@@ -319,8 +260,15 @@ pub fn resume_session_in_terminal(
     session_id: String,
     cwd: String,
     terminal_path: Option<String>,
+    tab_state: State<'_, HerdrTabState>,
 ) -> Result<(), String> {
-    resume_session_in_terminal_internal(&provider, &session_id, &cwd, terminal_path.as_deref())
+    resume_session_in_terminal_internal(
+        &provider,
+        &session_id,
+        &cwd,
+        terminal_path.as_deref(),
+        &tab_state,
+    )
 }
 
 #[tauri::command]

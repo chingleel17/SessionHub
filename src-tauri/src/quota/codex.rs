@@ -568,6 +568,7 @@ mod tests {
             codex_root: "/nonexistent/path/.codex".to_string(),
             antigravity_root: String::new(),
             terminal_path: None,
+            terminal_launcher: Some(crate::settings::TERMINAL_LAUNCHER_SHELL.to_string()),
             external_editor_path: None,
             show_archived: false,
             pinned_projects: Vec::new(),

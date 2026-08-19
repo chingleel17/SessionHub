@@ -86,11 +86,11 @@ pub(crate) fn my_command_internal(arg: &str) -> Result<T, String> {
 
 **sessions：** `get_sessions`, `archive_session`, `unarchive_session`, `delete_session`, `delete_empty_sessions`, `get_session_stats`, `upsert_session_meta`, `delete_session_meta`, `get_session_activity_statuses`, `get_project_plans`, `get_project_specs`, `read_plan_content`, `check_directory_exists`
 
-**settings：** `get_settings`, `save_settings`, `detect_terminal`, `detect_vscode`, `validate_terminal_path`
+**settings：** `get_settings`, `save_settings`, `detect_terminal`, `detect_vscode`, `validate_terminal_path(path, launcher)`
 
 **plan：** `read_plan`, `write_plan`, `open_plan_external`, `watch_plan_file`, `stop_plan_watch`, `read_openspec_file`
 
-**tools：** `open_terminal`, `open_in_tool`, `focus_terminal_window`, `check_tool_availability`, `restart_session_watcher`
+**tools：** `open_terminal`, `open_in_tool`, `resume_session_in_terminal`, `focus_terminal_window`, `check_tool_availability`, `restart_session_watcher`（terminal launcher 由後端設定讀取）
 
 **provider：** `install_provider_integration`, `update_provider_integration`, `recheck_provider_integration`
 

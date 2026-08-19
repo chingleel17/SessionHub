@@ -300,9 +300,10 @@ pub fn delete_empty_sessions(
 pub fn open_terminal(
     terminal_path: String,
     cwd: String,
-    _session_id: String,
+    session_id: String,
+    tab_state: State<'_, HerdrTabState>,
 ) -> Result<(), String> {
-    open_terminal_internal(&terminal_path, &cwd)
+    open_terminal_internal(&terminal_path, &cwd, Some(&session_id), &tab_state)
 }
 
 #[tauri::command]
