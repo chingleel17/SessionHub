@@ -10,6 +10,18 @@ use rusqlite::{params, Connection};
 use crate::settings::{legacy_session_cache_path, metadata_db_path};
 use crate::types::*;
 
+/// 將 SQLite 讀出的 i64 轉為應用層 u64；負值視為 0
+///
+/// rusqlite 0.40 起移除了 u64 的 FromSql/ToSql 實作，需在 DB 邊界明確轉換
+pub(crate) fn i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
+/// 將應用層 u64 轉為 SQLite 可寫入的 i64；超出範圍時取 i64::MAX
+pub(crate) fn u64_to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)

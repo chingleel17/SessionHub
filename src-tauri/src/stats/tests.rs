@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,10 @@ use rusqlite::{params, Connection};
 use crate::db::init_db;
 use crate::types::SessionStats;
 
-use super::{backfill_missing_stats_internal, session_events_mtime, upsert_session_stats_cache};
+use super::{
+    backfill_missing_stats_internal, get_session_stats_cache, session_events_mtime,
+    upsert_session_stats_cache,
+};
 
 fn create_temp_dir(name: &str) -> PathBuf {
     let suffix = SystemTime::now()
@@ -123,6 +127,46 @@ fn backfill_skips_cached_and_live_sessions() {
     assert_eq!(cached_count, 1);
     assert_eq!(completed_count, 1);
     assert_eq!(live_count, 0);
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn session_stats_cache_roundtrip_preserves_large_u64_values() {
+    let temp_root = create_temp_dir("stats-u64-roundtrip");
+    let connection = Connection::open(temp_root.join("metadata.db")).expect("db should open");
+    init_db(&connection).expect("db should initialize");
+
+    // 使用明顯非零且超過 u32 範圍的值，確保 i64 與 u64 之間的轉換沒有截斷或錯位
+    let stats = SessionStats {
+        output_tokens: 9_876_543_210,
+        input_tokens: 1_234_567_890_123,
+        interaction_count: 42,
+        tool_call_count: 17,
+        duration_minutes: 5_000_000_000,
+        models_used: vec!["claude-opus-5".to_string()],
+        reasoning_count: 7,
+        tool_breakdown: BTreeMap::from([("Read".to_string(), 3u32)]),
+        model_metrics: BTreeMap::new(),
+        is_live: false,
+    };
+
+    upsert_session_stats_cache(&connection, "u64-session", 1_700_000_000, &stats)
+        .expect("stats should insert");
+
+    let (events_mtime, restored) = get_session_stats_cache(&connection, "u64-session")
+        .expect("stats should query")
+        .expect("stats row should exist");
+
+    assert_eq!(events_mtime, 1_700_000_000);
+    assert_eq!(restored.output_tokens, stats.output_tokens);
+    assert_eq!(restored.input_tokens, stats.input_tokens);
+    assert_eq!(restored.duration_minutes, stats.duration_minutes);
+    assert_eq!(restored.interaction_count, stats.interaction_count);
+    assert_eq!(restored.tool_call_count, stats.tool_call_count);
+    assert_eq!(restored.reasoning_count, stats.reasoning_count);
+    assert_eq!(restored.models_used, stats.models_used);
+    assert_eq!(restored.tool_breakdown, stats.tool_breakdown);
 
     let _ = fs::remove_dir_all(&temp_root);
 }
