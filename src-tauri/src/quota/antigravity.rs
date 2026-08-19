@@ -1,5 +1,6 @@
 use crate::types::{AppSettings, QuotaSnapshot, QuotaWindow, ANTIGRAVITY_PROVIDER};
 
+use super::http;
 use super::QuotaAdapter;
 
 pub(crate) struct AntigravityAdapter;
@@ -120,12 +121,20 @@ mod platform {
 
 fn fetch_csrf_token(port: u16) -> Result<String, String> {
     let url = format!("http://127.0.0.1:{port}/");
-    let response = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(2))
+    let response = http::get(&url, Some(std::time::Duration::from_secs(2)))
         .call()
         .map_err(|error| format!("GET {url} 失敗: {error}"))?;
+    let mut response = match http::classify(response) {
+        http::ApiOutcome::Success(response) => response,
+        http::ApiOutcome::Unauthorized => return Err(format!("GET {url} 被拒絕: 未授權")),
+        http::ApiOutcome::RateLimited { .. } => return Err(format!("GET {url} 被限流")),
+        http::ApiOutcome::UnexpectedStatus(status) => {
+            return Err(format!("GET {url} 失敗: HTTP {status}"))
+        }
+    };
     let body = response
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .map_err(|error| format!("讀取回應內容失敗: {error}"))?;
 
     let marker = "\"csrfToken\":\"";
@@ -143,15 +152,25 @@ fn fetch_csrf_token(port: u16) -> Result<String, String> {
 
 fn call_rpc(port: u16, path: &str, csrf_token: &str) -> Result<serde_json::Value, String> {
     let url = format!("http://127.0.0.1:{port}{path}");
-    let response = ureq::post(&url)
-        .set("Content-Type", "application/json")
-        .set("Origin", &format!("http://127.0.0.1:{port}"))
-        .set("x-codeium-csrf-token", csrf_token)
-        .send_string("{}")
+    let response = http::post(&url, None)
+        .header("Content-Type", "application/json")
+        .header("Origin", &format!("http://127.0.0.1:{port}"))
+        .header("x-codeium-csrf-token", csrf_token)
+        .send("{}")
         .map_err(|error| format!("POST {url} 失敗: {error}"))?;
 
+    let mut response = match http::classify(response) {
+        http::ApiOutcome::Success(response) => response,
+        http::ApiOutcome::Unauthorized => return Err(format!("POST {url} 被拒絕: 未授權")),
+        http::ApiOutcome::RateLimited { .. } => return Err(format!("POST {url} 被限流")),
+        http::ApiOutcome::UnexpectedStatus(status) => {
+            return Err(format!("POST {url} 失敗: HTTP {status}"))
+        }
+    };
+
     response
-        .into_json::<serde_json::Value>()
+        .body_mut()
+        .read_json::<serde_json::Value>()
         .map_err(|error| format!("解析 {path} 回應失敗: {error}"))
 }
 

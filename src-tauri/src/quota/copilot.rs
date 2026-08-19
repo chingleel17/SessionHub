@@ -10,6 +10,7 @@ use windows_sys::Win32::Security::Credentials::{
     CredEnumerateW, CredFree, CREDENTIALW, CRED_ENUMERATE_FLAGS, CRED_TYPE_GENERIC,
 };
 
+use super::http;
 use super::QuotaAdapter;
 
 pub(crate) struct CopilotAdapter;
@@ -196,22 +197,30 @@ impl QuotaAdapter for CopilotAdapter {
 
         // 參考 costats 的做法：打 Copilot 內部 usage API，直接用 gh CLI 換來的一般
         // OAuth token 嘗試（不要求使用者額外取得 Copilot 專用 token）
-        let response = match ureq::get("https://api.github.com/copilot_internal/user")
-            .set("Authorization", &format!("token {token}"))
-            .set("Accept", "application/json")
-            .set("User-Agent", "GitHubCopilotChat/0.26.7")
-            .set("Editor-Version", "vscode/1.96.2")
-            .set("Editor-Plugin-Version", "copilot-chat/0.26.7")
-            .set("X-GitHub-Api-Version", "2025-04-01")
+        let response = match http::get("https://api.github.com/copilot_internal/user", None)
+            .header("Authorization", &format!("token {token}"))
+            .header("Accept", "application/json")
+            .header("User-Agent", "GitHubCopilotChat/0.26.7")
+            .header("Editor-Version", "vscode/1.96.2")
+            .header("Editor-Plugin-Version", "copilot-chat/0.26.7")
+            .header("X-GitHub-Api-Version", "2025-04-01")
             .call()
         {
             Ok(r) => r,
-            Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
+            Err(e) => {
+                return error_snapshot(format!("Copilot usage API 呼叫失敗: {e}"));
+            }
+        };
+
+        let mut response = match http::classify(response) {
+            http::ApiOutcome::Success(response) => response,
+            http::ApiOutcome::Unauthorized => {
                 return no_auth_snapshot(
                     "GitHub token 無 Copilot 存取權限，請確認帳號已啟用 GitHub Copilot",
                 );
             }
-            Err(ureq::Error::Status(404, _)) => {
+            // 404 代表該帳號非 Copilot 訂閱，屬預期情形
+            http::ApiOutcome::UnexpectedStatus(404) => {
                 return QuotaSnapshot {
                     provider: COPILOT_PROVIDER.to_string(),
                     status: "unsupported".to_string(),
@@ -225,12 +234,15 @@ impl QuotaAdapter for CopilotAdapter {
                     reset_credits: None,
                 };
             }
-            Err(e) => {
-                return error_snapshot(format!("Copilot usage API 呼叫失敗: {e}"));
+            http::ApiOutcome::RateLimited { .. } => {
+                return error_snapshot("Copilot usage API 請求過於頻繁，請稍後再試");
+            }
+            http::ApiOutcome::UnexpectedStatus(status) => {
+                return error_snapshot(format!("Copilot usage API 呼叫失敗: HTTP {status}"));
             }
         };
 
-        let body: serde_json::Value = match response.into_json() {
+        let body: serde_json::Value = match response.body_mut().read_json() {
             Ok(v) => v,
             Err(e) => return error_snapshot(format!("failed to parse Copilot API response: {e}")),
         };
