@@ -217,7 +217,7 @@ function getSessionOpenCommand(provider: string, sessionId: string): string {
 const DEFAULT_PROJECT_AGENTS_PREFS: ProjectAgentsPrefs = {
   conflictChoice: null,
   ignoredPaths: [],
-  enabledTargets: ["claude", "codex", "opencode", "copilot"],
+  enabledTargets: ["claude", "opencode", "codex", "copilot"],
 };
 
 function formatAgentsReportToast(report: SyncReport, template: string): string {
@@ -291,6 +291,8 @@ function App() {
   // queryKey 變動而連續觸發兩次掃描（async 化後會讓 isFetching 永遠為 true，狀態列卡在「掃描中」）。
   const forceFullRef = useRef(false);
   const [pendingProviderAction, setPendingProviderAction] = useState<string | null>(null);
+  const launchInProgressRef = useRef(false);
+  const [launchingTarget, setLaunchingTarget] = useState<string | null>(null);
 
   const [bridgeEventLog, setBridgeEventLog] = useState<BridgeEventLogEntry[]>([]);
   const [lastBridgeEvent, setLastBridgeEvent] = useState<{ entry: BridgeEventLogEntry; receivedAt: Date } | null>(null);
@@ -1093,8 +1095,10 @@ function App() {
   const toolAvailabilityQuery = useQuery({
     queryKey: ["tool_availability"],
     queryFn: () => invoke<ToolAvailability>("check_tool_availability"),
-    staleTime: Infinity,
+    staleTime: 10_000,
     gcTime: Infinity,
+    refetchOnWindowFocus: true,
+    refetchInterval: activeView === "settings" ? 10_000 : false,
   });
 
   const providerDirectoryQueries = useQueries({
@@ -1367,9 +1371,12 @@ function App() {
 
   const handleResumeSession = async (session: SessionInfo) => {
     if (!session.cwd) { showToast(t("toast.cwdMissing")); return; }
-    const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
-    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    if (launchInProgressRef.current) return;
+    launchInProgressRef.current = true;
+    setLaunchingTarget(`session:${session.id}`);
     try {
+      const exists = await invoke<boolean>("check_directory_exists", { path: session.cwd });
+      if (!exists) { showToast(t("toast.cwdMissing")); return; }
       await invoke("resume_session_in_terminal", {
         provider: session.provider,
         sessionId: session.id,
@@ -1379,14 +1386,20 @@ function App() {
       showToast(t("toast.toolOpened"));
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    } finally {
+      launchInProgressRef.current = false;
+      setLaunchingTarget(null);
     }
   };
 
   const handleOpenProjectInTool = async (project: ProjectGroup, toolType: IdeLauncherType) => {
     if (!project.pathLabel) { showToast(t("toast.cwdMissing")); return; }
-    const exists = await invoke<boolean>("check_directory_exists", { path: project.pathLabel });
-    if (!exists) { showToast(t("toast.cwdMissing")); return; }
+    if (launchInProgressRef.current) return;
+    launchInProgressRef.current = true;
+    setLaunchingTarget(`project:${project.key}`);
     try {
+      const exists = await invoke<boolean>("check_directory_exists", { path: project.pathLabel });
+      if (!exists) { showToast(t("toast.cwdMissing")); return; }
       await invoke("open_in_tool", {
         toolType,
         cwd: project.pathLabel,
@@ -1396,6 +1409,9 @@ function App() {
       showToast(t("toast.toolOpened"));
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("toast.toolOpenFailed"));
+    } finally {
+      launchInProgressRef.current = false;
+      setLaunchingTarget(null);
     }
   };
 
@@ -1993,6 +2009,7 @@ function App() {
               }
               activityStatusMap={activityStatusMap}
               onResumeSession={(session) => void handleResumeSession(session)}
+              launchingTarget={launchingTarget}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
               viewMode={dashboardViewMode}
               onViewModeChange={setDashboardViewMode}
@@ -2144,6 +2161,7 @@ function App() {
               }
               activityStatusMap={activityStatusMap}
               onResumeSession={(session) => void handleResumeSession(session)}
+              launchingTarget={launchingTarget}
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
               onOpenProjectInTool={(project, tool) => void handleOpenProjectInTool(project, tool)}
               defaultLauncher={settingsQuery.data?.defaultLauncher ?? null}

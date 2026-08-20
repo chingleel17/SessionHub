@@ -1045,21 +1045,6 @@ textarea {
   min-width: 0;
 }
 
-.checkbox-group-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.checkbox-group-label input {
-  width: 18px;
-  min-height: 18px;
-  margin: 0;
-}
-
 .checkbox-group input {
   width: 18px;
   min-height: 18px;
@@ -1075,6 +1060,10 @@ textarea {
 
 .checkbox-group--disabled {
   opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.checkbox-group--disabled input {
   cursor: not-allowed;
 }
 
@@ -1120,11 +1109,18 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .quota-overlay-window {
   /* 尺寸由內容決定，前端量測後同步原生視窗大小，不出現滾動條 */
-  display: inline-block;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   width: max-content;
   height: max-content;
   padding: 12px;
   background: transparent;
+}
+
+.quota-overlay-window--extend-up {
+  flex-direction: column-reverse;
 }
 
 .quota-overlay-root {
@@ -1373,30 +1369,24 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: rgba(255, 255, 255, 0.42);
 }
 
-/* ── 介入提醒常駐區塊：quota chip/list 與提醒區的排列容器 ── */
-.quota-overlay-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* 往上延伸：提醒區排到 chip 上方，維持 chip 螢幕位置不變（見 design.md 決策 3） */
-.quota-overlay-stack--extend-up {
-  flex-direction: column-reverse;
-}
-
 .quota-overlay-intervention {
   display: grid;
   gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--color-status-error) 28%, transparent);
+  min-width: 296px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-card);
+  background: rgba(11, 18, 30, var(--quota-overlay-opacity));
+  box-shadow: var(--shadow-panel);
+  color: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
-.quota-overlay-stack--extend-up .quota-overlay-intervention {
-  padding-top: 0;
-  padding-bottom: 8px;
-  border-top: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-status-error) 28%, transparent);
+.quota-overlay-intervention--light {
+  border-color: color-mix(in srgb, var(--color-border-subtle) 90%, transparent);
+  background: rgba(255, 255, 255, var(--quota-overlay-opacity));
+  color: var(--color-text-primary);
 }
 
 .quota-overlay-intervention-title {
@@ -1447,7 +1437,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
   color: rgba(255, 255, 255, 0.62);
 }
 
-.quota-overlay-root--light .quota-overlay-intervention-tool {
+.quota-overlay-intervention--light .quota-overlay-intervention-tool {
   color: var(--color-text-secondary);
 }
 
@@ -1600,37 +1590,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
   min-width: 120px;
 }
 
-.checkbox-group-path {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--color-text-muted, #8b949e);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  padding: 0 4px;
-}
-
-.checkbox-group-edit {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm, 3px);
-  color: var(--color-text-muted, #8b949e);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  opacity: 0.5;
-  transition: opacity 0.15s;
-}
-
-.checkbox-group-edit:hover {
-  opacity: 1;
-  color: var(--color-text-primary);
-}
-
 .settings-field-desc {
   display: block;
   font-size: 0.8rem;
@@ -1645,6 +1604,66 @@ html.embedded-quota-view .quota-overlay-no-drag {
   align-items: start;
   grid-template-columns: 1fr;
   min-width: 0;
+}
+
+.advanced-settings {
+  min-width: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.advanced-settings-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 2px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced-settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-settings-summary > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.advanced-settings-summary strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.advanced-settings-summary small {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.advanced-settings-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.advanced-settings[open] .advanced-settings-chevron {
+  transform: rotate(90deg);
+}
+
+.advanced-settings-body {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  padding: 6px 2px 18px;
+}
+
+.advanced-settings-agents {
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .settings-actions,
@@ -1750,6 +1769,48 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: var(--color-error-surface);
 }
 
+.path-text {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono, "Consolas", "Courier New", monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.path-text--truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-text--wrap {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.path-picker-button {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
+.path-picker-button:hover {
+  color: var(--color-text-primary);
+}
+
+.provider-integration-card--unavailable {
+  background: var(--color-surface-subtle);
+}
+
+.provider-integration-card--unavailable .provider-integration-badges,
+.provider-integration-card--unavailable .provider-integration-grid,
+.provider-integration-card--unavailable .provider-integration-error {
+  opacity: 0.5;
+}
+
 .jq-missing-banner {
   display: flex;
   flex-direction: column;
@@ -1794,6 +1855,21 @@ html.embedded-quota-view .quota-overlay-no-drag {
   gap: 8px;
 }
 
+.provider-integration-enabled {
+  flex: 0 0 auto;
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+}
+
+.provider-detection-indicator {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 14px;
+  width: 14px;
+  color: var(--color-status-success);
+}
+
 .provider-integration-actions {
   justify-content: flex-end;
 }
@@ -1834,52 +1910,15 @@ html.embedded-quota-view .quota-overlay-no-drag {
   min-width: 0;
 }
 
-.provider-path-summary {
+.provider-path-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.provider-path-summary::-webkit-details-marker {
-  display: none;
-}
-
-.provider-path-label {
-  flex: 1;
   color: var(--color-text-secondary);
   font-size: 13px;
 }
 
-.provider-path-copy {
-  padding: 2px 8px;
-  font-size: 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-  line-height: 1.6;
-}
-
-.provider-path-copy:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-
-.provider-path-copy:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.provider-integration-meta details[open] .provider-path-summary {
-  margin-bottom: 6px;
-}
-
-.provider-integration-meta code,
 .provider-integration-error p {
   display: block;
   min-width: 0;
@@ -3004,6 +3043,18 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
   .field-with-action--dual-action input {
     grid-column: 1 / -1;
+  }
+
+  .advanced-settings .field-with-action--dual-action {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .advanced-settings .field-with-action--dual-action input {
+    grid-column: auto;
+  }
+
+  .advanced-settings-agents .field-with-action {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .hero-actions {

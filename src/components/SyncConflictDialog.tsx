@@ -52,8 +52,8 @@ export function SyncConflictDialog({ conflicts, canRememberChoice, onResolve, on
             <section key={key} className="sync-conflict-item">
               <div className="sync-conflict-paths">
                 <strong>{basename(conflict.target)}</strong>
-                <span>{conflict.source}</span>
-                <span>{conflict.target}</span>
+                <span className="path-text path-text--wrap">{conflict.source}</span>
+                <span className="path-text path-text--wrap">{conflict.target}</span>
                 {conflict.reason ? <small>{conflict.reason}</small> : null}
               </div>
 

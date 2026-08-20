@@ -3,6 +3,8 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
+use crate::settings::resolve_herdr_executable;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HerdrTab {
     pub(crate) pane_id: String,
@@ -19,13 +21,14 @@ fn stderr_fragment(output: &Output) -> String {
 }
 
 fn run_herdr(args: &[&str]) -> Result<Output, String> {
-    Command::new("herdr")
+    let executable = resolve_herdr_executable()
+        .ok_or_else(|| "herdr 未偵測到，請先安裝 herdr 並確認已加入 PATH".to_string())?;
+
+    Command::new(executable)
         .args(args)
         .output()
         .map_err(|error| match error.kind() {
-            ErrorKind::NotFound => {
-                "herdr 未偵測到，請先安裝 herdr 並確認已加入 PATH".to_string()
-            }
+            ErrorKind::NotFound => "herdr 未偵測到，請先安裝 herdr 並確認已加入 PATH".to_string(),
             _ => format!("無法執行 herdr：{error}"),
         })
 }

@@ -5,9 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { AppSettings, QuotaSnapshot } from "../types";
+import { PROVIDER_DISPLAY_ORDER } from "../utils/providerOrder";
 import { TrayQuotaPanel } from "../components/TrayQuotaPanel";
 
-const DEFAULT_ENABLED_PROVIDERS = ["claude", "copilot", "opencode", "codex", "antigravity"];
+const DEFAULT_ENABLED_PROVIDERS = [...PROVIDER_DISPLAY_ORDER];
 
 const SNAPSHOT_QUERY_KEY = ["embedded_quota_snapshots", "tray_panel"];
 const SETTINGS_QUERY_KEY = ["embedded_settings", "tray_panel"];

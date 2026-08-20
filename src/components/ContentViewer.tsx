@@ -95,7 +95,7 @@ export function ContentViewer({
 
   const renderHeader = (path: string) => (
     <div className="explorer-content-header">
-      <span className="explorer-content-header-path">{getDisplayPath(path)}</span>
+      <span className="explorer-content-header-path path-text path-text--truncate">{getDisplayPath(path)}</span>
       {createdAt ? (
         <span className="explorer-content-header-date">{formatDate(createdAt, locale)}</span>
       ) : null}

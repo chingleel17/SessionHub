@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   Bot,
   ChartNoAxesCombined,
+  Check,
   ChevronLeft,
   ChevronRight,
   CircleDot,
@@ -60,6 +61,7 @@ export const MoonIcon = withDefaults(Moon);
 export const StatsIcon = withDefaults(ChartNoAxesCombined);
 export const AgentsIcon = withDefaults(Bot);
 export const RefreshIcon = withDefaults(RefreshCw);
+export const CheckIcon = withDefaults(Check);
 export const ChevronLeftIcon = withDefaults(ChevronLeft);
 export const SaveIcon = withDefaults(Save);
 export const PlugIcon = withDefaults(Plug);

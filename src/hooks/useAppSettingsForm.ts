@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, ProviderIntegrationStatus } from "../types";
 import type { MessageKey } from "../locales/zh-TW";
 import { DEFAULT_APP_SETTINGS, mergeAppSettings } from "../utils/appSettingsDefaults";
+import { compareProviders } from "../utils/providerOrder";
 import { resolveErrorMessage } from "../utils/resolveErrorMessage";
 
 export type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
@@ -48,14 +49,7 @@ function upsertProviderIntegrationStatus(
     nextIntegrations[existingIndex] = nextStatus;
   }
 
-  const providerOrder = ["copilot", "opencode"];
-  nextIntegrations.sort((left, right) => {
-    const leftIndex = providerOrder.indexOf(left.provider);
-    const rightIndex = providerOrder.indexOf(right.provider);
-    const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-    const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-    return normalizedLeft - normalizedRight || left.provider.localeCompare(right.provider);
-  });
+  nextIntegrations.sort((left, right) => compareProviders(left.provider, right.provider));
 
   return nextIntegrations;
 }
@@ -82,7 +76,7 @@ export function useAppSettingsForm({
     opencodeRoot: "",
     codexRoot: "",
     showArchived: false,
-    enabledProviders: ["copilot", "opencode", "codex"],
+    enabledProviders: ["opencode", "codex", "copilot"],
     ...DEFAULT_APP_SETTINGS,
   });
 
@@ -93,7 +87,7 @@ export function useAppSettingsForm({
         opencodeRoot: settingsQuery.data.opencodeRoot ?? "",
         codexRoot: settingsQuery.data.codexRoot ?? "",
         showArchived: settingsQuery.data.showArchived,
-        enabledProviders: settingsQuery.data.enabledProviders ?? ["copilot", "opencode", "codex"],
+        enabledProviders: settingsQuery.data.enabledProviders ?? ["opencode", "codex", "copilot"],
         ...mergeAppSettings(settingsQuery.data),
       });
     }

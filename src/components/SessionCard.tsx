@@ -42,6 +42,8 @@ type Props = {
   todosLoading: boolean;
   activityStatus?: SessionActivityStatus;
   onResumeSession: (session: SessionInfo) => void;
+  isLaunching: boolean;
+  launchDisabled: boolean;
   onFocusTerminal: (session: SessionInfo) => void;
 };
 
@@ -70,6 +72,8 @@ export function SessionCard({
   todosLoading,
   activityStatus,
   onResumeSession,
+  isLaunching,
+  launchDisabled,
   onFocusTerminal,
 }: Props) {
   const { t, locale } = useI18n();
@@ -165,11 +169,15 @@ export function SessionCard({
 
       <div className="session-actions">
         <IconButton
-          label={t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
+          label={isLaunching
+            ? t("session.actions.opening")
+            : t("session.actions.resumeWithProvider").replace("{provider}", getProviderLabel(session.provider))}
           className="session-action-button"
+          disabled={launchDisabled}
+          aria-busy={isLaunching || undefined}
           onClick={() => onResumeSession(session)}
         >
-          <TerminalIcon size={16} />
+          {isLaunching ? <span className="ui-button-spinner" aria-hidden="true" /> : <TerminalIcon size={16} />}
         </IconButton>
         <IconButton
           label={t("session.actions.focusTerminal")}

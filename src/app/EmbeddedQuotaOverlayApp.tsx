@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 
 import type { AppSettings, InterventionItem, QuotaSnapshot } from "../types";
+import { PROVIDER_DISPLAY_ORDER } from "../utils/providerOrder";
 import { QuotaOverlay } from "../components/QuotaOverlay";
 
 export function EmbeddedQuotaOverlayApp() {
@@ -25,6 +26,8 @@ export function EmbeddedQuotaOverlayApp() {
     queryKey: ["embedded_intervention_list", "quota_overlay"],
     queryFn: () => invoke<InterventionItem[]>("get_intervention_list"),
     staleTime: 60_000,
+    // Tauri listener 註冊期間可能漏掉狀態切換事件；定期向記憶體 registry 對帳以清除舊提醒。
+    refetchInterval: 5_000,
   });
 
   useEffect(() => {
@@ -61,6 +64,9 @@ export function EmbeddedQuotaOverlayApp() {
           }
         },
       );
+      if (mounted) {
+        await queryClient.refetchQueries({ queryKey: ["embedded_intervention_list", "quota_overlay"] });
+      }
 
       return () => {
         unlistenSnapshots();
@@ -87,7 +93,7 @@ export function EmbeddedQuotaOverlayApp() {
     <QuotaOverlay
       key={overlayRevision}
       snapshots={quotaSnapshotQuery.data ?? []}
-      enabledProviders={settings?.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"]}
+      enabledProviders={settings?.quotaEnabledProviders ?? [...PROVIDER_DISPLAY_ORDER]}
       selectedProviders={settings?.quotaOverlayProviders ?? []}
       opacity={settings?.quotaOverlayOpacity ?? 0.3}
       locked={settings?.quotaOverlayLocked ?? true}

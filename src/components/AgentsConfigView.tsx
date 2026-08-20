@@ -2,6 +2,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
+import { compareProviders } from "../utils/providerOrder";
 import type { MessageKey } from "../locales/zh-TW";
 import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
 import type {
@@ -491,9 +492,9 @@ export function AgentsConfigView(props: Props) {
         {!isLoading && entries.length > 0 ? (
           <ul className="agents-vscode-list">
             {entries.map((entry) => {
-              const providers = tab === "skills"
+              const providers = [...(tab === "skills"
                 ? (data.skillsData?.enabledProviders ?? [])
-                : (data.commandsData?.enabledProviders ?? []);
+                : (data.commandsData?.enabledProviders ?? []))].sort(compareProviders);
               const chips = providers.map((platform) => {
                 const resource = entry.providerEntries.find((candidate) => candidate.providerId === platform);
                 const providerLocations = resource?.locations.filter((location) => location.providerId === platform) ?? [];
@@ -969,8 +970,8 @@ function SyncModalGroup({
                   <span className={`agents-status-pill agents-status-pill--${action.action === "error" ? "not_started" : "neutral"}`}>
                     {t(`agents.report.action.${action.action}` as never)}
                   </span>
-                  <code>{action.source}</code>
-                  <code>{action.target}</code>
+                  <code className="path-text path-text--truncate">{action.source}</code>
+                  <code className="path-text path-text--truncate">{action.target}</code>
                   {action.reason ? <small>{action.reason}</small> : null}
                 </label>
               );
