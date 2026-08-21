@@ -301,9 +301,7 @@ export function SettingsView({
                 >
                   {t(
                     toolAvailability?.herdr
-                      ? toolAvailability.herdrServerRunning
-                        ? "settings.launcher.herdr"
-                        : "settings.launcher.herdrServerStopped"
+                      ? "settings.launcher.herdr"
                       : "settings.launcher.herdrMissing",
                   )}
                 </option>

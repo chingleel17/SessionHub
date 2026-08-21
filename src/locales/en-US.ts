@@ -107,7 +107,6 @@ export const enUsMessages: Record<MessageKey, string> = {
   "settings.fields.terminalLauncherDesc": "Choose between an independent shell window and a herdr tab.",
   "settings.launcher.shell": "Shell",
   "settings.launcher.herdr": "Herdr",
-  "settings.launcher.herdrServerStopped": "Herdr (server not running)",
   "settings.launcher.herdrMissing": "Herdr (not detected)",
   "settings.launcher.defaultTerminal": "Terminal",
   "settings.launcher.defaultEditor": "External editor",

@@ -5,7 +5,7 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 
 use crate::sessions::{
-    herdr_pane_run, herdr_server_is_running, herdr_tab_create, HerdrTab,
+    ensure_herdr_client_console, herdr_pane_run, herdr_tab_create, HerdrTab,
 };
 use crate::settings::TERMINAL_LAUNCHER_HERDR;
 use crate::types::HerdrTabState;
@@ -111,13 +111,8 @@ fn launch_via_shell(terminal_path: &str, spec: TerminalLaunchSpec<'_>) -> Result
 }
 
 fn launch_via_herdr(spec: TerminalLaunchSpec<'_>) -> Result<Option<HerdrTab>, String> {
-    match herdr_server_is_running() {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err("herdr 已安裝但服務未執行，請執行 herdr server start".to_string())
-        }
-        Err(error) => return Err(error),
-    }
+    // 先確保有 TUI client 承載，否則 tab 只會建立在 headless server 中，畫面上看不到任何東西。
+    ensure_herdr_client_console()?;
 
     let tab = herdr_tab_create(spec.cwd, spec.label, true)?;
     if let Some(command) = spec.command {

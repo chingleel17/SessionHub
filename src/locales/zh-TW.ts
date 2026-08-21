@@ -104,7 +104,6 @@ export const zhTwMessages = {
   "settings.fields.terminalLauncherDesc": "選擇以獨立 shell 視窗或 herdr tab 開啟終端。",
   "settings.launcher.shell": "Shell",
   "settings.launcher.herdr": "Herdr",
-  "settings.launcher.herdrServerStopped": "Herdr（服務未執行）",
   "settings.launcher.herdrMissing": "Herdr（未偵測到）",
   "settings.launcher.defaultTerminal": "終端機",
   "settings.launcher.defaultEditor": "外部編輯器",
