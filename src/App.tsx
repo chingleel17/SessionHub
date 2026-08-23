@@ -69,22 +69,19 @@ function formatDisplayPath(path: string): string {
   return path.replace(/^[a-z]:/, (drive) => drive.toUpperCase());
 }
 
+// 舊格式 key 為 `path:branch`，切換分支會使釘選失效；新格式僅以工作目錄為準。
+// git worktree 的 `rev-parse --show-toplevel` 會回傳 worktree 自身路徑，因此不同 worktree 天然分開。
 function normalizePinnedProjectKey(projectKey: string): string {
   const branchSeparatorIndex = projectKey.lastIndexOf(":");
-  if (branchSeparatorIndex <= 1) {
-    return normalizePath(projectKey);
-  }
-
-  const projectPath = projectKey.slice(0, branchSeparatorIndex);
-  const branch = projectKey.slice(branchSeparatorIndex + 1);
-  return `${normalizePath(projectPath)}:${branch}`;
+  const projectPath =
+    branchSeparatorIndex <= 1 ? projectKey : projectKey.slice(0, branchSeparatorIndex);
+  return normalizePath(projectPath);
 }
 
 function getProjectKey(session: SessionInfo, uncategorizedLabel: string): string {
   const raw = session.repoRoot?.trim() || session.cwd?.trim();
   if (!raw) return uncategorizedLabel;
-  const branch = session.gitBranch?.trim() ?? "";
-  return `${normalizePath(raw)}:${branch}`;
+  return normalizePath(raw);
 }
 
 function getProjectDisplayPath(session: SessionInfo, uncategorizedLabel: string): string {
@@ -99,8 +96,14 @@ function getProjectTitle(session: SessionInfo, displayPath: string, uncategorize
   return parts[parts.length - 1] ?? displayPath;
 }
 
+// 同一目錄可能累積多個分支的 session，顯示最近更新者的分支代表目前工作中的分支
 function getProjectBranchLabel(sessions: SessionInfo[]): string | null {
-  return sessions.map((session) => session.gitBranch?.trim()).find((branch): branch is string => Boolean(branch)) ?? null;
+  return (
+    [...sessions]
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+      .map((session) => session.gitBranch?.trim())
+      .find((branch): branch is string => Boolean(branch)) ?? null
+  );
 }
 
 function getDashboardPeriodStart(period: "week" | "month"): number {
@@ -391,7 +394,10 @@ function App() {
 
   useEffect(() => {
     if (settingsQuery.data) {
-      setPinnedProjects((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey));
+      // 舊格式多分支 key 正規化後會塌成同一個 path，需去重避免釘選區重複項目
+      setPinnedProjects([
+        ...new Set((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey)),
+      ]);
     }
   }, [settingsQuery.data]);
 

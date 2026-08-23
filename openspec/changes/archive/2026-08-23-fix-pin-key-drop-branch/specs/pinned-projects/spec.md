@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 釘選專案持久化
 
@@ -7,7 +7,7 @@
 #### Scenario: 釘選專案
 
 - **WHEN** 使用者在 Sidebar 或專案 tab 點擊釘選按鈕
-- **THEN** 該專案的 projectKey（`normalizePath(repoRoot ?? cwd)`）加入 `pinnedProjects` 陣列並儲存
+- **THEN** 該專案的 projectKey（`normalizePath(repoRoot)`）加入 `pinnedProjects` 陣列並儲存
 - **AND** 該專案立即出現在 Sidebar 釘選區
 
 #### Scenario: 取消釘選
@@ -57,6 +57,8 @@ Sidebar SHALL 在主導覽區顯示釘選專案的快捷連結。
 - **WHEN** sidebar 展開且有釘選專案
 - **THEN** Sidebar 中段顯示釘選專案列表（以路徑最後一段為名稱）
 - **AND** 點擊即切換至對應專案 tab（未開啟則先開啟）
+
+## ADDED Requirements
 
 ### Requirement: 專案分支標籤
 
