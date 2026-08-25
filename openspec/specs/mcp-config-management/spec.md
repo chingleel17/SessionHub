@@ -30,6 +30,12 @@
 
 系統 SHALL 在指定 scope 下以平台分頁列出 claude、codex、opencode、copilot 四個 provider 的 MCP server 清單。每個平台 SHALL 顯示設定檔完整路徑與是否存在；清單中每個 server SHALL 顯示名稱、啟用狀態與設定摘要。摘要 SHALL 依優先序取值：設定中的 `description` 欄位 > `url` > 指令檔名（basename，不含完整路徑）加參數；摘要 MUST 以單行截斷顯示並於 tooltip 提供完整內容，不得因長路徑撐爆欄位。清單、工具列與相鄰區塊之間 SHALL 保有可辨識的垂直間距，邊框不得互相緊貼。
 
+清單 SHALL 以表格呈現，欄位為名稱、狀態、摘要、操作。表頭（`th`）SHALL 一律置中；名稱、摘要欄內容 SHALL 靠左對齊（利於閱讀長字串），狀態欄內容 SHALL 置中對齊。表格欄寬 SHALL 為固定版面（`table-layout: fixed`）並個別指定寬度，不得沿用其他矩陣表格（如 agents 同步矩陣）的等分規則，以避免視窗縮小時表頭與內容錯位；操作欄 SHALL 有足夠寬度容納其固定按鈕組合，不得因內容換行撐高列高。
+
+點擊清單中可編輯 server 所在的整列（列上非按鈕區域）SHALL 開啟該項目的編輯視窗，等同點擊「編輯」操作；操作欄按鈕的點擊事件 MUST 阻止冒泡，不得因此誤觸開啟編輯視窗。不可編輯（唯讀來源）的項目與操作進行中（busy）時，整列點擊 SHALL 停用。
+
+操作欄 SHALL 以圖示按鈕（IconButton）呈現「編輯」「複製到其他工具」「刪除」三個操作；「啟用／停用」SHALL 以文字按鈕呈現於同一操作欄，依當前狀態呈現對應顏色語意（啟用中→可停用，停用中→可啟用），停用操作 SHALL 使用中性色而非危險色，以避免與刪除操作的危險語意混淆。
+
 #### Scenario: 檢視各平台 MCP 清單
 
 - **WHEN** 使用者開啟 MCP 頁（任一 scope）並切換到任一平台分頁
@@ -44,6 +50,16 @@
 
 - **WHEN** 某平台設定檔存在但無法解析（格式損壞）
 - **THEN** 該平台顯示錯誤訊息，其他平台清單仍正常載入
+
+#### Scenario: 點擊列開啟編輯
+
+- **WHEN** 使用者點擊某個可編輯 server 所在列的非按鈕區域
+- **THEN** 開啟該 server 的編輯視窗，內容與點擊「編輯」按鈕相同
+
+#### Scenario: 點擊操作欄按鈕不觸發列點擊
+
+- **WHEN** 使用者點擊列內的「編輯」「複製到其他工具」「刪除」或「啟用／停用」按鈕
+- **THEN** 僅觸發該按鈕自身的操作，不重複開啟編輯視窗
 
 ### Requirement: 各平台設定檔的讀寫位置與格式
 
@@ -87,12 +103,12 @@ codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使�
 
 ### Requirement: 新增與編輯 MCP server
 
-系統 SHALL 支援在任一平台新增與編輯 MCP server。編輯 dialog SHALL 提供名稱欄位與「類型」下拉選單，依所選類型顯示對應欄位（見 design D12）：
+系統 SHALL 支援在任一平台新增與編輯 MCP server。編輯 dialog SHALL 使用不透明樣式呈現（見 ui-primitives 的 `dialog-card--solid`），並提供名稱欄位與「類型」下拉選單（採用共用 Select 元件），依所選類型顯示對應欄位（見 design D12）：
 
-- **HTTP/SSE**：URL（必填）與 Headers（選填 key-value 清單）
+- **HTTP/SSE**：URL（必填）與 Headers（選填，結構化 key-value 列表，見下方 Headers 遮蔽需求）
 - **npx 套件**：套件名稱（必填）、額外參數（選填）、環境變數（選填 key-value 清單）
 - **本機執行檔**：執行檔路徑（必填）、參數（選填）、環境變數（選填 key-value 清單）
-- **自訂 JSON**：完整 JSON 編輯區（設定值原樣寫入）
+- **自訂 JSON**：完整 JSON 編輯區（設定值原樣寫入），提供「自動解析」操作（見下方需求）
 
 儲存時系統 SHALL 依當前 provider 將表單欄位組裝為該平台原生 schema（如 opencode 的 `type: "local"/"remote"` 與 `command` 陣列格式、codex 的 `http_headers`）。編輯既有項目時 SHALL 反解析設定值帶入對應類型的表單（`url` → HTTP/SSE；`command` 為 npx → npx 套件；其餘 `command` → 本機執行檔；無法對應者以自訂 JSON 呈現原始內容）。
 
@@ -127,6 +143,134 @@ codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使�
 
 - **WHEN** 使用者編輯既有 server 並修改名稱後儲存
 - **THEN** 設定檔中舊名稱項目被移除，新名稱項目寫入相同（或已編輯的）設定值
+
+### Requirement: HTTP Headers 顯示遮蔽
+
+HTTP/SSE 類型的 Headers 欄位 SHALL 以結構化 key-value 列表呈現，支援新增、刪除單一列。每列的值輸入框 SHALL 預設以密碼欄位（`type="password"`）遮蔽內容，並提供逐列的顯示/隱藏切換（眼睛圖示）。此遮蔽僅為畫面顯示層級，避免螢幕共享或側錄時外洩憑證；系統 SHALL NOT 對寫入設定檔的內容做任何加密處理，值仍以明文寫入 provider 設定檔（MCP 協定本身即以明文儲存 header 值，此為既有限制而非本需求引入的行為）。
+
+儲存前，若任一列的值非空但名稱（key）為空白，MUST 阻止儲存並提示錯誤；名稱與值皆為空白的列 SHALL 於組裝設定時忽略、不寫入。切換某列的顯示/隱藏狀態 SHALL NOT 清除當前的測試連線結果或表單錯誤訊息（純顯示操作，非資料變更）。
+
+#### Scenario: 新增 Header 列
+
+- **WHEN** 使用者在 HTTP/SSE 類型的編輯表單點擊「新增 Header」
+- **THEN** 新增一列空白的名稱/值輸入框，值欄位預設為遮蔽狀態
+
+#### Scenario: 顯示/隱藏 Header 值
+
+- **WHEN** 使用者點擊某列的顯示/隱藏切換
+- **THEN** 該列的值欄位在明文與遮蔽兩種顯示間切換，其餘列不受影響，且不影響已顯示的測試連線結果
+
+#### Scenario: 空白名稱阻止儲存
+
+- **WHEN** 使用者填入某列的值但未填名稱，並嘗試儲存
+- **THEN** 儲存被阻止並顯示錯誤，提示名稱不可為空白
+
+### Requirement: 自訂 JSON 自動解析
+
+自訂 JSON 類型的編輯表單 SHALL 提供「自動解析」操作，將使用者貼上的原生 MCP server JSON 解析回結構化表單（HTTP/SSE、npx 套件、本機執行檔三者之一），沿用與「編輯既有項目反解析」相同的解析邏輯。
+
+自動解析 SHALL 支援以下輸入型態：
+
+- 單一 server 的設定物件（如 `{"command": "npx", "args": [...]}`）
+- 整份或部分 provider 設定檔，外層包著已知的 MCP 區段鍵（`mcpServers`、`mcp_servers`、`mcp`）；即使該區段鍵旁存在其他同層鍵（如 `$schema`、其他非 MCP 設定）亦 SHALL 正確解開外殼取出區段內容，不因此判定為無法解析
+- 解開區段後，若名稱欄位尚為空白，SHALL 以區段內該 server 的鍵名稱自動帶入名稱欄位
+
+自動解析在下列情況 SHALL 停留於自訂 JSON 模式並顯示對應原因，不切換表單類型、不遺失使用者已輸入的內容：
+
+- **多個 server**：解開的區段內含有一個以上的 server，無法判斷要解析哪一個
+- **含未支援欄位**：解析出合法的 `url` 或 `command` 結構，但物件中含有結構化表單無法承載的欄位（如 `tools`）；為避免儲存時靜默丟失該欄位，SHALL 保留原始輸入為自訂 JSON，並於錯誤訊息中列出造成無法轉換的欄位名稱
+- **完全無法辨識**：JSON 語法錯誤，或內容不符合任何已知的 MCP server 結構
+
+#### Scenario: 解析單一 server 設定
+
+- **WHEN** 使用者於自訂 JSON 貼上 `{"type": "remote", "url": "https://x/mcp", "headers": {"Authorization": "Bearer x"}}` 並點擊自動解析
+- **THEN** 表單切換為 HTTP/SSE 類型，URL 帶入該值，Headers 列表帶入一列 `Authorization`（值為遮蔽狀態）
+
+#### Scenario: 解析整份設定檔（含其他同層鍵）
+
+- **WHEN** 使用者貼上 `{"$schema": "...", "mcp": {"my-server": {"type": "local", "command": [...]}}}` 並點擊自動解析
+- **THEN** 系統解開 `mcp` 區段取出 `my-server` 的設定，表單切換為對應類型，且名稱欄位（原為空白）帶入 `my-server`
+
+#### Scenario: 偵測到多個 server
+
+- **WHEN** 使用者貼上的區段內含兩個以上的 server 並點擊自動解析
+- **THEN** 表單停留於自訂 JSON，顯示提示說明偵測到多個 server、僅支援單一 server，不視為格式錯誤
+
+#### Scenario: 含表單無法承載的欄位
+
+- **WHEN** 使用者貼上 `{"type": "remote", "url": "...", "tools": ["*"]}` 並點擊自動解析
+- **THEN** 表單停留於自訂 JSON（原始內容不變），顯示提示列出 `tools` 為無法轉換的欄位，不視為格式錯誤
+
+#### Scenario: 完全無法辨識
+
+- **WHEN** 使用者貼上的內容非合法 JSON，或不含 `url`／`command` 等已知欄位
+- **THEN** 表單停留於自訂 JSON，顯示通用的「無法自動解析」錯誤
+
+### Requirement: 測試 HTTP/SSE 連線
+
+HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對話框底部與「取消」「儲存」同一列（左側）。測試 SHALL 使用表單當下（尚未儲存）的 URL 與 Headers 值，不依賴已儲存的設定。
+
+測試前 MUST 驗證 URL 非空白、Headers 無空白名稱帶值的列，驗證失敗 SHALL 顯示對應錯誤且不發出請求。測試結果 SHALL 分類顯示於按鈕旁：連線正常、認證失敗（401/403）、連線成功但回應非預期（含狀態碼）、無法連線（含錯誤訊息）。修改 URL 或任一 Header 列、或重新開啟編輯視窗時，SHALL 清除前次測試結果。
+
+系統 SHALL NOT 對 npx 套件、本機執行檔、自訂 JSON 類型提供測試連線操作（子行程握手為不同機制，不在此範圍）。
+
+#### Scenario: 測試連線成功
+
+- **WHEN** 使用者於 HTTP/SSE 表單填入可連線的 URL 並點擊測試連線
+- **THEN** 顯示「連線正常」
+
+#### Scenario: 測試連線認證失敗
+
+- **WHEN** 目標端點回傳 401 或 403
+- **THEN** 顯示「認證失敗」
+
+#### Scenario: 回應狀態正常但內容非 MCP 端點
+
+- **WHEN** 目標 URL 回傳 2xx，但回應內容非合法 JSON-RPC（例如 URL 誤填為該網域的一般網頁）
+- **THEN** 顯示「回應非預期」並附狀態碼，SHALL NOT 判定為連線正常
+
+#### Scenario: 修改欄位後清除舊結果
+
+- **WHEN** 使用者於測試連線後修改 URL 或任一 Header
+- **THEN** 先前顯示的測試結果被清除
+
+#### Scenario: 非 HTTP 類型不提供測試
+
+- **WHEN** 使用者將表單類型切換為 npx 套件、本機執行檔或自訂 JSON
+- **THEN** 不顯示測試連線操作
+
+### Requirement: 複製 MCP server 到其他工具
+
+系統 SHALL 支援將同一 scope 下、某平台的 MCP server 複製到另一個已啟用的平台。複製操作 SHALL 開啟對話框，供使用者選擇目標平台（排除來源平台自身，僅列出使用者已啟用的平台）與可編輯的名稱。
+
+複製邏輯 SHALL 重用既有的反解析（設定值 → 結構化表單）與組裝（結構化表單 → 目標平台原生 schema）邏輯，確保跨平台的 schema 差異（如 opencode 的 `command` 陣列格式 vs. claude/codex/copilot 的字串 + `args`、codex 的 `http_headers` vs. 其他平台的 `headers`）被正確轉換。來源設定值若無法反解析為結構化表單（自訂/未知格式），SHALL 阻止複製並提示需手動於目標平台新增，不做逐欄位語意轉換。
+
+儲存前 MUST 驗證：目標名稱非空白；目標平台不存在同名 server。系統 SHALL NOT 支援跨 scope（全域與專案間）複製。
+
+#### Scenario: 複製 npx 類型 server
+
+- **WHEN** 使用者將 opencode 的一個 npx 類型 server 複製到 claude
+- **THEN** claude 設定檔中新增 `{"command": "npx", "args": ["-y", "<pkg>"]}` 形式的項目（`command` 由陣列轉為字串 + `args`）
+
+#### Scenario: 複製 HTTP 類型 server 至 codex
+
+- **WHEN** 使用者將一個帶有 `headers` 的 HTTP 類型 server 複製到 codex
+- **THEN** codex 設定檔中新增的項目使用 `http_headers` 鍵，而非 `headers`
+
+#### Scenario: 目標平台已有同名項目
+
+- **WHEN** 目標平台已存在與複製名稱相同的 server
+- **THEN** 複製被阻止並提示名稱重複
+
+#### Scenario: 無法辨識格式的來源被阻止複製
+
+- **WHEN** 使用者嘗試複製一個設定值為自訂/未知格式的 server
+- **THEN** 複製被阻止並提示此格式無法自動轉換，需手動於目標平台新增
+
+#### Scenario: 沒有可複製目標時停用操作
+
+- **WHEN** 當前 scope 下僅有一個平台被啟用（無其他可複製目標）
+- **THEN** 「複製到其他工具」操作呈現停用狀態
 
 ### Requirement: 啟用與停用 MCP server
 
@@ -195,15 +339,16 @@ codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使�
 
 ### Requirement: Tauri command 介面
 
-後端 SHALL 提供四個 Tauri commands，皆帶 `scope` 參數（`{ kind: "global" }` 或 `{ kind: "project", projectCwd }`）、回傳 `Result<T, String>` 並以 `spawn_blocking` 執行檔案 I/O：
+後端 SHALL 提供六個 Tauri commands。前五個皆帶 `scope` 參數（`{ kind: "global" }` 或 `{ kind: "project", projectCwd }`）、回傳 `Result<T, String>` 並以 `spawn_blocking` 執行檔案 I/O：
 
 - `list_mcp_configs(scope) -> Vec<McpProviderConfig>`：回傳四個平台的 `{ providerId, configPath, configExists, servers: [{ name, enabled, configJson }], error? }`
 - `upsert_mcp_server(scope, provider, name, originalName?, configJson)`
 - `delete_mcp_server(scope, provider, name)`
 - `set_mcp_server_enabled(scope, provider, name, enabled)`
 - `check_codex_project_trust(projectCwd) -> bool`：回傳該專案是否已被 codex 信任，僅 project scope 的 codex 分頁使用
+- `test_mcp_http_server(url, headers) -> McpConnectionTestResult`：不帶 `scope`（不涉及任何設定檔讀寫），對指定 URL 送出 MCP JSON-RPC `initialize` 請求以驗證 HTTP/SSE 類型連線是否可用，逾時 5 秒。回傳值為以 `kind` 欄位區分的聯集：`{ kind: "ok" }`（2xx 且回應為合法 JSON-RPC 結果）、`{ kind: "unauthorized" }`（401/403）、`{ kind: "unexpectedResponse", status }`（其他非預期狀態碼，或狀態碼為 2xx 但回應內容非合法 JSON-RPC —— 例如 URL 誤填為一般網頁端點）、`{ kind: "connectionFailed", message }`（DNS/TCP/TLS 等傳輸層錯誤）
 
-前端 IPC 呼叫 SHALL 集中於 `App.tsx`，`McpConfigView` 為純顯示的內嵌內容元件（不自帶卡片外框），由 `AgentsConfigView` 的 MCP 頁籤容器渲染，並可由 scope prop 同時服務全域 Agents 頁與專案分區／全域分區；所有操作成功／失敗 SHALL 以 toast 回饋，介面文字 SHALL 全部經 i18n（zh-TW 與 en-US）。
+前端 IPC 呼叫 SHALL 集中於 `App.tsx`（含 `test_mcp_http_server`，不得由子元件直接 `invoke()`），`McpConfigView` 為純顯示的內嵌內容元件（不自帶卡片外框），由 `AgentsConfigView` 的 MCP 頁籤容器渲染，並可由 scope prop 同時服務全域 Agents 頁與專案分區／全域分區；所有操作成功／失敗 SHALL 以 toast 回饋，介面文字 SHALL 全部經 i18n（zh-TW 與 en-US）。測試連線例外：其分類結果（成功／認證失敗／回應非預期／連線失敗）SHALL 直接顯示於編輯視窗內，不透過 toast；僅 IPC 呼叫本身的例外（非分類結果）才視為失敗。
 
 #### Scenario: 未知 provider 被拒絕
 
@@ -214,3 +359,8 @@ codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使�
 
 - **WHEN** 任一 upsert / delete / toggle 操作成功
 - **THEN** 前端使 `mcp-configs` query 失效並重新載入清單，顯示成功 toast
+
+#### Scenario: 測試連線不影響清單快取
+
+- **WHEN** 使用者觸發測試連線
+- **THEN** 不進行任何 query invalidation，也不寫入任何設定檔

@@ -26,6 +26,7 @@ import type {
   ToolAvailability,
 } from "../types";
 import { AgentsConfigView, type AgentsScopeDataBundle } from "./AgentsConfigView";
+import type { McpConnectionTestResult } from "./McpConfigView";
 import { ProjectAnalyticsTab } from "./ProjectAnalyticsTab";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
@@ -145,6 +146,7 @@ type Props = {
   ) => Promise<unknown>;
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
+  onTestMcpConnection: (url: string, headers: Record<string, string>) => Promise<McpConnectionTestResult>;
   codexTrusted: boolean;
   onAgentsTabChange: (tab: "agents-md" | "skills" | "commands" | "mcp") => void;
   globalAgentsData: AgentsScopeDataBundle;
@@ -286,6 +288,7 @@ export function ProjectView({
   onUpsertMcpServer,
   onDeleteMcpServer,
   onSetMcpServerEnabled,
+  onTestMcpConnection,
   codexTrusted,
   onAgentsTabChange,
   globalAgentsData,
@@ -944,6 +947,7 @@ export function ProjectView({
           onUpsertMcpServer={onUpsertMcpServer}
           onDeleteMcpServer={onDeleteMcpServer}
           onSetMcpServerEnabled={onSetMcpServerEnabled}
+          onTestMcpConnection={onTestMcpConnection}
           codexTrusted={codexTrusted}
           onActiveTabChange={onAgentsTabChange}
           globalData={globalAgentsData}

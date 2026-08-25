@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use crate::mcp_config::{
     delete_mcp_server_internal, is_codex_project_trusted, list_mcp_configs_with_providers,
-    set_mcp_server_enabled_internal, upsert_mcp_server_internal, McpProviderConfig, McpScope,
+    set_mcp_server_enabled_internal, test_mcp_http_connection, upsert_mcp_server_internal,
+    McpConnectionTestResult, McpProviderConfig, McpScope,
 };
 
 #[tauri::command]
@@ -65,3 +68,14 @@ pub async fn check_codex_project_trust(project_cwd: String) -> Result<bool, Stri
         .await
         .map_err(|error| format!("failed to join codex trust check task: {error}"))?
 }
+
+#[tauri::command]
+pub async fn test_mcp_http_server(
+    url: String,
+    headers: BTreeMap<String, String>,
+) -> Result<McpConnectionTestResult, String> {
+    tauri::async_runtime::spawn_blocking(move || test_mcp_http_connection(&url, &headers))
+        .await
+        .map_err(|error| format!("failed to join MCP connection test task: {error}"))
+}
+
