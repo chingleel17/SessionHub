@@ -8,7 +8,9 @@ import {
   ChevronRight,
   CircleDot,
   Clipboard,
+  CopyPlus,
   Eye,
+  EyeOff,
   ExternalLink,
   FilePenLine,
   FileText,
@@ -22,10 +24,12 @@ import {
   Pin,
   PinOff,
   Plug,
+  Plus,
   RefreshCw,
   Save,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Repeat2,
   Tags,
@@ -71,6 +75,7 @@ export const FolderOpenIcon = withDefaults(FolderOpen);
 export const FocusIcon = withDefaults(CircleDot);
 export const SearchIcon = withDefaults(Search);
 export const EyeIcon = withDefaults(Eye);
+export const EyeOffIcon = withDefaults(EyeOff);
 export const SyncIcon = withDefaults(Repeat2);
 export const DashboardIcon = withDefaults(LayoutDashboard);
 export const SettingsIcon = withDefaults(Settings);
@@ -79,3 +84,6 @@ export const CloseIcon = withDefaults(X);
 export const ChevronRightIcon = withDefaults(ChevronRight);
 export const LockIcon = withDefaults(Lock);
 export const MoveIcon = withDefaults(Move);
+export const CopyToIcon = withDefaults(CopyPlus);
+export const AutoDetectIcon = withDefaults(Sparkles);
+export const AddIcon = withDefaults(Plus);

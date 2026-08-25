@@ -48,6 +48,7 @@ import { useSessionRealtimeEvents } from "./hooks/useSessionRealtimeEvents";
 import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useAppSettingsForm";
 
 import { AgentsConfigView, type AgentsScopeDataBundle } from "./components/AgentsConfigView";
+import type { McpConnectionTestResult } from "./components/McpConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
@@ -1076,6 +1077,13 @@ function App() {
     },
   });
 
+  // 測試連線不寫入任何設定，也不做 query invalidation；成功/失敗皆回傳分類結果供編輯視窗內顯示，
+  // 不透過 toast（唯有連線層級以外的例外，如 IPC 本身失敗，才會 reject）。
+  const testMcpHttpServerMutation = useMutation({
+    mutationFn: (params: { url: string; headers: Record<string, string> }) =>
+      invoke<McpConnectionTestResult>("test_mcp_http_server", params),
+  });
+
   const claudeHookInstalled = (settingsQuery.data?.providerIntegrations ?? [])
     .some((i) => i.provider === "claude" && i.status === "installed");
 
@@ -1930,6 +1938,7 @@ function App() {
       deleteMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name }),
     onSetMcpServerEnabled: (provider, name, enabled) =>
       setMcpServerEnabledMutation.mutateAsync({ scope: { kind: "global" }, provider, name, enabled }),
+    onTestMcpConnection: (url, headers) => testMcpHttpServerMutation.mutateAsync({ url, headers }),
   };
 
   // 全域 Agents 檢視（含 MCP 頁籤）：獨立元件，供全域 Agents 頁（agents-global）渲染。
@@ -2145,6 +2154,7 @@ function App() {
                   enabled,
                 })
               }
+              onTestMcpConnection={(url, headers) => testMcpHttpServerMutation.mutateAsync({ url, headers })}
               codexTrusted={codexProjectTrustQuery.data ?? false}
               onAgentsTabChange={(tab) => {
                 if (activeProject) {

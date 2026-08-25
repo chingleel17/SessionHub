@@ -582,6 +582,7 @@ pub fn run() {
             delete_mcp_server,
             set_mcp_server_enabled,
             check_codex_project_trust,
+            test_mcp_http_server,
             get_intervention_list
         ])
         .run(tauri::generate_context!())

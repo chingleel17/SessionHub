@@ -2676,6 +2676,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   box-shadow: var(--shadow-float);
 }
 
+/* 不透明變體：內容較密集（表單、長文字）的對話框，毛玻璃透明度會影響可讀性時使用 */
+.dialog-card--solid {
+  background: var(--color-surface-panel);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .dialog-card h3 {
   margin: 0 0 12px;
 }
@@ -5404,7 +5411,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
-  background: var(--color-surface-panel);
 }
 
 .agents-preview-modal .agents-detail-header {
@@ -5560,6 +5566,53 @@ html.embedded-quota-view .quota-overlay-no-drag {
   vertical-align: middle;
 }
 
+/* 名稱／摘要欄可彈性伸縮並各自截斷；狀態欄需容納最多 4 個 agents-status-pill（每個
+   min-width 78px），給足寬度讓其中 2 個可並排一行，避免堆疊過高；操作欄依內容
+   （文字鈕＋3 icon）自然撐開。避免 table-layout: fixed 沿用 agents-matrix-table
+   的 30% 首欄寬度造成表頭錯位。
+   表頭（th）一律置中（含第一欄，覆寫 agents-matrix-table 對首欄的靠左規則）；
+   內容（td）依欄位性質各自靠左，方便閱讀名稱／指令文字。 */
+.mcp-server-table th:first-child {
+  text-align: center;
+}
+
+.mcp-server-table th:first-child,
+.mcp-server-table td:first-child {
+  width: 18%;
+}
+
+.mcp-server-table td:first-child {
+  text-align: left;
+}
+
+.mcp-server-table th:nth-child(2),
+.mcp-server-table td:nth-child(2) {
+  width: 200px;
+}
+
+.mcp-server-table td:nth-child(2) .settings-actions {
+  justify-content: center;
+}
+
+.mcp-server-table th:nth-child(3),
+.mcp-server-table td:nth-child(3) {
+  width: auto;
+}
+
+.mcp-server-table td:nth-child(3) {
+  text-align: left;
+}
+
+.mcp-server-table th:last-child,
+.mcp-server-table td:last-child {
+  width: 250px;
+  white-space: nowrap;
+}
+
+.mcp-server-table td:last-child {
+  text-align: left;
+}
+
 .mcp-server-summary {
   display: inline-block;
   max-width: 100%;
@@ -5572,10 +5625,56 @@ html.embedded-quota-view .quota-overlay-no-drag {
   color: var(--color-text-secondary);
 }
 
+.mcp-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.mcp-row-clickable {
+  cursor: pointer;
+}
+
+.mcp-row-actions > * {
+  flex-shrink: 0;
+}
+
+/* 啟用用綠色強調（正向動作）；停用刻意不用紅色，避免與刪除鈕的危險語意搶戲，
+   改用中性強調色。文字色沿用 agents-status-pill--done 已驗證過的深綠 #0d7c52，
+   避免 --color-status-success 原色 (#31b46e) 在淺色底上對比不足。 */
+.mcp-toggle-button--enable {
+  border-color: rgba(13, 124, 82, 0.35);
+  background: rgba(33, 191, 115, 0.1);
+  color: #0d7c52;
+}
+
+.mcp-toggle-button--enable:hover:not(:disabled) {
+  border-color: rgba(13, 124, 82, 0.55);
+  background: rgba(33, 191, 115, 0.18);
+  color: #0d7c52;
+}
+
+.mcp-toggle-button--disable {
+  border-color: var(--color-border-subtle);
+  background: rgba(90, 103, 128, 0.1);
+  color: var(--color-text-primary);
+}
+
+.mcp-toggle-button--disable:hover:not(:disabled) {
+  border-color: var(--color-action-primary-subtle-border);
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-text-primary);
+}
+
 .mcp-editor-dialog {
   width: min(560px, 100%);
   max-height: min(80vh, 720px);
   overflow-y: auto;
+}
+
+.mcp-copy-dialog {
+  width: min(440px, 100%);
 }
 
 .mcp-editor-fields {
@@ -5583,6 +5682,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   flex-direction: column;
   gap: 12px;
   margin-top: 12px;
+}
+
+.mcp-editor-config-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .mcp-editor-textarea {
@@ -5598,10 +5704,61 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-size: 12.5px;
 }
 
+.mcp-editor-headers-empty {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.mcp-editor-header-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-editor-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-editor-header-key,
+.mcp-editor-header-value {
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+}
+
 .mcp-editor-error {
   margin-top: 10px;
   color: var(--color-danger, #e05c3d);
   font-size: 13px;
+}
+
+.mcp-editor-actions {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mcp-editor-test-group,
+.mcp-editor-confirm-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mcp-editor-test-result {
+  font-size: 13px;
+}
+
+.mcp-editor-test-result--ok {
+  color: var(--color-status-success);
+}
+
+.mcp-editor-test-result--error {
+  color: var(--color-status-error);
 }
 
 .agents-matrix-item-cell {

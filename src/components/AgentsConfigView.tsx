@@ -28,7 +28,7 @@ import { buildAgentsMdTree } from "../utils/buildTree";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { ContentViewer } from "./ContentViewer";
 import { ExplorerTree } from "./ExplorerTree";
-import { McpConfigView } from "./McpConfigView";
+import { McpConfigView, type McpConnectionTestResult } from "./McpConfigView";
 import {
   ChevronLeftIcon,
   EditNotesIcon,
@@ -74,6 +74,7 @@ export type AgentsScopeDataBundle = {
   ) => Promise<unknown>;
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
+  onTestMcpConnection: (url: string, headers: Record<string, string>) => Promise<McpConnectionTestResult>;
   codexTrusted?: boolean;
   onActiveTabChange?: (tab: AgentsTab) => void;
 };
@@ -588,6 +589,7 @@ export function AgentsConfigView(props: Props) {
         onUpsert: data.onUpsertMcpServer,
         onDelete: data.onDeleteMcpServer,
         onSetEnabled: data.onSetMcpServerEnabled,
+        onTestConnection: data.onTestMcpConnection,
         codexTrusted: data.codexTrusted,
       }))}
       onOpenExternal={onOpenExternal}
@@ -682,7 +684,7 @@ export function AgentsConfigView(props: Props) {
 
       {previewNode?.filePath ? (
         <div className="dialog-backdrop">
-          <article className="dialog-card agents-preview-modal">
+          <article className="dialog-card dialog-card--solid agents-preview-modal">
             <div className="agents-detail-header">
               <button type="button" className="ghost-button agents-detail-back" onClick={closeDetail}>
                 <ChevronLeftIcon size={16} />

@@ -797,6 +797,68 @@ fn normalize_display_path(path: &Path) -> String {
     path.to_string_lossy().replace('/', "\\")
 }
 
+// ---------- HTTP / SSE 連線測試 ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum McpConnectionTestResult {
+    /// 成功建立連線並取得 MCP initialize 回應
+    Ok,
+    /// 認證失敗（401 / 403）
+    Unauthorized,
+    /// 連線建立但回應非預期（非 JSON-RPC 或狀態碼異常）
+    UnexpectedResponse { status: u16 },
+    /// 無法建立連線（DNS、TCP、TLS 等傳輸層錯誤）
+    ConnectionFailed { message: String },
+}
+
+const MCP_TEST_TIMEOUT_SECS: u64 = 5;
+
+/// 對 HTTP / SSE 類型的 MCP server 送出 JSON-RPC `initialize` 請求，驗證連線是否可用。
+pub(crate) fn test_mcp_http_connection(
+    url: &str,
+    headers: &BTreeMap<String, String>,
+) -> McpConnectionTestResult {
+    let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_secs(MCP_TEST_TIMEOUT_SECS)))
+        .build()
+        .new_agent();
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "session-hub", "version": env!("CARGO_PKG_VERSION") }
+        }
+    });
+
+    let mut request = agent
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream");
+    for (key, value) in headers {
+        request = request.header(key.as_str(), value.as_str());
+    }
+
+    match request.send_json(&body) {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match status {
+                200..=299 => McpConnectionTestResult::Ok,
+                401 | 403 => McpConnectionTestResult::Unauthorized,
+                other => McpConnectionTestResult::UnexpectedResponse { status: other },
+            }
+        }
+        Err(error) => McpConnectionTestResult::ConnectionFailed {
+            message: error.to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

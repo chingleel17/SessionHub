@@ -102,3 +102,17 @@ primary 與 danger 等白色（淺色）文字按鈕的 hover 樣式 SHALL 使�
 
 - **WHEN** 使用者點擊 refresh 圖示按鈕
 - **THEN** 觸發與原文字按鈕相同的 quota 手動刷新行為
+
+### Requirement: 對話框不透明變體
+
+共用 `dialog-card` 元件 SHALL 提供 `dialog-card--solid` modifier class，套用時背景改為不透明的 `--color-surface-panel`（`background`）並移除 `backdrop-filter`，覆寫預設的毛玻璃透明樣式。內容較密集（表單、長文字內容）的對話框 SHALL 使用此變體，以避免透明背景影響可讀性；一般提示性對話框（confirm、簡短訊息）維持預設的毛玻璃樣式不變。
+
+#### Scenario: 套用不透明變體
+
+- **WHEN** 對話框的 `dialog-card` 元素額外套用 `dialog-card--solid`
+- **THEN** 該對話框背景為不透明色，不透出其後方內容，且無模糊效果
+
+#### Scenario: 未套用變體時維持預設樣式
+
+- **WHEN** 對話框僅使用 `dialog-card`（未加 `dialog-card--solid`）
+- **THEN** 維持原本的半透明毛玻璃背景與 backdrop blur
