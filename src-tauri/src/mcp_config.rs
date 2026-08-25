@@ -845,11 +845,20 @@ pub(crate) fn test_mcp_http_connection(
     }
 
     match request.send_json(&body) {
-        Ok(response) => {
+        Ok(mut response) => {
             let status = response.status().as_u16();
             match status {
-                200..=299 => McpConnectionTestResult::Ok,
                 401 | 403 => McpConnectionTestResult::Unauthorized,
+                200..=299 => {
+                    // 僅有 2xx 不足以判定成功：誤填為一般網頁端點時同樣回 2xx。
+                    // 依 spec 需確認回應確實為 MCP 的 JSON-RPC 結果。
+                    let payload = response.body_mut().read_to_string().unwrap_or_default();
+                    if is_json_rpc_response(&payload) {
+                        McpConnectionTestResult::Ok
+                    } else {
+                        McpConnectionTestResult::UnexpectedResponse { status }
+                    }
+                }
                 other => McpConnectionTestResult::UnexpectedResponse { status: other },
             }
         }
@@ -857,6 +866,37 @@ pub(crate) fn test_mcp_http_connection(
             message: error.to_string(),
         },
     }
+}
+
+/// 判斷回應內容是否為合法的 JSON-RPC 回應。
+///
+/// MCP 的 Streamable HTTP 傳輸允許兩種回應格式，故兩者皆需支援：
+/// - `application/json`：整個 body 即為 JSON-RPC 物件
+/// - `text/event-stream`：SSE 事件串流，JSON-RPC 物件位於 `data:` 欄位
+fn is_json_rpc_response(payload: &str) -> bool {
+    if payload.trim().is_empty() {
+        return false;
+    }
+
+    if is_json_rpc_object(payload) {
+        return true;
+    }
+
+    // SSE：逐行取出 `data:` 欄位內容判斷。單一事件的 data 可跨多行，
+    // 但 MCP 的 JSON-RPC 回應實務上為單行，逐行檢查已足夠。
+    payload
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .any(is_json_rpc_object)
+}
+
+/// 判斷單段文字是否為帶 `jsonrpc` 欄位、且含 `result` 或 `error` 的 JSON-RPC 物件。
+fn is_json_rpc_object(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return false;
+    };
+    value.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0")
+        && (value.get("result").is_some() || value.get("error").is_some())
 }
 
 #[cfg(test)]
@@ -1223,5 +1263,31 @@ mod tests {
         )
         .expect("list unsupported provider");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn json_rpc_response_accepts_result_and_error_payloads() {
+        assert!(is_json_rpc_response(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#
+        ));
+        assert!(is_json_rpc_response(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}"#));
+    }
+
+    #[test]
+    fn json_rpc_response_accepts_sse_event_stream() {
+        let payload = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+        assert!(is_json_rpc_response(payload));
+    }
+
+    #[test]
+    fn json_rpc_response_rejects_non_mcp_payloads() {
+        // 誤填為一般網頁端點：回 2xx 但內容為 HTML
+        assert!(!is_json_rpc_response("<!doctype html><html><body>hi</body></html>"));
+        // 合法 JSON 但非 JSON-RPC
+        assert!(!is_json_rpc_response(r#"{"status":"ok"}"#));
+        // 有 jsonrpc 欄位但缺少 result / error
+        assert!(!is_json_rpc_response(r#"{"jsonrpc":"2.0","id":1}"#));
+        // 空回應
+        assert!(!is_json_rpc_response("   "));
     }
 }

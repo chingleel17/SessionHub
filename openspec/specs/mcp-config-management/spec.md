@@ -224,6 +224,11 @@ HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對�
 - **WHEN** 目標端點回傳 401 或 403
 - **THEN** 顯示「認證失敗」
 
+#### Scenario: 回應狀態正常但內容非 MCP 端點
+
+- **WHEN** 目標 URL 回傳 2xx，但回應內容非合法 JSON-RPC（例如 URL 誤填為該網域的一般網頁）
+- **THEN** 顯示「回應非預期」並附狀態碼，SHALL NOT 判定為連線正常
+
 #### Scenario: 修改欄位後清除舊結果
 
 - **WHEN** 使用者於測試連線後修改 URL 或任一 Header
@@ -341,7 +346,7 @@ HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對�
 - `delete_mcp_server(scope, provider, name)`
 - `set_mcp_server_enabled(scope, provider, name, enabled)`
 - `check_codex_project_trust(projectCwd) -> bool`：回傳該專案是否已被 codex 信任，僅 project scope 的 codex 分頁使用
-- `test_mcp_http_server(url, headers) -> McpConnectionTestResult`：不帶 `scope`（不涉及任何設定檔讀寫），對指定 URL 送出 MCP JSON-RPC `initialize` 請求以驗證 HTTP/SSE 類型連線是否可用，逾時 5 秒。回傳值為以 `kind` 欄位區分的聯集：`{ kind: "ok" }`（2xx 且回應為合法 JSON-RPC 結果）、`{ kind: "unauthorized" }`（401/403）、`{ kind: "unexpectedResponse", status }`（其他非預期狀態碼）、`{ kind: "connectionFailed", message }`（DNS/TCP/TLS 等傳輸層錯誤）
+- `test_mcp_http_server(url, headers) -> McpConnectionTestResult`：不帶 `scope`（不涉及任何設定檔讀寫），對指定 URL 送出 MCP JSON-RPC `initialize` 請求以驗證 HTTP/SSE 類型連線是否可用，逾時 5 秒。回傳值為以 `kind` 欄位區分的聯集：`{ kind: "ok" }`（2xx 且回應為合法 JSON-RPC 結果）、`{ kind: "unauthorized" }`（401/403）、`{ kind: "unexpectedResponse", status }`（其他非預期狀態碼，或狀態碼為 2xx 但回應內容非合法 JSON-RPC —— 例如 URL 誤填為一般網頁端點）、`{ kind: "connectionFailed", message }`（DNS/TCP/TLS 等傳輸層錯誤）
 
 前端 IPC 呼叫 SHALL 集中於 `App.tsx`（含 `test_mcp_http_server`，不得由子元件直接 `invoke()`），`McpConfigView` 為純顯示的內嵌內容元件（不自帶卡片外框），由 `AgentsConfigView` 的 MCP 頁籤容器渲染，並可由 scope prop 同時服務全域 Agents 頁與專案分區／全域分區；所有操作成功／失敗 SHALL 以 toast 回饋，介面文字 SHALL 全部經 i18n（zh-TW 與 en-US）。測試連線例外：其分類結果（成功／認證失敗／回應非預期／連線失敗）SHALL 直接顯示於編輯視窗內，不透過 toast；僅 IPC 呼叫本身的例外（非分類結果）才視為失敗。
 
