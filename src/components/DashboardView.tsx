@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
+import { compareProviders } from "../utils/providerOrder";
 import type {
   AnalyticsDataPoint,
   ProjectGroup,
@@ -27,6 +28,7 @@ type Props = {
   onOpenRecentSession: (session: SessionInfo) => void;
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
+  launchingTarget: string | null;
   onFocusTerminal: (session: SessionInfo) => void;
   viewMode: "list" | "kanban";
   onViewModeChange: (mode: "list" | "kanban") => void;
@@ -114,6 +116,7 @@ function KanbanProjectCard({
   sessions,
   activityStatusMap,
   onResumeSession,
+  launchingTarget,
   onFocusTerminal,
   onOpenProject,
 }: {
@@ -123,12 +126,13 @@ function KanbanProjectCard({
   sessions: SessionInfo[];
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
+  launchingTarget: string | null;
   onFocusTerminal: (session: SessionInfo) => void;
   onOpenProject: (key: string) => void;
 }) {
   const { t } = useI18n();
 
-  const providers = [...new Set(sessions.map((s) => s.provider))];
+  const providers = [...new Set(sessions.map((s) => s.provider))].sort(compareProviders);
   const visibleProviders = providers.slice(0, PROVIDERS_PER_PROJECT_CARD);
   const hiddenProviders = providers.slice(PROVIDERS_PER_PROJECT_CARD);
   const lastUpdated = sessions
@@ -194,10 +198,12 @@ function KanbanProjectCard({
                 <button
                   type="button"
                   className="kanban-action-btn"
+                  disabled={launchingTarget !== null}
+                  aria-busy={launchingTarget === `session:${session.id}` || undefined}
                   onClick={(e) => { e.stopPropagation(); onResumeSession(session); }}
-                  title={t("session.actions.openTool")}
+                  title={launchingTarget === `session:${session.id}` ? t("session.actions.opening") : t("session.actions.openTool")}
                 >
-                  ▶
+                  {launchingTarget === `session:${session.id}` ? <span className="ui-button-spinner" aria-hidden="true" /> : "▶"}
                 </button>
                 <button
                   type="button"
@@ -233,12 +239,14 @@ function KanbanBoard({
   groupedProjects,
   activityStatusMap,
   onResumeSession,
+  launchingTarget,
   onFocusTerminal,
   onOpenProject,
 }: {
   groupedProjects: ProjectGroup[];
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
+  launchingTarget: string | null;
   onFocusTerminal: (session: SessionInfo) => void;
   onOpenProject: (key: string) => void;
 }) {
@@ -347,6 +355,7 @@ function KanbanBoard({
                   sessions={bucket.sessions}
                   activityStatusMap={activityStatusMap}
                   onResumeSession={onResumeSession}
+                  launchingTarget={launchingTarget}
                   onFocusTerminal={onFocusTerminal}
                   onOpenProject={onOpenProject}
                 />
@@ -399,6 +408,7 @@ export function DashboardView({
   onOpenRecentSession,
   activityStatusMap,
   onResumeSession,
+  launchingTarget,
   onFocusTerminal,
   viewMode,
   onViewModeChange,
@@ -526,6 +536,7 @@ export function DashboardView({
           groupedProjects={groupedProjects}
           activityStatusMap={activityStatusMap}
           onResumeSession={onResumeSession}
+          launchingTarget={launchingTarget}
           onFocusTerminal={onFocusTerminal}
           onOpenProject={onOpenProject}
         />

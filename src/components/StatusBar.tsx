@@ -5,6 +5,7 @@ import type { MessageKey } from "../locales/zh-TW";
 import type { BridgeEventLogEntry, ProviderQuota, QuotaSnapshot } from "../types";
 import { getProviderAbbr } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { compareProviders } from "../utils/providerOrder";
 
 import { QuotaOverview } from "./QuotaOverview";
 
@@ -235,17 +236,21 @@ export function StatusBar({
   const [isQuotaPopupOpen, setIsQuotaPopupOpen] = useState(false);
   const quotaPopupRef = useRef<HTMLDivElement | null>(null);
   const dash = isLoadingSessions ? "-" : undefined;
-  const activeQuotas = providerQuotas.filter(
-    (q) =>
-      quotaEnabledProviders.includes(q.provider) &&
-      (q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0),
-  );
-  const visibleSnapshots = quotaSnapshots.filter(
-    (s) =>
-      s.status === "ok" &&
-      (s.source === "remote_api" || s.provider === "antigravity") &&
-      quotaEnabledProviders.includes(s.provider),
-  );
+  const activeQuotas = providerQuotas
+    .filter(
+      (q) =>
+        quotaEnabledProviders.includes(q.provider) &&
+        (q.inputTokens > 0 || q.outputTokens > 0 || q.costUsd > 0),
+    )
+    .sort((left, right) => compareProviders(left.provider, right.provider));
+  const visibleSnapshots = quotaSnapshots
+    .filter(
+      (s) =>
+        s.status === "ok" &&
+        (s.source === "remote_api" || s.provider === "antigravity") &&
+        quotaEnabledProviders.includes(s.provider),
+    )
+    .sort((left, right) => compareProviders(left.provider, right.provider));
   const hasQuotaContent = activeQuotas.length > 0 || visibleSnapshots.length > 0;
 
   useEffect(() => {

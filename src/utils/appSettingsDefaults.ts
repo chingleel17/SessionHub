@@ -1,4 +1,5 @@
 import type { AppSettings } from "../types";
+import { PROVIDER_DISPLAY_ORDER } from "./providerOrder";
 
 type RequiredKeys = "copilotRoot" | "opencodeRoot" | "codexRoot" | "showArchived" | "enabledProviders";
 
@@ -24,7 +25,7 @@ export const DEFAULT_APP_SETTINGS: Required<Omit<AppSettings, RequiredKeys>> = {
   claudeMonthlyLimitTokens: null,
   claudeMonthlyLimitUsd: null,
   enableQuotaMonitoring: true,
-  quotaEnabledProviders: ["claude", "copilot", "opencode", "codex", "antigravity"],
+  quotaEnabledProviders: [...PROVIDER_DISPLAY_ORDER],
   allowCreateProjectConfigDir: false,
   agentsSourceRoot: "",
   trayQuotaMode: "icon_only",

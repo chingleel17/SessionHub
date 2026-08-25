@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { McpProviderConfig, McpScope, McpServerEntry } from "../types";
+import { compareProviders } from "../utils/providerOrder";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ExternalLinkIcon, FolderIcon, RefreshIcon } from "./Icons";
 import { CollapsibleSection } from "./CollapsibleSection";
@@ -252,7 +253,13 @@ function assembleConfig(
 
 export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
   const { t } = useI18n();
-  const providerIds = useMemo(() => groups.flatMap((group) => group.providers.map((provider) => provider.providerId)).filter((id, index, all) => all.indexOf(id) === index), [groups]);
+  const providerIds = useMemo(
+    () => groups
+      .flatMap((group) => group.providers.map((provider) => provider.providerId))
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .sort(compareProviders),
+    [groups],
+  );
   const [activeProvider, setActiveProvider] = useState<string>(() => {
     const stored = window.localStorage.getItem(getActiveProviderStorageKey());
     return stored ?? "";
@@ -508,7 +515,7 @@ function McpProviderPanel({
       {inlineHeader ? (
         <div className="mcp-inline-header">
           {currentConfig?.configPath ? (
-            <span className="mcp-inline-header-path">{currentConfig.configPath}</span>
+            <span className="mcp-inline-header-path path-text path-text--truncate">{currentConfig.configPath}</span>
           ) : null}
           <McpHeaderActions
             configPath={currentConfig?.configPath}

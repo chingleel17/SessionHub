@@ -1,8 +1,4 @@
-## Purpose
-
-定義 SessionHub 的 shell 與 herdr 終端啟動分派、啟動參數、錯誤處理、驗證及多工具啟動環境行為。
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: herdr client console 生命週期
 
@@ -95,97 +91,7 @@ herdr 為 server（headless）+ client（TUI）雙程序架構，socket API 呼�
 - **WHEN** 啟動前 herdr server 已在執行中
 - **THEN** 系統不進行就緒輪詢，直接進入 tab 建立流程
 
-### Requirement: 終端執行檔驗證
-
-系統 SHALL 在儲存設定前驗證使用者指定的終端執行檔路徑，驗證方式依終端啟動器種類而異。
-
-#### Scenario: 有效的終端路徑
-
-- **WHEN** 啟動器為 shell 且使用者輸入終端路徑並儲存
-- **THEN** 系統驗證路徑對應的可執行檔存在
-
-#### Scenario: herdr 啟動器允許 PATH 解析的指令名
-
-- **WHEN** 啟動器為 herdr 且指定的啟動指令為不含目錄的裸指令名
-- **THEN** 系統以 PATH 解析該指令是否可用，不要求其為可瀏覽的檔案路徑
-- **AND** 解析成功即視為通過驗證
-
-#### Scenario: herdr 指令無法解析
-
-- **WHEN** 啟動器為 herdr 且指定的指令在 PATH 與檔案系統中皆無法解析
-- **THEN** 系統回報驗證失敗，並提示 herdr 不可用
-
-### Requirement: 終端類型白名單與啟動參數
-
-在 shell 啟動器模式下，系統 SHALL 依終端類型（pwsh / cmd / bash）選用對應的啟動參數，以 file_stem 白名單識別終端類型。此白名單在 herdr 啟動器模式下不適用。
-
-#### Scenario: 識別 PowerShell
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem（不含副檔名）為 `pwsh` 或 `powershell`
-- **THEN** 以 `-NoExit -Command cd '<cwd>'` 啟動並切換目錄
-
-#### Scenario: 識別 cmd
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `cmd`
-- **THEN** 以 `/K cd /d <cwd>` 啟動並切換目錄
-
-#### Scenario: 識別 bash / sh / zsh
-
-- **WHEN** 啟動器為 shell 且 terminal_path 的 file_stem 為 `bash` 或 `sh`，且以純終端方式啟動
-- **THEN** 以 `-i` 啟動
-
-#### Scenario: 未知終端類型
-
-- **WHEN** 啟動器為 shell 且 file_stem 不在白名單內，或以既有 shell 啟動器送出初始指令
-- **THEN** 以 `-NoExit -Command cd '<cwd>'` 啟動；若有初始指令，於目錄切換後以 `cd '<cwd>'; <command>` 執行
-
-#### Scenario: herdr 模式不套用白名單
-
-- **WHEN** 啟動器為 herdr
-- **THEN** 系統不依 `terminal_path` 的 file_stem 推導啟動參數
-
-### Requirement: 依 provider 類型提供複製指令
-
-系統 SHALL 在 session 操作中提供「複製啟動指令」功能，指令格式依 session 的 provider 而異。
-
-#### Scenario: Copilot session 複製指令
-
-- **WHEN** 使用者點擊 Copilot session 的「複製指令」
-- **THEN** 複製 `gh copilot session resume <session-id>` 至剪貼簿
-
-#### Scenario: OpenCode session 複製指令
-
-- **WHEN** 使用者點擊 OpenCode session 的「複製指令」
-- **THEN** 複製 `opencode --session <session-id>` 至剪貼簿
-
-### Requirement: 多工具啟動指令路由
-
-系統 SHALL 在 `open_in_tool` command 中依 tool_type 決定啟動邏輯，統一處理所有工具的啟動參數，並在決定啟動參數後依當前啟動器種類送出。
-
-#### Scenario: terminal 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `terminal`
-- **THEN** 依當前啟動器開啟終端（shell 模式套用 terminal_path + file_stem 白名單；herdr 模式建立 tab）
-
-#### Scenario: opencode 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `opencode`
-- **THEN** 在啟動器提供的終端環境中執行 `opencode --cwd <cwd>`
-
-#### Scenario: gh-copilot 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `gh-copilot` 且 session_id 不為空
-- **THEN** 在啟動器提供的終端環境中執行 `gh copilot session resume <session_id>`
-
-#### Scenario: gemini 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `gemini`
-- **THEN** 在啟動器提供的終端環境中執行 `gemini`，工作目錄設為 cwd
-
-#### Scenario: explorer 類型路由
-
-- **WHEN** open_in_tool 收到 tool_type 為 `explorer`
-- **THEN** 直接 spawn `explorer.exe <cwd>`，不開啟終端視窗
+## MODIFIED Requirements
 
 ### Requirement: 終端啟動器種類分派
 
@@ -206,40 +112,6 @@ herdr 為 server（headless）+ client（TUI）雙程序架構，socket API 呼�
 
 - **WHEN** `terminal_launcher` 的值不在支援清單內
 - **THEN** 系統以 `"shell"` 行為啟動，不中斷使用者操作
-
-### Requirement: herdr 兩段式啟動流程
-
-在 herdr 啟動器模式下，系統 SHALL 先建立 tab 取得目標 pane 識別碼，再將啟動指令送入該 pane。
-
-#### Scenario: 開啟純終端
-
-- **WHEN** 使用者以 herdr 啟動器開啟終端且無初始指令
-- **THEN** 系統建立一個工作目錄為目標 cwd 的 herdr tab
-- **AND** 不再送出額外指令
-
-#### Scenario: 啟動 AI coding CLI
-
-- **WHEN** 使用者以 herdr 啟動器啟動某個 AI coding CLI（如 claude／codex／copilot／opencode／gemini）
-- **THEN** 系統建立工作目錄為目標 cwd 的 herdr tab
-- **AND** 自建立結果取得該 tab 的 pane 識別碼
-- **AND** 將該 CLI 的啟動指令送入該 pane 執行
-
-#### Scenario: 恢復既有 session
-
-- **WHEN** 使用者以 herdr 啟動器恢復某個 session
-- **THEN** 系統建立 tab 後，將對應 provider 的 resume 指令送入該 pane 執行
-
-#### Scenario: tab 標示
-
-- **WHEN** 系統以 herdr 建立 tab
-- **THEN** 該 tab 的標籤由專案目錄名稱組成；若該次啟動對應特定工具或 provider，則標籤額外包含該工具識別
-- **AND** 標籤僅供使用者辨識，系統 SHALL NOT 以標籤作為定位 tab 的依據
-
-#### Scenario: 每次啟動建立新的 tab
-
-- **WHEN** 使用者對同一個專案或 session 重複觸發啟動
-- **THEN** 系統每次皆建立新的 tab，不重用既有 tab
-- **AND** 此行為與 shell 啟動器每次開啟新視窗的語意一致
 
 ### Requirement: herdr 不可用時的錯誤處理
 

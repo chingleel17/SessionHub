@@ -8,6 +8,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import type { InterventionItem, OverlayStyle, QuotaSnapshot } from "../types";
 import { getProviderAbbr } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { compareProviders } from "../utils/providerOrder";
 import { LockIcon, MoveIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
 
@@ -24,8 +25,6 @@ type QuotaOverlayProps = {
   onInterventionCardClick?: (sessionId: string) => void;
   onLockToggle?: () => void;
 };
-
-const PROVIDER_ORDER = ["claude", "copilot", "codex", "opencode", "antigravity"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -82,13 +81,7 @@ function getVisibleRows(
   const activeProviders = selectedProviders.length > 0 ? selectedProviders : enabledProviders;
   return snapshots
     .filter((snapshot) => activeProviders.includes(snapshot.provider) && snapshot.status !== "unsupported")
-    .sort((left, right) => {
-      const leftIndex = PROVIDER_ORDER.indexOf(left.provider as (typeof PROVIDER_ORDER)[number]);
-      const rightIndex = PROVIDER_ORDER.indexOf(right.provider as (typeof PROVIDER_ORDER)[number]);
-      const leftRank = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-      const rightRank = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-      return leftRank - rightRank || left.provider.localeCompare(right.provider);
-    });
+    .sort((left, right) => compareProviders(left.provider, right.provider));
 }
 
 /** 取 snapshot 的主要 window 用量（windows[0]，與 StatusBar / QuotaOverview 一致），無資料回 null */
@@ -236,10 +229,13 @@ export function QuotaOverlay({
   const isCompact = styleMode === "compact";
 
   return (
-    <div className="quota-overlay-window" ref={wrapperRef}>
+    <div
+      className={`quota-overlay-window${extendUp ? " quota-overlay-window--extend-up" : ""}`}
+      ref={wrapperRef}
+      style={{ "--quota-overlay-opacity": Math.min(Math.max(opacity, 0.3), 1) } as CSSProperties}
+    >
       <section
         className={`quota-overlay-root quota-overlay-root--${theme}${locked ? "" : " quota-overlay-editing"}${isCompact ? " quota-overlay-root--compact" : ""}`}
-        style={{ "--quota-overlay-opacity": Math.min(Math.max(opacity, 0.3), 1) } as CSSProperties}
         data-tauri-drag-region={!locked ? true : undefined}
         onMouseDown={(event) => {
           if (locked || event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
@@ -257,8 +253,7 @@ export function QuotaOverlay({
           </div>
         ) : null}
 
-        <div className={`quota-overlay-stack${extendUp ? " quota-overlay-stack--extend-up" : ""}`}>
-          {isCompact ? (
+        {isCompact ? (
             <div className="quota-overlay-compact-list">
               {visibleSnapshots.map((snapshot) => {
                 const abbr = getProviderAbbr(snapshot.provider);
@@ -354,37 +349,36 @@ export function QuotaOverlay({
 
               {visibleSnapshots.length === 0 ? <div className="quota-overlay-empty">{t("quota.monitoring.noData")}</div> : null}
             </div>
-          )}
-
-          {showIntervention ? (
-            <div
-              className={`quota-overlay-intervention${isCompact ? " quota-overlay-intervention--compact" : ""}`}
-              ref={interventionRef}
-            >
-              <div className="quota-overlay-intervention-title">
-                {t("quota.overlay.intervention.title", { count: interventionItems.length })}
-              </div>
-              <div className="quota-overlay-intervention-list">
-                {interventionItems.map((item) => (
-                  <button
-                    type="button"
-                    key={item.sessionId}
-                    className="quota-overlay-intervention-card quota-overlay-no-drag"
-                    onClick={() => onInterventionCardClick?.(item.sessionId)}
-                  >
-                    <span className="quota-overlay-intervention-project">
-                      {item.projectName || t("quota.overlay.intervention.unknownProject")}
-                    </span>
-                    {item.toolLabel ? (
-                      <span className="quota-overlay-intervention-tool">{item.toolLabel}</span>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
+        )}
       </section>
+
+      {showIntervention ? (
+        <section
+          className={`quota-overlay-intervention quota-overlay-intervention--${theme}${isCompact ? " quota-overlay-intervention--compact" : ""}`}
+          ref={interventionRef}
+        >
+          <div className="quota-overlay-intervention-title">
+            {t("quota.overlay.intervention.title", { count: interventionItems.length })}
+          </div>
+          <div className="quota-overlay-intervention-list">
+            {interventionItems.map((item) => (
+              <button
+                type="button"
+                key={item.sessionId}
+                className="quota-overlay-intervention-card quota-overlay-no-drag"
+                onClick={() => onInterventionCardClick?.(item.sessionId)}
+              >
+                <span className="quota-overlay-intervention-project">
+                  {item.projectName || t("quota.overlay.intervention.unknownProject")}
+                </span>
+                {item.toolLabel ? (
+                  <span className="quota-overlay-intervention-tool">{item.toolLabel}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

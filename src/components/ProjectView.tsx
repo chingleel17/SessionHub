@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
+import { compareProviders } from "../utils/providerOrder";
 import { DropdownMenu } from "./DropdownMenu";
 import type {
   AgentsMdScanResult,
@@ -33,6 +34,7 @@ import { ProjectStatsBanner } from "./ProjectStatsBanner";
 import { SessionCard } from "./SessionCard";
 import { SessionTodosTab } from "./SessionTodosTab";
 import { getProviderLabel } from "../utils/providerLabel";
+import { Button } from "./ui/Button";
 
 const FILTER_EXPANDED_STORAGE_KEY = "sessionFilterExpanded";
 
@@ -148,6 +150,7 @@ type Props = {
   globalAgentsData: AgentsScopeDataBundle;
   activityStatusMap: Map<string, SessionActivityStatus>;
   onResumeSession: (session: SessionInfo) => void;
+  launchingTarget: string | null;
   onFocusTerminal: (session: SessionInfo) => void;
   onOpenProjectInTool: (project: ProjectGroup, tool: IdeLauncherType) => void;
   defaultLauncher: string | null;
@@ -299,6 +302,7 @@ export function ProjectView({
   onFetchAnalytics,
   activityStatusMap,
   onResumeSession,
+  launchingTarget,
   onFocusTerminal,
   onOpenProjectInTool,
   defaultLauncher,
@@ -373,7 +377,7 @@ export function ProjectView({
   };
 
   const availableProviders = useMemo(
-    () => [...new Set(project.sessions.map((s) => s.provider))].sort(),
+    () => [...new Set(project.sessions.map((s) => s.provider))].sort(compareProviders),
     [project.sessions],
   );
 
@@ -561,13 +565,15 @@ export function ProjectView({
             <div className="project-launcher-spacer" />
 
             <div className="launcher-dropdown project-launcher">
-              <button
-                type="button"
-                className="ghost-button project-launcher-main-btn"
+              <Button
+                variant="secondary"
+                className="project-launcher-main-btn"
+                loading={launchingTarget === `project:${project.key}`}
+                disabled={launchingTarget !== null}
                 onClick={() => onOpenProjectInTool(project, (defaultLauncher as IdeLauncherType) || "terminal")}
               >
-                {t("project.actions.openProject")}
-              </button>
+                {launchingTarget === `project:${project.key}` ? t("project.actions.openingProject") : t("project.actions.openProject")}
+              </Button>
               <DropdownMenu
                 trigger={({ ref, onClick }) => (
                   <button
@@ -576,6 +582,7 @@ export function ProjectView({
                     className="icon-button"
                     title={t("session.actions.chooseTool")}
                     aria-label={t("session.actions.chooseTool")}
+                    disabled={launchingTarget !== null}
                     onClick={onClick}
                   >
                     ⋯
@@ -589,7 +596,7 @@ export function ProjectView({
                       key={opt.type}
                       type="button"
                       className={`dropdown-menu-item${defaultLauncher === opt.type ? " dropdown-menu-item--default" : ""}`}
-                      disabled={!available}
+                      disabled={!available || launchingTarget !== null}
                       onClick={() => { onOpenProjectInTool(project, opt.type); close(); }}
                     >
                       <span className="launcher-option-icon">{opt.icon}</span>
@@ -883,6 +890,8 @@ export function ProjectView({
                 todosLoading={Boolean(sessionTodosLoading[session.id])}
                 activityStatus={activityStatusMap.get(session.id)}
                 onResumeSession={onResumeSession}
+                isLaunching={launchingTarget === `session:${session.id}`}
+                launchDisabled={launchingTarget !== null}
                 onFocusTerminal={onFocusTerminal}
               />
             ))

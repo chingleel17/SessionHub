@@ -2,6 +2,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
 import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { compareProviders } from "../utils/providerOrder";
 import { RefreshIcon, SettingsIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
 
@@ -11,8 +12,6 @@ type TrayQuotaPanelProps = {
   onRefresh: () => void;
   onOpenSettings: () => void;
 };
-
-const PROVIDER_ORDER = ["claude", "copilot", "codex", "opencode", "antigravity"] as const;
 
 const PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -61,13 +60,7 @@ function getBarTone(utilization: number): "ok" | "warn" | "danger" {
 function sortSnapshots(snapshots: QuotaSnapshot[]): QuotaSnapshot[] {
   return [...snapshots]
     .filter((snapshot) => snapshot.status !== "unsupported")
-    .sort((left, right) => {
-      const leftIndex = PROVIDER_ORDER.indexOf(left.provider as (typeof PROVIDER_ORDER)[number]);
-      const rightIndex = PROVIDER_ORDER.indexOf(right.provider as (typeof PROVIDER_ORDER)[number]);
-      const leftRank = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-      const rightRank = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-      return leftRank - rightRank || left.provider.localeCompare(right.provider);
-    });
+    .sort((left, right) => compareProviders(left.provider, right.provider));
 }
 
 function WindowRow({ provider, window }: { provider: string; window: QuotaWindow }) {

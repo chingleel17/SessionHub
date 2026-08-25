@@ -8,21 +8,20 @@ import type {
   ToolAvailability,
 } from "../types";
 import { formatDateTime } from "../utils/formatDate";
-import { ChevronRightIcon, DeleteIcon, EditNotesIcon, FolderIcon, MoonIcon, RefreshIcon, SunIcon } from "./Icons";
+import { compareProviders, PROVIDER_DISPLAY_ORDER } from "../utils/providerOrder";
+import { CheckIcon, ChevronRightIcon, DeleteIcon, EditNotesIcon, FolderIcon, MoonIcon, RefreshIcon, SunIcon } from "./Icons";
 import { Button } from "./ui/Button";
 import { IconButton } from "./ui/IconButton";
 import { Select } from "./ui/Select";
 
 type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
-
-/** quota provider 的固定顯示順序，個別平台監控與 Overlay 清單共用 */
-const QUOTA_PROVIDER_ORDER = ["claude", "copilot", "codex", "opencode", "antigravity"] as const;
+type ProviderRootField = "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot";
 
 type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
-  onBrowseDirectory: (field: "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot" | "agentsSourceRoot") => void;
+  onBrowseDirectory: (field: ProviderRootField | "agentsSourceRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
   onDetectVscode: () => void;
@@ -120,18 +119,44 @@ function getProviderTargetPath(integration: ProviderIntegrationStatus): string |
   return bridgePath || null;
 }
 
+function getProviderRootField(provider: string): ProviderRootField | null {
+  switch (provider) {
+    case "copilot":
+      return "copilotRoot";
+    case "opencode":
+      return "opencodeRoot";
+    case "codex":
+      return "codexRoot";
+    case "claude":
+      return "claudeRoot";
+    case "antigravity":
+      return "antigravityRoot";
+    default:
+      return null;
+  }
+}
+
+function getProviderRootPath(settings: AppSettings, provider: string): string {
+  switch (provider) {
+    case "copilot":
+      return settings.copilotRoot;
+    case "opencode":
+      return settings.opencodeRoot;
+    case "codex":
+      return settings.codexRoot;
+    case "claude":
+      return settings.claudeRoot ?? "";
+    case "antigravity":
+      return settings.antigravityRoot ?? "";
+    default:
+      return "";
+  }
+}
+
 function sortProviderIntegrations(
   integrations: ProviderIntegrationStatus[],
 ): ProviderIntegrationStatus[] {
-  const providerOrder = ["copilot", "opencode", "codex"];
-
-  return [...integrations].sort((left, right) => {
-    const leftIndex = providerOrder.indexOf(left.provider);
-    const rightIndex = providerOrder.indexOf(right.provider);
-    const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-    const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-    return normalizedLeft - normalizedRight || left.provider.localeCompare(right.provider);
-  });
+  return [...integrations].sort((left, right) => compareProviders(left.provider, right.provider));
 }
 
 export function SettingsView({
@@ -184,205 +209,6 @@ export function SettingsView({
         </div>
 
         <div className="settings-form">
-          <div className="field-group">
-            <span>{t("settings.fields.enabledProviders")}</span>
-            <div className="checkbox-list">
-              {(
-                [
-                  { id: "copilot", labelKey: "settings.fields.providerCopilot", field: "copilotRoot", path: settingsForm.copilotRoot },
-                  { id: "opencode", labelKey: "settings.fields.providerOpencode", field: "opencodeRoot", path: settingsForm.opencodeRoot },
-                  { id: "codex", labelKey: "settings.fields.providerCodex", field: "codexRoot", path: settingsForm.codexRoot },
-                  { id: "claude", labelKey: "settings.fields.providerClaude", field: "claudeRoot", path: settingsForm.claudeRoot ?? "" },
-                  { id: "antigravity", labelKey: "settings.fields.providerAntigravity", field: "antigravityRoot", path: settingsForm.antigravityRoot ?? "" },
-                ] as const
-              ).map(({ id, labelKey, field, path }) => (
-                <div key={id} className="checkbox-group">
-                  <label className="checkbox-group-label">
-                    <input
-                      type="checkbox"
-                      checked={settingsForm.enabledProviders.includes(id)}
-                      onChange={(event) => {
-                        const next = event.currentTarget.checked
-                          ? [...settingsForm.enabledProviders, id]
-                          : settingsForm.enabledProviders.filter((p) => p !== id);
-                        onFormChange({ ...settingsForm, enabledProviders: next });
-                        if (event.currentTarget.checked) {
-                          onProviderAction(id, "install");
-                        }
-                      }}
-                    />
-                    <span>{t(labelKey)}</span>
-                  </label>
-                   <span className="checkbox-group-path" title={path}>{path}</span>
-                   <span className="checkbox-group-status">
-                     {providerDirectoryExists[id] === true
-                       ? t("settings.status.detected")
-                       : t("settings.status.notDetected")}
-                   </span>
-                  <IconButton
-                    label={t("settings.actions.browseDirectory")}
-                    className="checkbox-group-edit"
-                    onClick={() => onBrowseDirectory(field)}
-                  >
-                    <EditNotesIcon size={12} />
-                  </IconButton>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <label className="field-group">
-            <span>{t("settings.fields.terminalPath")}</span>
-            <div className="field-with-action field-with-action--dual-action">
-              <input
-                value={settingsForm.terminalPath ?? ""}
-                title={settingsForm.terminalPath ?? ""}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, terminalPath: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button path-action-button"
-                onClick={() => onBrowseFile("terminalPath")}
-              >
-                {t("settings.actions.browseFile")}
-              </button>
-              <button
-                type="button"
-                className="ghost-button path-action-button"
-                onClick={onDetectTerminal}
-              >
-                {t("settings.actions.detectTerminal")}
-              </button>
-            </div>
-          </label>
-
-          <div className="settings-field">
-            <label htmlFor="terminal-launcher-select">
-              {t("settings.fields.terminalLauncher")}
-              <small className="settings-field-desc">{t("settings.fields.terminalLauncherDesc")}</small>
-            </label>
-            <div className="field-with-action">
-              <Select
-                id="terminal-launcher-select"
-                className="settings-select"
-                value={settingsForm.terminalLauncher ?? "shell"}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, terminalLauncher: event.currentTarget.value })
-                }
-              >
-                <option value="shell">{t("settings.launcher.shell")}</option>
-                <option
-                  value="herdr"
-                  disabled={toolAvailability != null && !toolAvailability.herdr && settingsForm.terminalLauncher !== "herdr"}
-                >
-                  {t(
-                    toolAvailability?.herdr
-                      ? toolAvailability.herdrServerRunning
-                        ? "settings.launcher.herdr"
-                        : "settings.launcher.herdrServerStopped"
-                      : "settings.launcher.herdrMissing",
-                  )}
-                </option>
-              </Select>
-              <button type="button" className="ghost-button" onClick={onDetectTools}>
-                {t("settings.actions.detectTools")}
-              </button>
-            </div>
-          </div>
-
-          <label className="field-group">
-            <span>{t("settings.fields.externalEditorPath")}</span>
-            <div className="field-with-action field-with-action--dual-action">
-              <input
-                value={settingsForm.externalEditorPath ?? ""}
-                title={settingsForm.externalEditorPath ?? ""}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, externalEditorPath: event.currentTarget.value })
-                }
-              />
-              <button
-                type="button"
-                className="ghost-button path-action-button"
-                onClick={() => onBrowseFile("externalEditorPath")}
-              >
-                {t("settings.actions.browseFile")}
-              </button>
-              <button
-                type="button"
-                className="ghost-button path-action-button"
-                onClick={onDetectVscode}
-              >
-                {t("settings.actions.detectEditor")}
-              </button>
-            </div>
-          </label>
-
-          <label className="checkbox-group">
-            <input
-              type="checkbox"
-              checked={settingsForm.showArchived}
-              onChange={(event) =>
-                onFormChange({ ...settingsForm, showArchived: event.currentTarget.checked })
-              }
-            />
-            <span>{t("settings.fields.showArchived")}</span>
-          </label>
-
-          <label className="checkbox-group">
-            <input
-              type="checkbox"
-              checked={settingsForm.enableInterventionNotification ?? true}
-              onChange={(event) =>
-                onFormChange({ ...settingsForm, enableInterventionNotification: event.currentTarget.checked })
-              }
-            />
-            <span>
-              {t("settings.fields.enableInterventionNotification")}
-              <small className="settings-field-desc">{t("settings.fields.enableInterventionNotificationDesc")}</small>
-            </span>
-          </label>
-
-          <label className="checkbox-group">
-            <input
-              type="checkbox"
-              checked={settingsForm.enableSessionEndNotification ?? false}
-              onChange={(event) =>
-                onFormChange({ ...settingsForm, enableSessionEndNotification: event.currentTarget.checked })
-              }
-            />
-            <span>
-              {t("settings.fields.enableSessionEndNotification")}
-              <small className="settings-field-desc">{t("settings.fields.enableSessionEndNotificationDesc")}</small>
-            </span>
-          </label>
-
-          <label className="checkbox-group">
-            <input
-              type="checkbox"
-              checked={settingsForm.showStatusBar ?? true}
-              onChange={(event) =>
-                onFormChange({ ...settingsForm, showStatusBar: event.currentTarget.checked })
-              }
-            />
-            <span>{t("statusBar.showStatusBar")}</span>
-          </label>
-
-          <label className="checkbox-group">
-            <input
-              type="checkbox"
-              checked={settingsForm.minimizeToTray ?? false}
-              onChange={(event) =>
-                onFormChange({ ...settingsForm, minimizeToTray: event.currentTarget.checked })
-              }
-            />
-            <span>
-              {t("settings.fields.minimizeToTray")}
-              <small className="settings-field-desc">{t("settings.fields.minimizeToTrayDesc")}</small>
-            </span>
-          </label>
-
           <label className="checkbox-group">
             <input
               type="checkbox"
@@ -412,6 +238,80 @@ export function SettingsView({
             </span>
           </label>
 
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.minimizeToTray ?? false}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, minimizeToTray: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.minimizeToTray")}
+              <small className="settings-field-desc">{t("settings.fields.minimizeToTrayDesc")}</small>
+            </span>
+          </label>
+
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.enableSessionEndNotification ?? false}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, enableSessionEndNotification: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.enableSessionEndNotification")}
+              <small className="settings-field-desc">{t("settings.fields.enableSessionEndNotificationDesc")}</small>
+            </span>
+          </label>
+
+          <label className="checkbox-group">
+            <input
+              type="checkbox"
+              checked={settingsForm.enableInterventionNotification ?? true}
+              onChange={(event) =>
+                onFormChange({ ...settingsForm, enableInterventionNotification: event.currentTarget.checked })
+              }
+            />
+            <span>
+              {t("settings.fields.enableInterventionNotification")}
+              <small className="settings-field-desc">{t("settings.fields.enableInterventionNotificationDesc")}</small>
+            </span>
+          </label>
+
+          <div className="settings-field">
+            <label htmlFor="terminal-launcher-select">
+              {t("settings.fields.terminalLauncher")}
+              <small className="settings-field-desc">{t("settings.fields.terminalLauncherDesc")}</small>
+            </label>
+            <div className="field-with-action">
+              <Select
+                id="terminal-launcher-select"
+                className="settings-select"
+                value={settingsForm.terminalLauncher ?? "shell"}
+                onChange={(event) =>
+                  onFormChange({ ...settingsForm, terminalLauncher: event.currentTarget.value })
+                }
+              >
+                <option value="shell">{t("settings.launcher.shell")}</option>
+                <option
+                  value="herdr"
+                  disabled={toolAvailability != null && !toolAvailability.herdr && settingsForm.terminalLauncher !== "herdr"}
+                >
+                  {t(
+                    toolAvailability?.herdr
+                      ? "settings.launcher.herdr"
+                      : "settings.launcher.herdrMissing",
+                  )}
+                </option>
+              </Select>
+              <button type="button" className="ghost-button" onClick={onDetectTools}>
+                {t("settings.actions.detectTools")}
+              </button>
+            </div>
+          </div>
+
           <div className="settings-field">
             <label htmlFor="default-launcher-select">
               {t("settings.fields.defaultLauncher")}
@@ -433,26 +333,6 @@ export function SettingsView({
               <option value="codex">{t("settings.launcher.defaultCodex")}</option>
               <option value="copilot">{t("settings.launcher.defaultCopilot")}</option>
               <option value="gemini">{t("settings.launcher.defaultGemini")}</option>
-            </Select>
-          </div>
-
-          <div className="settings-field">
-            <label htmlFor="analytics-refresh-interval-select">
-              {t("settings.fields.analyticsRefreshInterval")}
-            </label>
-            <Select
-              id="analytics-refresh-interval-select"
-              className="settings-select"
-              value={settingsForm.analyticsRefreshInterval ?? 30}
-              onChange={(event) =>
-                onFormChange({
-                  ...settingsForm,
-                  analyticsRefreshInterval: Number(event.currentTarget.value) as 10 | 30,
-                })
-              }
-            >
-              <option value="10">{t("settings.fields.analyticsRefreshInterval.10")}</option>
-              <option value="30">{t("settings.fields.analyticsRefreshInterval.30")}</option>
             </Select>
           </div>
 
@@ -492,45 +372,153 @@ export function SettingsView({
             </div>
           </div>
 
-          <div className="settings-field settings-field--stacked">
-            <label>{t("settings.agents.title")}</label>
-            <p className="settings-field-desc settings-field-desc--block">{t("settings.agents.subtitle")}</p>
+          <details className="advanced-settings">
+            <summary className="advanced-settings-summary">
+              <span>
+                <strong>{t("settings.advanced.title")}</strong>
+                <small>{t("settings.advanced.subtitle")}</small>
+              </span>
+              <ChevronRightIcon className="advanced-settings-chevron" size={16} />
+            </summary>
 
-            <label className="field-group">
-              <span>{t("settings.fields.agentsSourceRoot")}</span>
-              <p className="settings-field-desc settings-field-desc--block">{t("settings.fields.agentsSourceRootDesc")}</p>
-              <div className="field-with-action">
+            <div className="advanced-settings-body">
+              <label className="checkbox-group">
                 <input
-                  value={settingsForm.agentsSourceRoot ?? ""}
-                  placeholder={t("settings.fields.agentsSourceRootPlaceholder")}
+                  type="checkbox"
+                  checked={settingsForm.showArchived}
                   onChange={(event) =>
-                    onFormChange({ ...settingsForm, agentsSourceRoot: event.currentTarget.value })
+                    onFormChange({ ...settingsForm, showArchived: event.currentTarget.checked })
                   }
                 />
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => onBrowseDirectory("agentsSourceRoot")}
-                >
-                  {t("settings.actions.browseDirectory")}
-                </button>
-              </div>
-            </label>
+                <span>{t("settings.fields.showArchived")}</span>
+              </label>
 
-            <label className="checkbox-group">
-              <input
-                type="checkbox"
-                checked={settingsForm.allowCreateProjectConfigDir ?? false}
-                onChange={(event) =>
-                  onFormChange({ ...settingsForm, allowCreateProjectConfigDir: event.currentTarget.checked })
-                }
-              />
-              <span>
-                {t("settings.agents.allowCreateProjectConfigDir")}
-                <small className="settings-field-desc">{t("settings.agents.allowCreateProjectConfigDirDesc")}</small>
-              </span>
-            </label>
-          </div>
+              <label className="checkbox-group">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.showStatusBar ?? true}
+                  onChange={(event) =>
+                    onFormChange({ ...settingsForm, showStatusBar: event.currentTarget.checked })
+                  }
+                />
+                <span>{t("statusBar.showStatusBar")}</span>
+              </label>
+
+              <label className="field-group">
+                <span>{t("settings.fields.terminalPath")}</span>
+                <div className="field-with-action field-with-action--dual-action">
+                  <input
+                    value={settingsForm.terminalPath ?? ""}
+                    title={settingsForm.terminalPath ?? ""}
+                    onChange={(event) =>
+                      onFormChange({ ...settingsForm, terminalPath: event.currentTarget.value })
+                    }
+                  />
+                  <IconButton
+                    label={t("settings.actions.browseFile")}
+                    className="path-picker-button"
+                    onClick={() => onBrowseFile("terminalPath")}
+                  >
+                    <EditNotesIcon size={14} />
+                  </IconButton>
+                  <button
+                    type="button"
+                    className="ghost-button path-action-button"
+                    onClick={onDetectTerminal}
+                  >
+                    {t("settings.actions.detectTerminal")}
+                  </button>
+                </div>
+              </label>
+
+              <label className="field-group">
+                <span>{t("settings.fields.externalEditorPath")}</span>
+                <div className="field-with-action field-with-action--dual-action">
+                  <input
+                    value={settingsForm.externalEditorPath ?? ""}
+                    title={settingsForm.externalEditorPath ?? ""}
+                    onChange={(event) =>
+                      onFormChange({ ...settingsForm, externalEditorPath: event.currentTarget.value })
+                    }
+                  />
+                  <IconButton
+                    label={t("settings.actions.browseFile")}
+                    className="path-picker-button"
+                    onClick={() => onBrowseFile("externalEditorPath")}
+                  >
+                    <EditNotesIcon size={14} />
+                  </IconButton>
+                  <button
+                    type="button"
+                    className="ghost-button path-action-button"
+                    onClick={onDetectVscode}
+                  >
+                    {t("settings.actions.detectEditor")}
+                  </button>
+                </div>
+              </label>
+
+              <div className="settings-field">
+                <label htmlFor="analytics-refresh-interval-select">
+                  {t("settings.fields.analyticsRefreshInterval")}
+                </label>
+                <Select
+                  id="analytics-refresh-interval-select"
+                  className="settings-select"
+                  value={settingsForm.analyticsRefreshInterval ?? 30}
+                  onChange={(event) =>
+                    onFormChange({
+                      ...settingsForm,
+                      analyticsRefreshInterval: Number(event.currentTarget.value) as 10 | 30,
+                    })
+                  }
+                >
+                  <option value="10">{t("settings.fields.analyticsRefreshInterval.10")}</option>
+                  <option value="30">{t("settings.fields.analyticsRefreshInterval.30")}</option>
+                </Select>
+              </div>
+
+              <div className="settings-field settings-field--stacked advanced-settings-agents">
+                <label>{t("settings.agents.title")}</label>
+                <p className="settings-field-desc settings-field-desc--block">{t("settings.agents.subtitle")}</p>
+
+                <label className="field-group">
+                  <span>{t("settings.fields.agentsSourceRoot")}</span>
+                  <p className="settings-field-desc settings-field-desc--block">{t("settings.fields.agentsSourceRootDesc")}</p>
+                  <div className="field-with-action">
+                    <input
+                      value={settingsForm.agentsSourceRoot ?? ""}
+                      placeholder={t("settings.fields.agentsSourceRootPlaceholder")}
+                      onChange={(event) =>
+                        onFormChange({ ...settingsForm, agentsSourceRoot: event.currentTarget.value })
+                      }
+                    />
+                    <IconButton
+                      label={t("settings.actions.browseDirectory")}
+                      className="path-picker-button"
+                      onClick={() => onBrowseDirectory("agentsSourceRoot")}
+                    >
+                      <EditNotesIcon size={14} />
+                    </IconButton>
+                  </div>
+                </label>
+
+                <label className="checkbox-group">
+                  <input
+                    type="checkbox"
+                    checked={settingsForm.allowCreateProjectConfigDir ?? false}
+                    onChange={(event) =>
+                      onFormChange({ ...settingsForm, allowCreateProjectConfigDir: event.currentTarget.checked })
+                    }
+                  />
+                  <span>
+                    {t("settings.agents.allowCreateProjectConfigDir")}
+                    <small className="settings-field-desc">{t("settings.agents.allowCreateProjectConfigDirDesc")}</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </details>
 
           <div className="settings-actions">
             <Button variant="primary" onClick={onSave}>
@@ -579,6 +567,11 @@ export function SettingsView({
                 providerLabels.antigravity,
               );
               const providerBusy = pendingProviderAction?.startsWith(`${integration.provider}:`);
+              const providerAvailable = providerDirectoryExists[integration.provider] !== false;
+              const providerRootField = getProviderRootField(integration.provider);
+              const providerRootPath = getProviderRootPath(settingsForm, integration.provider);
+              const configPath = integration.configPath?.trim() || null;
+              const bridgePath = integration.bridgePath?.trim() || null;
               const primaryAction = getProviderPrimaryAction(integration.status);
               const primaryActionLabel = getProviderPrimaryActionLabel(
                 primaryAction,
@@ -596,7 +589,7 @@ export function SettingsView({
                   key={integration.provider}
                   className={`provider-integration-card ${
                     integration.lastError ? "provider-integration-card--error" : ""
-                  } ${isExpanded ? "provider-integration-card--expanded" : "provider-integration-card--collapsed"}`}
+                  }${providerAvailable ? "" : " provider-integration-card--unavailable"} ${isExpanded ? "provider-integration-card--expanded" : "provider-integration-card--collapsed"}`}
                 >
                   <div
                     className="provider-integration-header"
@@ -605,22 +598,45 @@ export function SettingsView({
                     title={t(isExpanded ? "settings.integrations.actions.collapse" : "settings.integrations.actions.expand")}
                   >
                     <div className="provider-integration-badges">
-                      <span className={`provider-tag provider-tag--${integration.provider}`}>
-                        {providerLabel}
-                      </span>
-                      <span
-                        className={`session-chip ${getProviderStatusChipClass(integration.status)}`}
-                      >
-                        {getProviderStatusLabel(integration.status, statusLabels)}
-                      </span>
-                      {integration.installedVersion != null ? (
-                        <span className="provider-version-badge">
-                          v{integration.installedVersion}
+                        <input
+                          type="checkbox"
+                          className="provider-integration-enabled"
+                          aria-label={providerLabel}
+                          checked={settingsForm.enabledProviders.includes(integration.provider)}
+                          disabled={!providerAvailable}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => {
+                            const next = event.currentTarget.checked
+                              ? [...settingsForm.enabledProviders, integration.provider]
+                              : settingsForm.enabledProviders.filter((provider) => provider !== integration.provider);
+                            onFormChange({ ...settingsForm, enabledProviders: next });
+                            if (event.currentTarget.checked) {
+                              onProviderAction(integration.provider, "install");
+                            }
+                          }}
+                        />
+                        <span className={`provider-tag provider-tag--${integration.provider}`}>
+                          {providerLabel}
                         </span>
-                      ) : null}
-                      {!isExpanded ? (
-                        <span className="provider-integration-summary-time">{summaryTime}</span>
-                      ) : null}
+                        <span
+                          className={`session-chip ${getProviderStatusChipClass(integration.status)}`}
+                        >
+                          {getProviderStatusLabel(integration.status, statusLabels)}
+                        </span>
+                        {integration.installedVersion != null ? (
+                          <span className="provider-version-badge">
+                            v{integration.installedVersion}
+                          </span>
+                        ) : null}
+                        <span
+                          className="provider-detection-indicator"
+                          title={providerDirectoryExists[integration.provider] === true ? t("settings.status.detected") : undefined}
+                        >
+                          {providerDirectoryExists[integration.provider] === true ? <CheckIcon size={14} /> : null}
+                        </span>
+                        {!isExpanded ? (
+                          <span className="provider-integration-summary-time">{summaryTime}</span>
+                        ) : null}
                     </div>
 
                     {isExpanded ? (
@@ -632,7 +648,7 @@ export function SettingsView({
                           <button
                             type="button"
                             className="primary-button"
-                            disabled={Boolean(providerBusy)}
+                            disabled={!providerAvailable || Boolean(providerBusy)}
                             onClick={() => onProviderAction(integration.provider, primaryAction)}
                           >
                             {primaryActionLabel}
@@ -667,7 +683,7 @@ export function SettingsView({
                             label={t("settings.integrations.actions.uninstall")}
                             className="icon-button"
                             danger
-                            disabled={Boolean(providerBusy)}
+                            disabled={!providerAvailable || Boolean(providerBusy)}
                             onClick={() => onProviderAction(integration.provider, "uninstall")}
                           >
                             <DeleteIcon size={14} />
@@ -682,44 +698,45 @@ export function SettingsView({
                   {isExpanded ? (
                     <>
                       <div className="provider-integration-grid">
-                        {(
-                          [
-                            {
-                              label: t(
+                        <div className="provider-integration-meta provider-integration-meta--path">
+                          <div className="provider-path-heading">
+                            <span>{t("settings.integrations.fields.rootPath")}</span>
+                            {providerRootField ? (
+                              <IconButton
+                                label={t("settings.actions.browseDirectory")}
+                                className="path-picker-button"
+                                onClick={() => onBrowseDirectory(providerRootField)}
+                              >
+                                <EditNotesIcon size={12} />
+                              </IconButton>
+                            ) : null}
+                          </div>
+                          <code className="path-text path-text--wrap" title={providerRootPath || undefined}>
+                            {providerRootPath || t("settings.integrations.values.unavailable")}
+                          </code>
+                        </div>
+
+                        {configPath ? (
+                          <div className="provider-integration-meta provider-integration-meta--path">
+                            <div className="provider-path-heading">
+                              <span>{t(
                                 integration.provider === "claude"
                                   ? "settings.integrations.fields.hookPath"
                                   : "settings.integrations.fields.configPath",
-                              ),
-                              value: integration.configPath?.trim() || null,
-                            },
-                            {
-                              label: t("settings.integrations.fields.bridgePath"),
-                              value: integration.bridgePath?.trim() || null,
-                            },
-                          ] as { label: string; value: string | null }[]
-                        ).map(({ label, value }) => (
-                          <div key={label} className="provider-integration-meta">
-                            <details>
-                              <summary className="provider-path-summary">
-                                <span className="provider-path-label">{label}</span>
-                                <button
-                                  type="button"
-                                  className="provider-path-copy"
-                                  disabled={!value}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    if (value) navigator.clipboard.writeText(value);
-                                  }}
-                                >
-                                  {t("settings.integrations.actions.copy")}
-                                </button>
-                              </summary>
-                              <code title={value ?? undefined}>
-                                {value ?? t("settings.integrations.values.unavailable")}
-                              </code>
-                            </details>
+                              )}</span>
+                            </div>
+                            <code className="path-text path-text--wrap" title={configPath}>{configPath}</code>
                           </div>
-                        ))}
+                        ) : null}
+
+                        {bridgePath ? (
+                          <div className="provider-integration-meta provider-integration-meta--path">
+                            <div className="provider-path-heading">
+                              <span>{t("settings.integrations.fields.bridgePath")}</span>
+                            </div>
+                            <code className="path-text path-text--wrap" title={bridgePath}>{bridgePath}</code>
+                          </div>
+                        ) : null}
 
                         <div className="provider-integration-meta">
                           <span>{t("settings.integrations.fields.lastEventAt")}</span>
@@ -749,8 +766,7 @@ export function SettingsView({
         )}
       </article>
 
-      {(settingsForm.enableQuotaMonitoring ?? true) || true ? (
-        <article className="info-card">
+      <article className="info-card">
           <div className="section-heading">
             <h3>{t("quota.monitoring.title")}</h3>
             {(settingsForm.enableQuotaMonitoring ?? true) ? (
@@ -780,15 +796,20 @@ export function SettingsView({
                 <div className="settings-field">
                 <label>{t("quota.monitoring.perProvider")}</label>
                 <div className="quota-provider-toggle-list">
-                  {QUOTA_PROVIDER_ORDER.map((provider) => {
+                  {PROVIDER_DISPLAY_ORDER.map((provider) => {
                     const enabledProviders =
-                      settingsForm.quotaEnabledProviders ?? ["claude", "copilot", "opencode", "codex", "antigravity"];
+                      settingsForm.quotaEnabledProviders ?? [...PROVIDER_DISPLAY_ORDER];
                     const checked = enabledProviders.includes(provider);
+                    const providerAvailable = providerDirectoryExists[provider] !== false;
                     return (
-                      <label key={provider} className="checkbox-group checkbox-group--inline">
+                      <label
+                        key={provider}
+                        className={`checkbox-group checkbox-group--inline${providerAvailable ? "" : " checkbox-group--disabled"}`}
+                      >
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={!providerAvailable}
                           onChange={(event) => {
                             const next = event.currentTarget.checked
                               ? [...enabledProviders, provider]
@@ -839,10 +860,14 @@ export function SettingsView({
                   }
                 >
                   <option value="">{t("quota.settings.primaryProvider.auto")}</option>
-                  {QUOTA_PROVIDER_ORDER.filter((provider) =>
+                  {PROVIDER_DISPLAY_ORDER.filter((provider) =>
                     (settingsForm.quotaEnabledProviders ?? []).includes(provider),
                   ).map((provider) => (
-                    <option key={provider} value={provider}>
+                    <option
+                      key={provider}
+                      value={provider}
+                      disabled={providerDirectoryExists[provider] === false}
+                    >
                       {providerLabels[provider]}
                     </option>
                   ))}
@@ -947,18 +972,19 @@ export function SettingsView({
                   <div className="settings-field settings-field--stacked">
                     <label>{t("quota.settings.overlayProviders")}</label>
                     <div className="quota-provider-toggle-list">
-                      {QUOTA_PROVIDER_ORDER.map((provider) => {
+                      {PROVIDER_DISPLAY_ORDER.map((provider) => {
                         const monitored = (settingsForm.quotaEnabledProviders ?? []).includes(provider);
                         const checked = (settingsForm.quotaOverlayProviders ?? []).includes(provider);
+                        const providerAvailable = providerDirectoryExists[provider] !== false;
                         return (
                           <label
                             key={provider}
-                            className={`checkbox-group checkbox-group--inline${monitored ? "" : " checkbox-group--disabled"}`}
+                            className={`checkbox-group checkbox-group--inline${monitored && providerAvailable ? "" : " checkbox-group--disabled"}`}
                           >
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={!monitored}
+                              disabled={!monitored || !providerAvailable}
                               onChange={(event) => {
                                 const current = settingsForm.quotaOverlayProviders ?? [];
                                 const next = event.currentTarget.checked
@@ -979,7 +1005,6 @@ export function SettingsView({
             ) : null}
           </div>
         </article>
-      ) : null}
 
       </div>
     </section>

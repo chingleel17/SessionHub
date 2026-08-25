@@ -14,8 +14,8 @@ use crate::sessions::{
     remember_herdr_tab, TerminalLaunchSpec,
 };
 use crate::settings::{
-    load_settings_internal, resolve_terminal_launcher, resolve_vscode_command,
-    TERMINAL_LAUNCHER_HERDR,
+    load_settings_internal, resolve_herdr_executable, resolve_terminal_launcher,
+    resolve_vscode_command, TERMINAL_LAUNCHER_HERDR,
 };
 use crate::sisyphus::scan_sisyphus_internal;
 use crate::types::*;
@@ -32,6 +32,8 @@ fn which_exists(cmd: &str) -> bool {
 }
 
 pub(crate) fn check_tool_availability_internal() -> ToolAvailability {
+    let herdr = resolve_herdr_executable().is_some();
+
     ToolAvailability {
         copilot: which_exists("copilot"),
         opencode: which_exists("opencode"),
@@ -39,8 +41,8 @@ pub(crate) fn check_tool_availability_internal() -> ToolAvailability {
         codex: which_exists("codex"),
         gemini: which_exists("gemini"),
         vscode: resolve_vscode_command().is_some(),
-        herdr: which_exists("herdr"),
-        herdr_server_running: which_exists("herdr") && herdr_server_is_running().unwrap_or(false),
+        herdr,
+        herdr_server_running: herdr && herdr_server_is_running().unwrap_or(false),
     }
 }
 

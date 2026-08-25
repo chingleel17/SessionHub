@@ -30,6 +30,63 @@ pub(crate) fn command_exists_on_path(command: &str) -> bool {
     process.status().map(|status| status.success()).unwrap_or(false)
 }
 
+fn command_path_on_path(command: &str) -> Option<PathBuf> {
+    let mut process = Command::new("where");
+    process.arg(command);
+    #[cfg(target_os = "windows")]
+    process.creation_flags(CREATE_NO_WINDOW);
+
+    let output = process.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+}
+
+fn herdr_standard_install_paths(
+    local_app_data: Option<PathBuf>,
+    user_profile: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = local_app_data {
+        roots.push(root);
+    }
+    if let Some(profile) = user_profile {
+        let root = profile.join("AppData").join("Local");
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+
+    roots
+        .into_iter()
+        .map(|root| {
+            root.join("Programs")
+                .join("Herdr")
+                .join("bin")
+                .join("herdr.exe")
+        })
+        .collect()
+}
+
+/// 解析 Herdr 執行檔。GUI 程序可能繼承到安裝前的舊 PATH，因此補查官方安裝器位置。
+pub(crate) fn resolve_herdr_executable() -> Option<PathBuf> {
+    command_path_on_path("herdr").or_else(|| {
+        herdr_standard_install_paths(
+            env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            env::var_os("USERPROFILE").map(PathBuf::from),
+        )
+        .into_iter()
+        .find(|path| path.is_file())
+    })
+}
+
 pub(crate) fn default_copilot_root() -> Result<PathBuf, String> {
     let user_profile = env::var("USERPROFILE")
         .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
@@ -346,6 +403,28 @@ mod tests {
     }
 
     #[test]
+    fn herdr_standard_install_paths_supports_msi_environment_without_local_app_data() {
+        let paths = herdr_standard_install_paths(None, Some(PathBuf::from(r"C:\Users\Test")));
+
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(
+                r"C:\Users\Test\AppData\Local\Programs\Herdr\bin\herdr.exe"
+            )]
+        );
+    }
+
+    #[test]
+    fn herdr_standard_install_paths_deduplicates_matching_roots() {
+        let paths = herdr_standard_install_paths(
+            Some(PathBuf::from(r"C:\Users\Test\AppData\Local")),
+            Some(PathBuf::from(r"C:\Users\Test")),
+        );
+
+        assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
     fn resolve_agents_source_root_uses_configured_path_when_present() {
         let resolved = resolve_agents_source_root(Some("D:/custom/agents")).expect("resolve");
         assert_eq!(resolved, PathBuf::from("D:/custom/agents"));
@@ -417,7 +496,7 @@ pub(crate) fn validate_terminal_path_internal(path: &str, launcher: Option<&str>
     let candidate = PathBuf::from(path);
 
     if resolve_terminal_launcher(launcher) == TERMINAL_LAUNCHER_HERDR {
-        return command_exists_on_path("herdr")
+        return resolve_herdr_executable().is_some()
             && (candidate.is_file()
                 || (!candidate.components().any(|component| {
                     matches!(component, std::path::Component::RootDir | std::path::Component::Prefix(_))

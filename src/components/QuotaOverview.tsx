@@ -4,10 +4,10 @@ import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow, ResetCreditEntry } from "../types";
 import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
+import { compareProviders } from "../utils/providerOrder";
 
 const DEFAULT_STORAGE_KEY = "quota-overview-active-provider";
 const ALL_PROVIDER_KEY = "all";
-const PROVIDER_ORDER = ["claude", "codex", "copilot", "opencode", "antigravity"] as const;
 
 function formatResetCountdown(
   resetsAt: string | null | undefined,
@@ -259,13 +259,7 @@ export function QuotaOverview({
   const { t } = useI18n();
   const visible = snapshots
     .filter((s) => s.status !== "unsupported" || s.source !== "remote_api")
-    .sort((left, right) => {
-      const leftIndex = PROVIDER_ORDER.indexOf(left.provider as (typeof PROVIDER_ORDER)[number]);
-      const rightIndex = PROVIDER_ORDER.indexOf(right.provider as (typeof PROVIDER_ORDER)[number]);
-      const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-      const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-      return normalizedLeft - normalizedRight || left.provider.localeCompare(right.provider);
-    });
+    .sort((left, right) => compareProviders(left.provider, right.provider));
   const visibleProviders = visible.map((s) => s.provider);
   const supportsAllTab = visible.length > 1;
 
