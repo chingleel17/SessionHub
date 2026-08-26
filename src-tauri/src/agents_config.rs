@@ -475,7 +475,10 @@ pub(crate) fn scan_agents_skills_with_providers(scope: &AgentsScope, enabled_pro
             });
         }
         let discovered_names = skills.iter().filter(|skill| skill.provider_id.as_deref() == Some(provider)).map(|skill| skill.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
-        for cli in cli_resources.iter().filter(|item| !discovered_names.contains(&item.name.to_lowercase())) {
+        for cli in cli_resources.iter().filter(|item| {
+            include_cli_only_resources(scope)
+                && !discovered_names.contains(&item.name.to_lowercase())
+        }) {
             skills.push(SkillEntry {
                 name: cli.name.clone(),
                 source_dir: cli.effective_path.clone().unwrap_or_default(),
@@ -964,7 +967,10 @@ pub(crate) fn scan_agents_commands_with_providers(
             });
         }
         let command_names = commands.iter().filter(|command| command.provider_id.as_deref() == Some(provider)).map(|command| command.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
-        for cli in cli_resources.iter().filter(|item| !command_names.contains(&item.name.to_lowercase())) {
+        for cli in cli_resources.iter().filter(|item| {
+            include_cli_only_resources(scope)
+                && !command_names.contains(&item.name.to_lowercase())
+        }) {
             commands.push(CommandEntry {
                 name: cli.name.clone(),
                 source_path: cli.effective_path.clone().unwrap_or_default(),
@@ -1120,6 +1126,10 @@ pub(crate) fn scan_agents_commands_with_providers(
         diagnostics: Vec::new(),
     })
     */
+}
+
+fn include_cli_only_resources(scope: &AgentsScope) -> bool {
+    matches!(scope, AgentsScope::Global)
 }
 
 pub(crate) fn sync_agents_items_internal(request: &SyncRequest) -> Result<SyncReport, String> {

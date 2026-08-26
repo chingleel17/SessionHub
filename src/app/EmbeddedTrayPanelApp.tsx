@@ -19,6 +19,7 @@ export function EmbeddedTrayPanelApp() {
     queryKey: SNAPSHOT_QUERY_KEY,
     queryFn: () => invoke<QuotaSnapshot[]>("get_quota_snapshots"),
     staleTime: 0,
+    refetchInterval: 15_000,
   });
   const settingsQuery = useQuery({
     queryKey: SETTINGS_QUERY_KEY,
@@ -33,6 +34,7 @@ export function EmbeddedTrayPanelApp() {
       const unlistenSnapshots = await listen("quota-snapshots-updated", () => {
         if (mounted) {
           void queryClient.invalidateQueries({ queryKey: SNAPSHOT_QUERY_KEY });
+          void queryClient.refetchQueries({ queryKey: SNAPSHOT_QUERY_KEY });
         }
       });
       const unlistenSettings = await listen<AppSettings>("quota-overlay-settings-changed", (event) => {
@@ -81,8 +83,8 @@ export function EmbeddedTrayPanelApp() {
       snapshots={quotaSnapshotQuery.data ?? []}
       enabledProviders={settingsQuery.data?.quotaEnabledProviders ?? DEFAULT_ENABLED_PROVIDERS}
       onRefresh={() => {
-        void invoke<QuotaSnapshot[]>("refresh_quota", { provider: null }).then(() => {
-          void queryClient.invalidateQueries({ queryKey: SNAPSHOT_QUERY_KEY });
+        void invoke<QuotaSnapshot[]>("refresh_quota", { provider: null }).then((snapshots) => {
+          queryClient.setQueryData(SNAPSHOT_QUERY_KEY, snapshots);
         });
       }}
       onOpenSettings={() => {
