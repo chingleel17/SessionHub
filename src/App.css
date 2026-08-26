@@ -368,7 +368,9 @@ textarea {
 .workspace {
   display: grid;
   grid-template-rows: auto 1fr auto;
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -376,7 +378,7 @@ textarea {
 .workspace-header {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   padding: 12px 12px 0;
   min-height: 80px;
@@ -6176,6 +6178,11 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   font-size: 13px;
 }
 
+.agents-loading-state {
+  gap: 8px;
+  min-height: 88px;
+}
+
 .explorer-error-banner {
   margin: 12px;
   padding: 10px 14px;
@@ -7124,6 +7131,9 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 .global-status-bar {
   height: 28px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7143,7 +7153,9 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   gap: 6px;
   cursor: pointer;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0;
+  overflow: hidden;
+  white-space: nowrap;
   border-radius: 4px;
   padding: 2px 4px;
   transition: background 0.15s;
@@ -7217,7 +7229,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 .global-status-bar-quota {
@@ -7231,13 +7243,15 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   position: relative;
   display: flex;
   align-items: center;
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 .global-status-bar-quota-trigger {
   display: inline-flex;
   align-items: center;
   gap: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
   min-height: 24px;
   padding: 0;
   border: none;
@@ -7316,6 +7330,8 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--color-text-secondary);
 }

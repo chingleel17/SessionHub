@@ -486,7 +486,12 @@ export function AgentsConfigView(props: Props) {
           </div>
         ) : null}
 
-        {isLoading ? <div className="explorer-content-loading">{t("plansSpecs.loading")}</div> : null}
+        {isLoading ? (
+          <div className="explorer-content-loading agents-loading-state" role="status" aria-live="polite">
+            <span className="ui-button-spinner" aria-hidden="true" />
+            {t("plansSpecs.loading")}
+          </div>
+        ) : null}
         {!isLoading && allEntries.length === 0 ? <div className="explorer-content-empty">{t(`agents.empty.${tab}` as never)}</div> : null}
         {!isLoading && allEntries.length > 0 && entries.length === 0 ? <div className="explorer-content-empty">{t("agents.list.noSearchResults")}</div> : null}
 

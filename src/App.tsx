@@ -1912,9 +1912,9 @@ function App() {
     skillsData: globalAgentsSkillsQuery.data,
     commandsData: globalAgentsCommandsQuery.data,
     prefs: globalAgentsPrefs,
-    isAgentsMdLoading: globalAgentsMdQuery.isLoading,
-    isSkillsLoading: globalAgentsSkillsQuery.isLoading,
-    isCommandsLoading: globalAgentsCommandsQuery.isLoading,
+    isAgentsMdLoading: globalAgentsMdQuery.isFetching,
+    isSkillsLoading: globalAgentsSkillsQuery.isFetching,
+    isCommandsLoading: globalAgentsCommandsQuery.isFetching,
     isPrefsLoading: false,
     onRefreshAgentsMd: handleRefreshGlobalAgents,
     onRefreshSkills: handleRefreshGlobalAgents,
@@ -2101,9 +2101,9 @@ function App() {
               projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
-              agentsMdLoading={projectAgentsMdQuery.isLoading}
-              skillsLoading={projectAgentsSkillsQuery.isLoading}
-              commandsLoading={projectAgentsCommandsQuery.isLoading}
+              agentsMdLoading={projectAgentsMdQuery.isFetching}
+              skillsLoading={projectAgentsSkillsQuery.isFetching}
+              commandsLoading={projectAgentsCommandsQuery.isFetching}
               agentsPrefsLoading={projectAgentsPrefsQuery.isLoading}
               onReadFileContent={handleReadFileContent}
               onReadOpenspecFile={handleReadOpenspecFile}

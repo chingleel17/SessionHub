@@ -5,6 +5,9 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,7 +15,7 @@ use crate::settings::{default_app_data_dir, default_agents_root, default_opencod
     resolve_antigravity_root, resolve_claude_root,
     resolve_codex_root, resolve_copilot_root};
 use crate::types::{AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER,
-    COPILOT_PROVIDER, OPENCODE_PROVIDER};
+    COPILOT_PROVIDER, CREATE_NO_WINDOW, OPENCODE_PROVIDER};
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
@@ -233,6 +236,9 @@ fn run_process_internal(
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN")
         .env_remove("COPILOT_TOKEN");
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
 
     let mut child = command
         .spawn()

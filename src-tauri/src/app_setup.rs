@@ -16,6 +16,13 @@ use crate::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
+fn show_main_window_from_tray(app: &tauri::AppHandle) {
+    if let Some(panel) = app.get_webview_window(crate::TRAY_PANEL_LABEL) {
+        let _ = panel.hide();
+    }
+    let _ = crate::commands::show_main_window_internal(app, None);
+}
+
 pub(crate) fn is_autostart_launch() -> bool {
     std::env::args().any(|arg| arg == "--autostart")
 }
@@ -219,14 +226,34 @@ pub(crate) fn build_tray_icon(app: &tauri::App) -> tauri::Result<()> {
     if let Some(icon) = tray_icon {
         tray_builder = tray_builder.icon(icon);
     }
-    let show_item = tray_builder.on_tray_icon_event(|tray, event| {
-        if let tauri::tray::TrayIconEvent::Click {
+    let last_double_click = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let event_last_double_click = last_double_click.clone();
+    let show_item = tray_builder.on_tray_icon_event(move |tray, event| match event {
+        tauri::tray::TrayIconEvent::DoubleClick {
+            button: tauri::tray::MouseButton::Left,
+            ..
+        } => {
+            *event_last_double_click
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::time::Instant::now());
+            show_main_window_from_tray(tray.app_handle());
+        }
+        tauri::tray::TrayIconEvent::Click {
             button: tauri::tray::MouseButton::Left,
             button_state: tauri::tray::MouseButtonState::Up,
             rect,
             ..
-        } = event
-        {
+        } => {
+            // Windows 可能在 DoubleClick 後再送一次 MouseButtonState::Up，避免重新開啟面板。
+            let follows_double_click = event_last_double_click
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some_and(|clicked_at| {
+                    clicked_at.elapsed() < std::time::Duration::from_millis(500)
+                });
+            if follows_double_click {
+                return;
+            }
             let app = tray.app_handle();
             let panel_enabled = load_settings_internal()
                 .map(|s| s.tray_quota_panel_enabled)
@@ -235,12 +262,12 @@ pub(crate) fn build_tray_icon(app: &tauri::App) -> tauri::Result<()> {
                 // 點擊系統匣圖示彈出 mini panel。rect.position 可能是 physical 或
                 // logical，換算需要 monitor scale factor，交由 panel 定位邏輯處理。
                 toggle_tray_panel(app, Some(rect.position));
-            } else if let Some(window) = app.get_webview_window("main") {
+            } else {
                 // panel 停用時回復原本開啟主視窗行為
-                let _ = window.show();
-                let _ = window.set_focus();
+                show_main_window_from_tray(app);
             }
         }
+        _ => {}
     });
 
     let show_menu_item = tauri::menu::MenuItemBuilder::new(TRAY_MENU_SHOW_WINDOW)
@@ -269,10 +296,7 @@ pub(crate) fn build_tray_icon(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show_window" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window_from_tray(app);
             }
             "toggle_overlay" => {
                 // toggle quota_overlay_enabled 並持久化，再建立/關閉視窗

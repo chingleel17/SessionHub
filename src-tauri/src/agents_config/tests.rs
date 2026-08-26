@@ -796,6 +796,14 @@ fn agents_scope_deserializes_camel_case_payload() {
 }
 
 #[test]
+fn cli_only_resources_are_excluded_from_project_scope() {
+    assert!(!include_cli_only_resources(&AgentsScope::Project {
+        project_cwd: "D:/demo".to_string(),
+    }));
+    assert!(include_cli_only_resources(&AgentsScope::Global));
+}
+
+#[test]
 fn project_skills_scan_includes_target_only_entries() {
     let _guard = lock_test();
     let root = unique_test_dir("project-skills-union");

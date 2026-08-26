@@ -51,6 +51,23 @@ function formatResetCountdown(
   return `${mins}${minuteUnit}`;
 }
 
+function formatResetDateTime(
+  resetsAt: string | null | undefined,
+  amLabel: string,
+  pmLabel: string,
+): string {
+  if (!resetsAt) return "";
+  const date = new Date(resetsAt);
+  if (Number.isNaN(date.getTime())) return "";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const rawHours = date.getHours();
+  const period = rawHours < 12 ? amLabel : pmLabel;
+  const hours = String(rawHours % 12 || 12).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${period}${hours}:${minutes}`;
+}
+
 function getBarTone(utilization: number): "ok" | "warn" | "danger" {
   if (utilization >= 0.8) return "danger";
   if (utilization >= 0.5) return "warn";
@@ -74,6 +91,11 @@ function WindowRow({ provider, window }: { provider: string; window: QuotaWindow
     t("quota.unit.minute"),
     t("quota.resetDone"),
   );
+  const resetDateTime = formatResetDateTime(
+    window.resetsAt,
+    t("quota.period.am"),
+    t("quota.period.pm"),
+  );
 
   return (
     <div className="tray-panel-window" data-tone={tone}>
@@ -86,7 +108,12 @@ function WindowRow({ provider, window }: { provider: string; window: QuotaWindow
       <div className="tray-panel-bar">
         <div className="tray-panel-bar-fill" style={{ width: `${utilization}%` }} />
       </div>
-      {countdown ? <div className="tray-panel-window-reset">{t("quota.resetsIn", { countdown })}</div> : null}
+      {countdown ? (
+        <div className="tray-panel-window-reset" title={resetDateTime || undefined}>
+          {t("quota.resetsIn", { countdown })}
+          {resetDateTime ? ` · ${resetDateTime}` : ""}
+        </div>
+      ) : null}
     </div>
   );
 }
