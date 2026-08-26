@@ -20,6 +20,17 @@ pub(crate) fn is_autostart_launch() -> bool {
     std::env::args().any(|arg| arg == "--autostart")
 }
 
+/// dev build 是否應跳過開機啟動註冊。
+///
+/// dev 版與正式版共用同一份 settings.json（見 `settings::default_app_data_dir`），
+/// 但 autostart 依 `productName` 分為 `SessionHub` 與 `SessionHub Dev` 兩個登錄項目。
+/// 若不排除，共用的 `launch_on_startup: true` 會讓 dev 版也把自己註冊進開機啟動，
+/// 且每次 `tauri dev` 都會重新寫回，使用者手動刪除無效。
+/// dev 版本就是手動執行的，不應出現在開機啟動清單中。
+fn should_skip_autostart_registration() -> bool {
+    cfg!(debug_assertions)
+}
+
 fn sync_autostart_registration_with(
     launch_on_startup: bool,
     enable: impl FnOnce() -> Result<(), String>,
@@ -37,8 +48,10 @@ pub(crate) fn sync_autostart_registration(
     settings: &AppSettings,
 ) -> Result<(), String> {
     let autolaunch = app.autolaunch();
+    // dev build 一律以停用處理，避免共用設定把 dev 版寫進開機啟動。
+    let launch_on_startup = settings.launch_on_startup && !should_skip_autostart_registration();
     sync_autostart_registration_with(
-        settings.launch_on_startup,
+        launch_on_startup,
         || autolaunch.enable().map_err(|error| error.to_string()),
         || autolaunch.disable().map_err(|error| error.to_string()),
     )
@@ -46,7 +59,9 @@ pub(crate) fn sync_autostart_registration(
 
 pub(crate) fn reconcile_autostart_on_startup(app: &tauri::AppHandle, settings: &AppSettings) {
     let autolaunch = app.autolaunch();
-    let result = if settings.launch_on_startup {
+    // dev build 不註冊；同時主動清除先前版本可能已寫入的 Dev 登錄項目。
+    let should_register = settings.launch_on_startup && !should_skip_autostart_registration();
+    let result = if should_register {
         autolaunch.enable()
     } else {
         match autolaunch.is_enabled() {
@@ -85,6 +100,37 @@ mod tests {
             || Ok(()),
         );
         assert_eq!(result, Err("registration failed".to_string()));
+    }
+
+    #[test]
+    fn dev_build_skips_autostart_registration() {
+        // dev 與正式版共用 settings.json，但 autostart 登錄名稱依 productName 分開。
+        // dev build 必須跳過註冊，否則共用的 launch_on_startup 會讓 dev 版也進開機啟動。
+        assert_eq!(super::should_skip_autostart_registration(), cfg!(debug_assertions));
+    }
+
+    #[test]
+    fn dev_build_disables_even_when_setting_is_enabled() {
+        // 驗證 sync/reconcile 中「設定啟用 AND 非 dev」的組合邏輯：
+        // dev build 走 disable 分支，以清除先前已寫入的 Dev 登錄項目。
+        let launch_on_startup = true;
+        let effective = launch_on_startup && !super::should_skip_autostart_registration();
+        let result = sync_autostart_registration_with(
+            effective,
+            || {
+                if cfg!(debug_assertions) {
+                    panic!("dev build should not enable autostart")
+                }
+                Ok(())
+            },
+            || {
+                if !cfg!(debug_assertions) {
+                    panic!("release build should enable when requested")
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
     }
 }
 

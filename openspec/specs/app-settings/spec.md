@@ -366,6 +366,8 @@ AppSettings SHALL 額外包含 `launch_on_startup: bool` 與 `start_minimized_on
 
 `save_settings` SHALL 在寫入 `settings.json` 後，依 `launch_on_startup` 的值同步作業系統的登入自動啟動註冊狀態，行為與現有 tray／overlay 設定即時生效的副作用一致。
 
+dev build（`debug_assertions`）SHALL NOT 註冊自動啟動，且無論 `launch_on_startup` 為何，一律以「解除註冊」處理。理由：dev 版與正式版共用同一份 `settings.json`（見資料目錄需求），但自動啟動的登錄項目名稱依 `productName` 分為 `SessionHub` 與 `SessionHub Dev` 兩筆；若不排除，共用的 `launch_on_startup: true` 會使兩個版本同時登記於開機啟動，且每次執行 dev 版都會重新寫回，使用者手動刪除無效。dev 版本以手動執行為前提，不應出現在開機啟動清單中。
+
 #### Scenario: 儲存時啟用註冊
 
 - **WHEN** 使用者儲存設定且 `launch_on_startup` 為 `true`
@@ -376,6 +378,13 @@ AppSettings SHALL 額外包含 `launch_on_startup: bool` 與 `start_minimized_on
 
 - **WHEN** 使用者儲存設定且 `launch_on_startup` 為 `false`
 - **THEN** 系統在設定寫入成功後解除作業系統的自動啟動註冊
+
+#### Scenario: dev build 不註冊自動啟動
+
+- **WHEN** 以 dev build 執行且 `launch_on_startup` 為 `true`
+- **THEN** 系統 SHALL NOT 註冊 `SessionHub Dev` 自動啟動項目
+- **AND** 若該項目已存在（先前版本寫入），SHALL 於啟動對帳時解除註冊
+- **AND** 正式版的自動啟動註冊不受影響
 
 #### Scenario: 同步失敗回報
 
