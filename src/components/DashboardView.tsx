@@ -51,6 +51,13 @@ const PROJECT_LAST_SESSION_MAX_LEN = 60;
 const DONE_INITIAL_LIMIT = 10;
 const DONE_LOAD_MORE_STEP = 10;
 const KANBAN_COL_WIDTHS_KEY = "sessionhub.kanban.columnWidths";
+const KANBAN_COLUMN_COUNT = 4;
+const KANBAN_AVERAGE_COLUMN_WIDTH = 100 / KANBAN_COLUMN_COUNT;
+const KANBAN_MIN_COLUMN_WIDTH = 10;
+const KANBAN_RESIZER_WIDTH = 6;
+const KANBAN_TOTAL_RESIZER_WIDTH = KANBAN_RESIZER_WIDTH * (KANBAN_COLUMN_COUNT - 1);
+const KANBAN_WIDTH_SUM_TOLERANCE = 0.001;
+const KANBAN_DEFAULT_COLUMN_WIDTHS = Array<number>(KANBAN_COLUMN_COUNT).fill(KANBAN_AVERAGE_COLUMN_WIDTH);
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
@@ -86,21 +93,52 @@ function getActivityStatusLabel(t: (k: string) => string, status?: SessionActivi
   }
 }
 
-function loadColumnWidths(): number[] {
+export function normalizeColumnWidths(widths: unknown): number[] {
+  if (
+    !Array.isArray(widths)
+    || widths.length !== KANBAN_COLUMN_COUNT
+    || widths.some((width) => typeof width !== "number" || !Number.isFinite(width) || width < KANBAN_MIN_COLUMN_WIDTH)
+  ) {
+    return [...KANBAN_DEFAULT_COLUMN_WIDTHS];
+  }
+
+  const normalized = [...widths] as number[];
+  const total = normalized.reduce((sum, width) => sum + width, 0);
+  if (Math.abs(total - 100) > KANBAN_WIDTH_SUM_TOLERANCE) {
+    return [...KANBAN_DEFAULT_COLUMN_WIDTHS];
+  }
+
+  const widestIndex = normalized.indexOf(Math.max(...normalized));
+  normalized[widestIndex] += 100 - total;
+  return normalized;
+}
+
+export function resizeAdjacentColumns(startWidths: number[], colIndex: number, deltaPercent: number): number[] {
+  const normalized = normalizeColumnWidths(startWidths);
+  const adjacentTotal = normalized[colIndex] + normalized[colIndex + 1];
+  const newLeft = Math.max(
+    KANBAN_MIN_COLUMN_WIDTH,
+    Math.min(normalized[colIndex] + deltaPercent, adjacentTotal - KANBAN_MIN_COLUMN_WIDTH),
+  );
+  normalized[colIndex] = newLeft;
+  normalized[colIndex + 1] = adjacentTotal - newLeft;
+  return normalizeColumnWidths(normalized);
+}
+
+export function loadColumnWidths(): number[] {
   try {
     const stored = localStorage.getItem(KANBAN_COL_WIDTHS_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored) as unknown;
-      if (Array.isArray(parsed) && parsed.length === 4 && (parsed as unknown[]).every((n) => typeof n === "number")) {
-        return parsed as number[];
-      }
+      return normalizeColumnWidths(JSON.parse(stored) as unknown);
     }
   } catch { /* ignore */ }
-  return [25, 25, 25, 25];
+  return [...KANBAN_DEFAULT_COLUMN_WIDTHS];
 }
 
-function saveColumnWidths(widths: number[]) {
-  try { localStorage.setItem(KANBAN_COL_WIDTHS_KEY, JSON.stringify(widths)); } catch { /* ignore */ }
+export function saveColumnWidths(widths: number[]) {
+  try {
+    localStorage.setItem(KANBAN_COL_WIDTHS_KEY, JSON.stringify(normalizeColumnWidths(widths)));
+  } catch { /* ignore */ }
 }
 
 // ─── KanbanProjectCard ────────────────────────────────────────────────────────
@@ -308,14 +346,10 @@ function KanbanBoard({
       if (!dragRef.current || !boardRef.current) return;
       const { colIndex: ci, startX, startWidths } = dragRef.current;
       const boardWidth = boardRef.current.getBoundingClientRect().width;
-      const deltaPercent = ((me.clientX - startX) / boardWidth) * 100;
-      const MIN = 10;
-      const newWidths = [...startWidths];
-      const newLeft = Math.max(MIN, Math.min(startWidths[ci] + deltaPercent, 100 - MIN * (startWidths.length - 1 - ci)));
-      const diff = newLeft - startWidths[ci];
-      newWidths[ci] = newLeft;
-      newWidths[ci + 1] = Math.max(MIN, startWidths[ci + 1] - diff);
-      setColumnWidths(newWidths);
+      const availableWidth = boardWidth - KANBAN_TOTAL_RESIZER_WIDTH;
+      if (availableWidth <= 0) return;
+      const deltaPercent = ((me.clientX - startX) / availableWidth) * 100;
+      setColumnWidths(resizeAdjacentColumns(startWidths, ci, deltaPercent));
     };
 
     const onMouseUp = () => {
@@ -329,7 +363,7 @@ function KanbanBoard({
   }, []);
 
   return (
-    <div ref={boardRef} className="kanban-board" style={{ overflow: "hidden" }}>
+    <div ref={boardRef} className="kanban-board">
       {columns.flatMap((col, idx) => {
         const isDone = col.key === "done";
         const visibleBuckets = isDone ? col.buckets.slice(0, doneLimit) : col.buckets;
@@ -339,7 +373,7 @@ function KanbanBoard({
           <div
             key={col.key}
             className="kanban-column"
-            style={{ width: `${columnWidths[idx]}%`, flexShrink: 0, flexGrow: 0, minWidth: 0, overflow: "hidden" }}
+            style={{ flexGrow: columnWidths[idx] }}
           >
             <div className="kanban-column-header">
               <span className="kanban-column-title">{col.label}</span>
@@ -383,6 +417,10 @@ function KanbanBoard({
               key={`resizer-${idx}`}
               className="kanban-column-resizer"
               onMouseDown={(e) => handleResizerMouseDown(idx, e)}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                setColumnWidths([...KANBAN_DEFAULT_COLUMN_WIDTHS]);
+              }}
             />,
           ];
         }

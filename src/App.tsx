@@ -43,6 +43,7 @@ import type {
 } from "./types";
 import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
+import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
 import { useSessionRealtimeEvents } from "./hooks/useSessionRealtimeEvents";
 import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useAppSettingsForm";
@@ -54,6 +55,7 @@ import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog"
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
 import { ProjectView } from "./components/ProjectView";
+import { ProjectPickerDialog } from "./components/ProjectPickerDialog";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { SyncConflictDialog } from "./components/SyncConflictDialog";
@@ -256,6 +258,11 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [showEmptySessions, setShowEmptySessions] = useState(false);
   const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
+  const pinnedProjectsRef = useRef<string[]>([]);
+  const pinnedPersistedProjectsRef = useRef<string[]>([]);
+  const pinnedSaveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const pinnedSaveRequestRef = useRef(0);
+  const pinnedSavePendingCountRef = useRef(0);
 
   const [activePlanSessionId, setActivePlanSessionId] = useState<string | null>(null);
   const [planDraft, setPlanDraft] = useState("");
@@ -278,6 +285,8 @@ function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [projectPickerBusyKey, setProjectPickerBusyKey] = useState<string | null>(null);
   const [globalAgentsPrefs, setGlobalAgentsPrefs] = useState<ProjectAgentsPrefs>(DEFAULT_PROJECT_AGENTS_PREFS);
   const [globalAgentsTab, setGlobalAgentsTab] = useState<"agents-md" | "skills" | "commands" | "mcp">("agents-md");
   const [projectAgentsTabs, setProjectAgentsTabs] = useState<Record<string, "agents-md" | "skills" | "commands" | "mcp">>({});
@@ -394,11 +403,14 @@ function App() {
   });
 
   useEffect(() => {
-    if (settingsQuery.data) {
+    if (settingsQuery.data && pinnedSavePendingCountRef.current === 0) {
       // 舊格式多分支 key 正規化後會塌成同一個 path，需去重避免釘選區重複項目
-      setPinnedProjects([
+      const nextPinnedProjects = [
         ...new Set((settingsQuery.data.pinnedProjects ?? []).map(normalizePinnedProjectKey)),
-      ]);
+      ];
+      pinnedProjectsRef.current = nextPinnedProjects;
+      pinnedPersistedProjectsRef.current = nextPinnedProjects;
+      setPinnedProjects(nextPinnedProjects);
     }
   }, [settingsQuery.data]);
 
@@ -572,6 +584,42 @@ function App() {
     },
   });
 
+  const enqueuePinnedProjectsSave = (next: string[]): Promise<boolean> => {
+    const requestId = ++pinnedSaveRequestRef.current;
+    const settings = buildSettingsPayload({ pinnedProjects: next });
+    pinnedSavePendingCountRef.current += 1;
+
+    const saveTask = async (): Promise<boolean> => {
+      try {
+        await invoke("save_settings", { settings });
+      } catch (error) {
+        if (requestId === pinnedSaveRequestRef.current) {
+          const rollback = pinnedPersistedProjectsRef.current;
+          pinnedProjectsRef.current = rollback;
+          setPinnedProjects(rollback);
+          showToast(resolveErrorMessage(error, t("toast.pinnedProjectsSaveFailed")));
+        }
+        pinnedSavePendingCountRef.current -= 1;
+        return false;
+      }
+
+      pinnedPersistedProjectsRef.current = next;
+      pinnedSavePendingCountRef.current -= 1;
+      if (requestId === pinnedSaveRequestRef.current) {
+        try {
+          await queryClient.invalidateQueries({ queryKey: ["settings"] });
+        } catch (error) {
+          console.warn("[pinned-projects] settings refresh failed:", error);
+        }
+      }
+      return true;
+    };
+
+    const queuedSave = pinnedSaveQueueRef.current.then(saveTask, saveTask);
+    pinnedSaveQueueRef.current = queuedSave;
+    return queuedSave;
+  };
+
   const archiveMutation = useMutation({
     mutationFn: (sessionId: string) =>
       invoke("archive_session", { rootDir: settingsQuery.data?.copilotRoot, sessionId }),
@@ -651,13 +699,22 @@ function App() {
   });
 
   const togglePinProject = async (projectKey: string) => {
-    const next = pinnedProjects.includes(projectKey)
-      ? pinnedProjects.filter((k) => k !== projectKey)
-      : [...pinnedProjects, projectKey];
+    const previous = pinnedProjectsRef.current;
+    const next = previous.includes(projectKey)
+      ? previous.filter((key) => key !== projectKey)
+      : [...previous, projectKey];
+    pinnedProjectsRef.current = next;
     setPinnedProjects(next);
-    const settings = buildSettingsPayload({ pinnedProjects: next });
-    await invoke("save_settings", { settings });
-    await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    return enqueuePinnedProjectsSave(next);
+  };
+
+  const pinProject = async (projectKey: string) => {
+    const previous = pinnedProjectsRef.current;
+    if (previous.includes(projectKey)) return true;
+    const next = [...previous, projectKey];
+    pinnedProjectsRef.current = next;
+    setPinnedProjects(next);
+    return enqueuePinnedProjectsSave(next);
   };
 
   const clearOpenProjects = () => {
@@ -674,9 +731,7 @@ function App() {
   };
 
   const pinProjectViaDrag = async (key: string) => {
-    if (!pinnedProjects.includes(key)) {
-      await togglePinProject(key);
-    }
+    await pinProject(key);
   };
 
 
@@ -686,6 +741,25 @@ function App() {
     () => buildProjectGroups(sessionsQuery.data ?? [], uncategorizedLabel, locale),
     [sessionsQuery.data, uncategorizedLabel, locale],
   );
+
+  const reorderPinnedProjects = (nextVisibleKeys: string[]) => {
+    const current = pinnedProjectsRef.current;
+    const visibleKeys = current.filter((projectKey) =>
+      groupedProjects.some((project) => project.key === projectKey),
+    );
+    const next = rebuildPinnedProjectOrder(current, visibleKeys, nextVisibleKeys);
+    const hasChanged = next.length !== current.length || next.some((key, index) => key !== current[index]);
+    if (!hasChanged) return;
+
+    pinnedProjectsRef.current = next;
+    setPinnedProjects(next);
+    void enqueuePinnedProjectsSave(next);
+  };
+
+  const projectPickerCandidates = useMemo(() => {
+    const excludedKeys = new Set([...pinnedProjects, ...openProjectKeys]);
+    return groupedProjects.filter((project) => !excludedKeys.has(project.key));
+  }, [groupedProjects, openProjectKeys, pinnedProjects]);
 
   useEffect(() => {
     const availableProjectKeys = new Set(groupedProjects.map((project) => project.key));
@@ -1590,6 +1664,26 @@ function App() {
     setActiveView(projectKey);
   };
 
+  const closeProjectPicker = useCallback(() => {
+    setShowProjectPicker(false);
+    setProjectPickerBusyKey(null);
+  }, []);
+
+  const handleOpenProjectFromPicker = (projectKey: string) => {
+    openProjectTab(projectKey);
+    closeProjectPicker();
+  };
+
+  const handlePinProjectFromPicker = (projectKey: string) => {
+    if (projectPickerBusyKey) return;
+    setProjectPickerBusyKey(projectKey);
+    void pinProject(projectKey)
+      .then((saved) => {
+        if (saved) closeProjectPicker();
+      })
+      .finally(() => setProjectPickerBusyKey(null));
+  };
+
   const closeProjectTab = (projectKey: string) => {
     setOpenProjectKeys((v) => v.filter((k) => k !== projectKey));
     setActiveView((v) => (v === projectKey ? "dashboard" : v));
@@ -1965,14 +2059,16 @@ function App() {
         openProjectKeys={openProjectKeys}
         onNavigate={(view) => setActiveView(view)}
         onOpenProject={openProjectTab}
-        onCloseProject={closeProjectTab}
-        onClearOpenProjects={clearOpenProjects}
-        onReorderOpenProjects={reorderOpenProjects}
-        onPinProject={(key) => void pinProjectViaDrag(key)}
-        onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
-        onRefresh={() => sessionsQuery.refetch()}
-        onConfigurePath={() => setActiveView("settings")}
-      />
+         onCloseProject={closeProjectTab}
+         onClearOpenProjects={clearOpenProjects}
+         onReorderOpenProjects={reorderOpenProjects}
+         onReorderPinnedProjects={reorderPinnedProjects}
+         onPinProject={(key) => void pinProjectViaDrag(key)}
+         onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
+         onRefresh={() => sessionsQuery.refetch()}
+         onConfigurePath={() => setActiveView("settings")}
+         onRequestProjectPicker={() => setShowProjectPicker(true)}
+       />
 
       <section className="workspace">
         <header className="workspace-header">
@@ -2235,6 +2331,16 @@ function App() {
           canRememberChoice={syncConflictDialog.canRememberChoice}
           onResolve={syncConflictDialog.onResolve}
           onCancel={() => setSyncConflictDialog(null)}
+        />
+      ) : null}
+
+      {showProjectPicker ? (
+        <ProjectPickerDialog
+          projects={projectPickerCandidates}
+          busyProjectKey={projectPickerBusyKey}
+          onClose={closeProjectPicker}
+          onOpenProject={handleOpenProjectFromPicker}
+          onPinProject={handlePinProjectFromPicker}
         />
       ) : null}
 
