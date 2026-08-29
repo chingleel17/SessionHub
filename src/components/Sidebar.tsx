@@ -128,6 +128,10 @@ export function Sidebar({
 
   const handleDragEnd = () => {
     clearDragState();
+    // 僅抑制瀏覽器在拖曳結束後緊接著產生的 click，避免影響下一次正常點擊。
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
   };
 
   const handleDragOverItem = (

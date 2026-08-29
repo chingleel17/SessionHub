@@ -49,6 +49,7 @@ describe("column width persistence", () => {
     const storage = new Map<string, string>([
       ["sessionhub.kanban.columnWidths", JSON.stringify([80, 5, 5, 10])],
     ]);
+    const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: {
@@ -57,10 +58,18 @@ describe("column width persistence", () => {
       },
     });
 
-    const loaded = loadColumnWidths();
-    saveColumnWidths(loaded);
+    try {
+      const loaded = loadColumnWidths();
+      saveColumnWidths(loaded);
 
-    expect(loaded).toEqual(DEFAULT_WIDTHS);
-    expect(storage.get("sessionhub.kanban.columnWidths")).toBe(JSON.stringify(DEFAULT_WIDTHS));
+      expect(loaded).toEqual(DEFAULT_WIDTHS);
+      expect(storage.get("sessionhub.kanban.columnWidths")).toBe(JSON.stringify(DEFAULT_WIDTHS));
+    } finally {
+      if (originalLocalStorage) {
+        Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+      } else {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      }
+    }
   });
 });
