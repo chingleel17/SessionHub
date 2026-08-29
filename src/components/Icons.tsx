@@ -21,6 +21,8 @@ import {
   Move,
   Moon,
   PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pin,
   PinOff,
   Plug,
@@ -80,6 +82,8 @@ export const SyncIcon = withDefaults(Repeat2);
 export const DashboardIcon = withDefaults(LayoutDashboard);
 export const SettingsIcon = withDefaults(Settings);
 export const PanelLeftIcon = withDefaults(PanelLeft);
+export const PanelLeftCloseIcon = withDefaults(PanelLeftClose);
+export const PanelLeftOpenIcon = withDefaults(PanelLeftOpen);
 export const CloseIcon = withDefaults(X);
 export const ChevronRightIcon = withDefaults(ChevronRight);
 export const LockIcon = withDefaults(Lock);

@@ -1,3 +1,7 @@
+## Purpose
+
+定義跨 View 顯示的全域底部狀態列、事件與 session 摘要，以及狀態列在不同視窗尺寸下的固定版面行為。
+
 ## Requirements
 
 ### Requirement: 全域狀態列常駐顯示
@@ -126,10 +130,23 @@
 
 ### Requirement: 狀態列高度與排版
 
-系統 SHALL 確保狀態列不影響主要內容區域的可用空間。
+系統 SHALL 以 viewport 高度約束 workspace，並將 header、可捲動內容區與狀態列排列為三列。狀態列 SHALL 保留獨立且不可壓縮的底部列；主要內容超出可用高度時 SHALL 僅由內容區垂直捲動，不得將狀態列推離視窗或覆蓋內容。
 
 #### Scenario: 高度限制
 
 - **WHEN** 狀態列顯示
-- **THEN** 狀態列高度固定為 28px，使用 `position: sticky; bottom: 0`
-- **AND** 主內容區域加入對應 `padding-bottom` 避免內容被遮蓋
+- **THEN** 狀態列高度固定為 28px，並位於 workspace 的最底列
+- **AND** 中央內容列 SHALL 使用可收縮至 0 的剩餘高度並獨立垂直捲動
+- **AND** 狀態列不得依賴覆蓋內容的定位或額外 `padding-bottom` 補償
+
+#### Scenario: 非全螢幕視窗仍顯示狀態列
+
+- **WHEN** 應用程式視窗高度小於螢幕高度，且目前 View 的內容超過可用高度
+- **THEN** 狀態列 SHALL 仍固定顯示於應用程式視窗底部
+- **AND** 使用者不需將視窗最大化或捲動至頁面內容末端才能看到狀態列
+
+#### Scenario: 視窗高度動態變更
+
+- **WHEN** 使用者調整應用程式視窗高度
+- **THEN** workspace SHALL 依實際 viewport 高度重新計算中央內容列
+- **AND** header 與狀態列維持可見，中央內容區吸收高度變化並保留捲動能力

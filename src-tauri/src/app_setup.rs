@@ -54,11 +54,14 @@ pub(crate) fn sync_autostart_registration(
     app: &tauri::AppHandle,
     settings: &AppSettings,
 ) -> Result<(), String> {
+    // dev 與正式版共用 settings.json；dev 不應修改自己的或正式版的開機啟動登錄項。
+    if should_skip_autostart_registration() {
+        return Ok(());
+    }
+
     let autolaunch = app.autolaunch();
-    // dev build 一律以停用處理，避免共用設定把 dev 版寫進開機啟動。
-    let launch_on_startup = settings.launch_on_startup && !should_skip_autostart_registration();
     sync_autostart_registration_with(
-        launch_on_startup,
+        settings.launch_on_startup,
         || autolaunch.enable().map_err(|error| error.to_string()),
         || autolaunch.disable().map_err(|error| error.to_string()),
     )
@@ -117,27 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn dev_build_disables_even_when_setting_is_enabled() {
-        // 驗證 sync/reconcile 中「設定啟用 AND 非 dev」的組合邏輯：
-        // dev build 走 disable 分支，以清除先前已寫入的 Dev 登錄項目。
+    fn dev_build_skips_autostart_synchronization() {
+        // dev 版共用正式版設定，但儲存設定時不可寫入或移除任何登錄項目。
         let launch_on_startup = true;
-        let effective = launch_on_startup && !super::should_skip_autostart_registration();
-        let result = sync_autostart_registration_with(
-            effective,
-            || {
-                if cfg!(debug_assertions) {
-                    panic!("dev build should not enable autostart")
-                }
-                Ok(())
-            },
-            || {
-                if !cfg!(debug_assertions) {
-                    panic!("release build should enable when requested")
-                }
-                Ok(())
-            },
-        );
-        assert!(result.is_ok());
+        let should_sync = launch_on_startup && !super::should_skip_autostart_registration();
+        assert_eq!(should_sync, !cfg!(debug_assertions));
     }
 }
 
