@@ -417,16 +417,11 @@ textarea {
 }
 
 .sidebar-brand-icon {
-  display: grid;
-  place-items: center;
   width: 52px;
   height: 52px;
   border-radius: 16px;
-  background: linear-gradient(135deg, #2f6df6 0%, #6aa1ff 100%);
-  color: #fff;
-  font-weight: 700;
-  letter-spacing: 0.08em;
   flex-shrink: 0;
+  object-fit: cover;
 }
 
 .topbar-badge {
@@ -2411,7 +2406,7 @@ html.embedded-quota-view .quota-overlay-no-drag {
 .session-meta-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .session-meta-grid p {
@@ -2999,6 +2994,10 @@ html.embedded-quota-view .quota-overlay-no-drag {
   background: var(--color-dialog-overlay);
 }
 
+.modal-backdrop {
+  isolation: isolate;
+}
+
 .dialog-card {
   width: min(480px, 100%);
   padding: 24px;
@@ -3012,6 +3011,12 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 /* 不透明變體：內容較密集（表單、長文字）的對話框，毛玻璃透明度會影響可讀性時使用 */
 .dialog-card--solid {
+  background: var(--color-surface-panel);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.modal-panel {
   background: var(--color-surface-panel);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -3145,6 +3150,51 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .dialog-input-multiline {
   min-height: 160px;
+}
+
+.tag-edit-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.tag-edit-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.tag-edit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--color-action-primary-subtle-border);
+  border-radius: 999px;
+  background: var(--color-chip-bg);
+  color: var(--color-chip-text);
+  font-size: 12px;
+}
+
+.tag-edit-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.tag-edit-chip-remove:hover {
+  background: var(--color-action-primary-subtle-bg);
+  color: var(--color-text-primary);
 }
 
 .dialog-actions {

@@ -17,6 +17,9 @@ src-tauri\gen
 target
 .tauri
 
+# SessionHub 本機專案設定
+.sessionhub/
+
 # design-sync（staged 腳本、建置輸出、機器狀態）
 .ds-sync/
 ds-bundle/
@@ -27,6 +30,7 @@ ds-bundle/
 # Python 編譯產物
 __pycache__/
 *.pyc
+.ruff_cache/
 
 # Editor directories and files
 .vscode/*

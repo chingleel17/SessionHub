@@ -41,6 +41,7 @@ import {
   SyncIcon,
 } from "./Icons";
 import { IconButton } from "./ui/IconButton";
+import { Modal } from "./ui/Modal";
 
 type AgentsTab = "agents-md" | "skills" | "commands" | "mcp";
 
@@ -688,8 +689,7 @@ export function AgentsConfigView(props: Props) {
       {activeTab === "mcp" ? renderMcpTab() : null}
 
       {previewNode?.filePath ? (
-        <div className="dialog-backdrop">
-          <article className="dialog-card dialog-card--solid agents-preview-modal">
+        <Modal panelClassName="agents-preview-modal" ariaLabel={previewNode.label}>
             <div className="agents-detail-header">
               <button type="button" className="ghost-button agents-detail-back" onClick={closeDetail}>
                 <ChevronLeftIcon size={16} />
@@ -720,8 +720,7 @@ export function AgentsConfigView(props: Props) {
               isTaskSaving={false}
               onToggleTask={async () => {}}
             />
-          </article>
-        </div>
+        </Modal>
       ) : null}
 
       {renderSyncModal()}

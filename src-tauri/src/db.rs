@@ -899,6 +899,18 @@ pub(crate) fn read_session_meta(
     }
 }
 
+pub(crate) fn apply_session_metadata(
+    connection: &Connection,
+    sessions: &mut [SessionInfo],
+) -> Result<(), String> {
+    for session in sessions {
+        let meta = read_session_meta(connection, &session.id)?;
+        session.notes = meta.notes;
+        session.tags = meta.tags;
+    }
+    Ok(())
+}
+
 pub(crate) fn upsert_session_meta_internal(
     connection: &Connection,
     session_id: &str,
@@ -942,6 +954,28 @@ pub(crate) fn delete_session_meta_internal(
 mod tests {
     use super::*;
 
+    fn cached_session(id: &str) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            provider: "copilot".to_string(),
+            cwd: None,
+            repo_root: None,
+            repo_name: None,
+            git_branch: None,
+            summary: Some("summary".to_string()),
+            summary_count: Some(1),
+            created_at: None,
+            updated_at: None,
+            session_dir: format!("C:/sessions/{id}"),
+            parse_error: false,
+            is_archived: false,
+            notes: Some("stale note".to_string()),
+            tags: vec!["stale".to_string()],
+            has_plan: false,
+            has_events: true,
+        }
+    }
+
     fn remap(old_path: &str, new_path: &str) -> ProjectPathRemap {
         ProjectPathRemap {
             old_path: old_path.to_string(),
@@ -984,5 +1018,56 @@ mod tests {
         );
         assert_eq!(remap_path("D:\\other", &remaps), "D:\\other");
         assert_eq!(remap_path("D:\\old\\project", &[]), "D:\\old\\project");
+    }
+
+    #[test]
+    fn session_metadata_updates_and_clears_cached_values() {
+        let connection = Connection::open_in_memory().expect("open test db");
+        init_db(&connection).expect("initialize test db");
+        let sessions = vec![cached_session("session-001"), cached_session("session-002")];
+        save_sessions_cache_to_db(&connection, &["copilot".to_string()], &sessions)
+            .expect("save sessions cache");
+
+        upsert_session_meta_internal(
+            &connection,
+            "session-001",
+            Some("fresh note".to_string()),
+            vec!["fresh".to_string()],
+        )
+        .expect("insert metadata");
+        let loaded = load_sessions_cache_from_db(&connection, Some("copilot"))
+            .expect("load sessions after insert");
+        assert_eq!(loaded[0].notes.as_deref(), Some("fresh note"));
+        assert_eq!(loaded[0].tags, vec!["fresh"]);
+        assert_eq!(loaded[1].notes, None);
+
+        upsert_session_meta_internal(&connection, "session-001", None, Vec::new())
+            .expect("clear metadata");
+        let loaded = load_sessions_cache_from_db(&connection, Some("copilot"))
+            .expect("load sessions after clear");
+        assert_eq!(loaded[0].notes, None);
+        assert!(loaded[0].tags.is_empty());
+        assert!(loaded[1].tags.is_empty());
+    }
+
+    #[test]
+    fn apply_session_metadata_overwrites_stale_provider_values_only_by_id() {
+        let connection = Connection::open_in_memory().expect("open test db");
+        init_db(&connection).expect("initialize test db");
+        upsert_session_meta_internal(
+            &connection,
+            "session-001",
+            Some("database note".to_string()),
+            vec!["database".to_string()],
+        )
+        .expect("insert metadata");
+        let mut sessions = vec![cached_session("session-001"), cached_session("session-002")];
+
+        apply_session_metadata(&connection, &mut sessions).expect("apply metadata");
+
+        assert_eq!(sessions[0].notes.as_deref(), Some("database note"));
+        assert_eq!(sessions[0].tags, vec!["database"]);
+        assert_eq!(sessions[1].notes, None);
+        assert!(sessions[1].tags.is_empty());
     }
 }

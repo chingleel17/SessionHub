@@ -45,6 +45,7 @@ import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
+import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
 import { useSessionRealtimeEvents } from "./hooks/useSessionRealtimeEvents";
 import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useAppSettingsForm";
 
@@ -60,6 +61,7 @@ import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { SyncConflictDialog } from "./components/SyncConflictDialog";
 import { StatusBar } from "./components/StatusBar";
+import { TagEditDialog } from "./components/TagEditDialog";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -285,6 +287,10 @@ function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
+  const [tagEditDialog, setTagEditDialog] = useState<{
+    session: SessionInfo;
+    tags: string[];
+  } | null>(null);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [projectPickerBusyKey, setProjectPickerBusyKey] = useState<string | null>(null);
   const [globalAgentsPrefs, setGlobalAgentsPrefs] = useState<ProjectAgentsPrefs>(DEFAULT_PROJECT_AGENTS_PREFS);
@@ -656,10 +662,15 @@ function App() {
   const saveMetaMutation = useMutation({
     mutationFn: ({ sessionId, notes, tags }: { sessionId: string; notes?: string | null; tags: string[] }) =>
       invoke("upsert_session_meta", { sessionId, notes, tags }),
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
+      const updateCache = (oldData: SessionInfo[] | undefined) =>
+        updateSessionMetadataCache(oldData, variables.sessionId, variables.notes, variables.tags);
+      queryClient.setQueriesData<SessionInfo[]>({ queryKey: ["sessions"] }, updateCache);
+      queryClient.setQueriesData<SessionInfo[]>({ queryKey: ["sessions_cached"] }, updateCache);
       showToast(t("toast.metaSaved"));
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
+    onError: (error) => showToast(resolveErrorMessage(error, t("toast.metaSaveFailed"))),
   });
 
   const invalidatePathRemapQueries = async () => {
@@ -1835,17 +1846,7 @@ function App() {
   };
 
   const handleEditTags = (session: SessionInfo) => {
-    setEditDialog({
-      key: `tags:${session.id}:${session.updatedAt ?? ""}`,
-      title: t("session.actions.editTags"),
-      message: t("session.prompt.tags"),
-      actionLabel: t("session.actions.editTags"),
-      initialValue: session.tags.join(", "),
-      onConfirm: (nextValue) => {
-        const tags = normalizeTags(nextValue.split(","));
-        saveMetaMutation.mutate({ sessionId: session.id, notes: session.notes ?? null, tags });
-      },
-    });
+    setTagEditDialog({ session, tags: session.tags });
   };
 
   const handleEditSingleTag = (session: SessionInfo, tag: string, tagIndex: number) => {
@@ -2313,6 +2314,24 @@ function App() {
           onConfirm={(value) => {
             editDialog.onConfirm(value);
             setEditDialog(null);
+          }}
+        />
+      ) : null}
+
+      {tagEditDialog ? (
+        <TagEditDialog
+          title={t("session.actions.editTags")}
+          message={t("session.prompt.tagInput")}
+          actionLabel={t("session.actions.editTags")}
+          initialTags={tagEditDialog.tags}
+          onCancel={() => setTagEditDialog(null)}
+          onConfirm={(tags) => {
+            saveMetaMutation.mutate({
+              sessionId: tagEditDialog.session.id,
+              notes: tagEditDialog.session.notes ?? null,
+              tags: normalizeTags(tags),
+            });
+            setTagEditDialog(null);
           }}
         />
       ) : null}
