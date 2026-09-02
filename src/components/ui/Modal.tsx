@@ -11,7 +11,7 @@ export function Modal({ children, panelClassName, ariaLabel }: ModalProps) {
   return (
     <div className="dialog-backdrop modal-backdrop">
       <article
-        className={`dialog-card dialog-card--solid modal-panel${panelClassName ? ` ${panelClassName}` : ""}`}
+        className={`dialog-card dialog-card--solid${panelClassName ? ` ${panelClassName}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}

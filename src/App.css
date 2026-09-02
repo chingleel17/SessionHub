@@ -3016,12 +3016,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
   -webkit-backdrop-filter: none;
 }
 
-.modal-panel {
-  background: var(--color-surface-panel);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
 .project-picker-dialog {
   display: flex;
   flex-direction: column;

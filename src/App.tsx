@@ -660,7 +660,7 @@ function App() {
   });
 
   const saveMetaMutation = useMutation({
-    mutationFn: ({ sessionId, notes, tags }: { sessionId: string; notes?: string | null; tags: string[] }) =>
+    mutationFn: ({ sessionId, notes, tags }: { sessionId: string; notes: string | null; tags: string[] }) =>
       invoke("upsert_session_meta", { sessionId, notes, tags }),
     onSuccess: async (_data, variables) => {
       const updateCache = (oldData: SessionInfo[] | undefined) =>

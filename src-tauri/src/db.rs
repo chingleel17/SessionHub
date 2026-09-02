@@ -870,6 +870,13 @@ pub(crate) fn read_session_meta(
         .prepare("SELECT notes, tags FROM session_meta WHERE session_id = ?1")
         .map_err(|error| format!("failed to prepare metadata query: {error}"))?;
 
+    read_session_meta_with_statement(&mut statement, session_id)
+}
+
+fn read_session_meta_with_statement(
+    statement: &mut rusqlite::Statement<'_>,
+    session_id: &str,
+) -> Result<SessionMeta, String> {
     let mut rows = statement
         .query(params![session_id])
         .map_err(|error| format!("failed to query metadata: {error}"))?;
@@ -903,8 +910,12 @@ pub(crate) fn apply_session_metadata(
     connection: &Connection,
     sessions: &mut [SessionInfo],
 ) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("SELECT notes, tags FROM session_meta WHERE session_id = ?1")
+        .map_err(|error| format!("failed to prepare metadata query: {error}"))?;
+
     for session in sessions {
-        let meta = read_session_meta(connection, &session.id)?;
+        let meta = read_session_meta_with_statement(&mut statement, &session.id)?;
         session.notes = meta.notes;
         session.tags = meta.tags;
     }
