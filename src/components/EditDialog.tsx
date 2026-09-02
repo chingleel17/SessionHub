@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { EditDialogState } from "../types";
 import { Button } from "./ui/Button";
+import { Modal } from "./ui/Modal";
 
 type Props = {
   dialog: EditDialogState;
@@ -23,8 +24,7 @@ export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
   }, [dialog.initialValue]);
 
   return (
-    <div className="dialog-backdrop">
-      <article className="dialog-card">
+    <Modal panelClassName="edit-dialog" ariaLabel={dialog.title}>
         <h3>{dialog.title}</h3>
         <p>{dialog.message}</p>
         <div className="dialog-form">
@@ -58,7 +58,6 @@ export function EditDialog({ dialog, onCancel, onConfirm }: Props) {
             {dialog.actionLabel}
           </Button>
         </div>
-      </article>
-    </div>
+    </Modal>
   );
 }

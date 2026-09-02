@@ -1,5 +1,6 @@
 import { useRef, useState, type DragEvent } from "react";
 import packageJson from "../../package.json";
+import appIcon from "../../src-tauri/icons/icon.png";
 import { useI18n } from "../i18n/I18nProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
 import {
@@ -251,7 +252,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-icon">SH</div>
+        <img className="sidebar-brand-icon" src={appIcon} alt="" />
         <div className="sidebar-brand-copy">
           <h1 className="topbar-title">{t("app.title")}</h1>
         </div>

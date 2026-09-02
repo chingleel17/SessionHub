@@ -392,6 +392,13 @@ export function ProjectView({
     [project.sessions],
   );
 
+  useEffect(() => {
+    setSelectedTags((current) => {
+      const next = current.filter((tag) => availableTags.includes(tag));
+      return next.length === current.length ? current : next;
+    });
+  }, [availableTags]);
+
   const effectiveCustomRange = useMemo(
     () => customRangeStart && customRangeEnd && customRangeStart > customRangeEnd
       ? lastValidCustomRange

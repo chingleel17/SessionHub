@@ -149,10 +149,6 @@ export function SessionCard({
           <span className="session-meta-label">{t("session.summaryCount")}</span>
           <p>{session.summaryCount ?? 0}</p>
         </div>
-        <div>
-          <span className="session-meta-label">{t("session.repo")}</span>
-          <p>{session.repoName ?? "-"}</p>
-        </div>
       </div>
 
       {session.notes ? (
