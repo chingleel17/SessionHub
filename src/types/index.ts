@@ -116,11 +116,19 @@ export type FileFingerprint = {
     size?: number | null;
 };
 
+export type FileContentMetrics = {
+    characterCount: number;
+    estimatedTokens: number;
+    estimatorVersion: string;
+};
+
 export type AgentsMdEntry = {
     dir: string;
     relDir: string;
     source: FileFingerprint;
     target: FileFingerprint;
+    sourceMetrics?: FileContentMetrics | null;
+    targetMetrics?: FileContentMetrics | null;
     status: SyncStatus;
     targetNewer: boolean;
 };
@@ -157,6 +165,7 @@ export type SkillEntry = {
   effectivePath?: string | null;
   cliState?: ResourceState | null;
   cliSource?: DiscoverySource | null;
+  metrics?: FileContentMetrics | null;
 };
 
 export type SkillsScanResult = {
@@ -179,6 +188,7 @@ export type CommandEntry = {
   effectivePath?: string | null;
   cliState?: ResourceState | null;
   cliSource?: DiscoverySource | null;
+  metrics?: FileContentMetrics | null;
 };
 
 export type CommandsScanResult = {
@@ -488,6 +498,8 @@ export type TreeNode = {
     defaultOpen?: boolean;
     filePath?: string;
     filePathType?: "absolute" | "openspec";
+    trailingMeta?: string;
+    trailingMetaTitle?: string;
 };
 
 export type SessionTargetedPayload = {

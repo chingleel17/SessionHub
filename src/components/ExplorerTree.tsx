@@ -67,6 +67,9 @@ function TreeLeaf({
       {node.badge ? (
         <span className={`tree-node-badge tree-node-badge--${node.tone ?? "neutral"}`}>{node.badge}</span>
       ) : null}
+      {node.trailingMeta ? (
+        <span className="tree-node-trailing-meta" title={node.trailingMetaTitle}>{node.trailingMeta}</span>
+      ) : null}
     </button>
   );
 }
@@ -97,6 +100,9 @@ function TreeGroup({
         <span className="tree-node-label">{node.label}</span>
         {node.badge ? (
           <span className={`tree-node-badge tree-node-badge--${node.tone ?? "neutral"}`}>{node.badge}</span>
+        ) : null}
+        {node.trailingMeta ? (
+          <span className="tree-node-trailing-meta" title={node.trailingMetaTitle}>{node.trailingMeta}</span>
         ) : null}
       </button>
       {isOpen && node.children ? (

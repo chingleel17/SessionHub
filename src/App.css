@@ -5385,6 +5385,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   color: var(--color-text-tertiary, var(--color-text-secondary));
 }
 
+.explorer-content-header-metrics {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-family: var(--font-family-mono, monospace);
+}
+
 .explorer-content-body {
   flex: 1;
   overflow-y: auto;
@@ -5529,16 +5536,6 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 .agents-content-pane {
-  background: transparent;
-}
-
-.agents-content-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 2px;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: transparent;
 }
 
@@ -6707,7 +6704,6 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 
 @media (max-width: 980px) {
   .agents-toolbar,
-  .agents-content-actions,
   .sync-conflict-flags {
     grid-template-columns: 1fr;
     flex-direction: column;
@@ -6996,6 +6992,27 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   font-weight: 700;
   font-family: var(--font-family-mono, monospace);
   letter-spacing: 0.01em;
+}
+
+.agents-list-file-metrics {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tree-node-trailing-meta {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-family: var(--font-family-mono, monospace);
+  white-space: nowrap;
+}
+
+.tree-node-badge + .tree-node-trailing-meta {
+  margin-left: 8px;
 }
 
 .tree-node-badge--neutral,

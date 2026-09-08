@@ -1,0 +1,43 @@
+{
+  "capturedAt": "2026-09-07",
+  "referenceSource": "OpenAI Tokenizer-compatible OpenAI encoding",
+  "capturedWith": "js-tiktoken",
+  "model": "gpt-4o",
+  "encoding": "o200k_base",
+  "estimatorVersion": "mixed-text-v1",
+  "purpose": "觀察本機啟發式估算與 OpenAI 純文字 tokenizer 的差異；不作跨供應商精確相等斷言。",
+  "samples": [
+    {
+      "id": "english",
+      "text": "Use small, focused changes and verify the build before merging.",
+      "characterCount": 63,
+      "estimatedTokens": 26,
+      "referenceTokens": 12,
+      "errorPercent": 116.67
+    },
+    {
+      "id": "traditionalChinese",
+      "text": "請先閱讀 README.md，再執行測試。",
+      "characterCount": 21,
+      "estimatedTokens": 14,
+      "referenceTokens": 12,
+      "errorPercent": 16.67
+    },
+    {
+      "id": "markdown",
+      "text": "## Checklist\n- Scan AGENTS.md\n- Review the diff",
+      "characterCount": 47,
+      "estimatedTokens": 22,
+      "referenceTokens": 13,
+      "errorPercent": 69.23
+    },
+    {
+      "id": "codeAndPath",
+      "text": "const root = \"D:/projects/session_hub\"; // load AGENTS.md",
+      "characterCount": 57,
+      "estimatedTokens": 22,
+      "referenceTokens": 16,
+      "errorPercent": 37.5
+    }
+  ]
+}

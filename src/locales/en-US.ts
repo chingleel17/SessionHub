@@ -410,6 +410,8 @@ export const enUsMessages: Record<MessageKey, string> = {
   "agents.preview.hint": "Click an item name to preview its content.",
   "agents.tree.title": "Instruction tree",
   "agents.tree.root": "Root",
+  "agents.metrics.characters": "characters",
+  "agents.metrics.tokens": "tokens",
   "agents.table.item": "Item",
   "agents.prefs.loading": "Loading preferences",
   "agents.prefs.targetsHint": "Column toggles control sync targets for this scope.",
