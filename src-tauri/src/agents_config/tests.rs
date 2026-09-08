@@ -1,4 +1,3 @@
-
 use super::*;
 use std::collections::BTreeMap;
 use std::env;
@@ -30,13 +29,20 @@ fn write_file(path: &Path, content: &str) {
 #[test]
 fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
     let _guard = lock_test();
-    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
-        .map(|key| (key, env::var_os(key)));
+    let saved_vars = [
+        "COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE",
+        "APPDATA",
+        "USERPROFILE",
+    ]
+    .map(|key| (key, env::var_os(key)));
     let root = unique_test_dir("provider-aware-union");
     write_file(&root.join(".codex/skills/shared/SKILL.md"), "codex");
     write_file(&root.join(".agents/skills/shared/SKILL.md"), "agents");
     write_file(&root.join(".github/skills/copilot/SKILL.md"), "copilot");
-    write_file(&root.join(".gemini/commands/review.toml"), "prompt = \"review\"");
+    write_file(
+        &root.join(".gemini/commands/review.toml"),
+        "prompt = \"review\"",
+    );
 
     let appdata = unique_test_dir("provider-aware-appdata");
     fs::create_dir_all(&appdata).expect("appdata");
@@ -52,24 +58,66 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
     settings.claude_root = root.join(".claude").to_string_lossy().to_string();
     settings.opencode_root = root.join(".opencode").to_string_lossy().to_string();
     settings.antigravity_root = root.join(".gemini").to_string_lossy().to_string();
-    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path")).expect("settings parent");
+    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path"))
+        .expect("settings parent");
     fs::write(
         crate::settings::settings_file_path().expect("settings path"),
         serde_json::to_vec_pretty(&settings).expect("settings JSON"),
     )
     .expect("write settings");
 
-    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
-    let result = scan_agents_skills_with_providers(&scope, &[CODEX_PROVIDER.to_string(), COPILOT_PROVIDER.to_string()]).expect("skills");
-    assert_eq!(result.enabled_providers, vec![CODEX_PROVIDER, COPILOT_PROVIDER]);
-    assert!(result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(CODEX_PROVIDER) && skill.locations.len() == 2));
-    assert!(result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(COPILOT_PROVIDER)));
-    assert!(!result.skills.iter().any(|skill| skill.provider_id.as_deref() == Some(CLAUDE_PROVIDER)));
+    let scope = AgentsScope::Project {
+        project_cwd: normalize_display_path(&root),
+    };
+    let result = scan_agents_skills_with_providers(
+        &scope,
+        &[CODEX_PROVIDER.to_string(), COPILOT_PROVIDER.to_string()],
+    )
+    .expect("skills");
+    assert_eq!(
+        result.enabled_providers,
+        vec![CODEX_PROVIDER, COPILOT_PROVIDER]
+    );
+    assert!(result
+        .skills
+        .iter()
+        .any(|skill| skill.provider_id.as_deref() == Some(CODEX_PROVIDER)
+            && skill.locations.len() == 2));
+    assert!(result
+        .skills
+        .iter()
+        .any(|skill| skill.provider_id.as_deref() == Some(COPILOT_PROVIDER)));
+    assert!(!result
+        .skills
+        .iter()
+        .any(|skill| skill.provider_id.as_deref() == Some(CLAUDE_PROVIDER)));
+    let codex_skill = result
+        .skills
+        .iter()
+        .find(|skill| skill.provider_id.as_deref() == Some(CODEX_PROVIDER))
+        .expect("codex skill");
+    assert_eq!(
+        codex_skill
+            .metrics
+            .as_ref()
+            .expect("codex skill metrics")
+            .character_count,
+        6
+    );
 
-    let commands = scan_agents_commands_with_providers(&scope, &["antigravity".to_string()]).expect("commands");
+    let commands = scan_agents_commands_with_providers(&scope, &["antigravity".to_string()])
+        .expect("commands");
     assert_eq!(commands.enabled_providers, vec!["antigravity"]);
     assert_eq!(commands.commands[0].name, "review");
     assert!(commands.commands[0].source_path.ends_with("review.toml"));
+    assert_eq!(
+        commands.commands[0]
+            .metrics
+            .as_ref()
+            .expect("command metrics")
+            .character_count,
+        17
+    );
 
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&appdata);
@@ -86,13 +134,20 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
 #[test]
 fn provider_aware_scan_supports_command_formats_and_disabled_providers() {
     let _guard = lock_test();
-    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
-        .map(|key| (key, env::var_os(key)));
+    let saved_vars = [
+        "COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE",
+        "APPDATA",
+        "USERPROFILE",
+    ]
+    .map(|key| (key, env::var_os(key)));
     let root = unique_test_dir("provider-aware-formats");
     write_file(&root.join(".opencode/command/singular.md"), "singular");
     write_file(&root.join(".opencode/commands/plural.md"), "plural");
     write_file(&root.join(".github/prompts/copilot.prompt.md"), "copilot");
-    write_file(&root.join(".gemini/commands/review.toml"), "prompt = \"review\"");
+    write_file(
+        &root.join(".gemini/commands/review.toml"),
+        "prompt = \"review\"",
+    );
     write_file(&root.join(".claude/commands/disabled.md"), "disabled");
 
     let appdata = unique_test_dir("provider-aware-formats-appdata");
@@ -106,27 +161,50 @@ fn provider_aware_scan_supports_command_formats_and_disabled_providers() {
     settings.opencode_root = root.join(".opencode").to_string_lossy().to_string();
     settings.copilot_root = root.join(".copilot").to_string_lossy().to_string();
     settings.antigravity_root = root.join(".gemini").to_string_lossy().to_string();
-    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path")).expect("settings parent");
+    fs::create_dir_all(crate::settings::default_app_data_dir().expect("appdata path"))
+        .expect("settings parent");
     fs::write(
         crate::settings::settings_file_path().expect("settings path"),
         serde_json::to_vec_pretty(&settings).expect("settings JSON"),
     )
     .expect("write settings");
 
-    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
+    let scope = AgentsScope::Project {
+        project_cwd: normalize_display_path(&root),
+    };
     let result = scan_agents_commands_with_providers(
         &scope,
-        &[OPENCODE_PROVIDER.to_string(), COPILOT_PROVIDER.to_string(), "antigravity".to_string()],
+        &[
+            OPENCODE_PROVIDER.to_string(),
+            COPILOT_PROVIDER.to_string(),
+            "antigravity".to_string(),
+        ],
     )
     .expect("commands");
-    let names = result.commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>();
+    let names = result
+        .commands
+        .iter()
+        .map(|command| command.name.as_str())
+        .collect::<Vec<_>>();
     assert!(names.contains(&"singular"));
     assert!(names.contains(&"plural"));
     assert!(names.contains(&"copilot"));
     assert!(names.contains(&"review"));
     assert!(!names.contains(&"disabled"));
-    assert!(result.commands.iter().find(|command| command.name == "copilot").expect("copilot").source_path.ends_with("copilot.prompt.md"));
-    assert!(result.commands.iter().find(|command| command.name == "review").expect("gemini").source_path.ends_with("review.toml"));
+    assert!(result
+        .commands
+        .iter()
+        .find(|command| command.name == "copilot")
+        .expect("copilot")
+        .source_path
+        .ends_with("copilot.prompt.md"));
+    assert!(result
+        .commands
+        .iter()
+        .find(|command| command.name == "review")
+        .expect("gemini")
+        .source_path
+        .ends_with("review.toml"));
 
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&appdata);
@@ -143,8 +221,12 @@ fn provider_aware_scan_supports_command_formats_and_disabled_providers() {
 #[test]
 fn resource_scan_signature_changes_when_resource_file_changes() {
     let _guard = lock_test();
-    let saved_vars = ["COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", "APPDATA", "USERPROFILE"]
-        .map(|key| (key, env::var_os(key)));
+    let saved_vars = [
+        "COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE",
+        "APPDATA",
+        "USERPROFILE",
+    ]
+    .map(|key| (key, env::var_os(key)));
     let root = unique_test_dir("resource-signature");
     let appdata = unique_test_dir("resource-signature-appdata");
     write_file(&root.join(".agents/skills/shared/SKILL.md"), "first");
@@ -154,10 +236,18 @@ fn resource_scan_signature_changes_when_resource_file_changes() {
         env::set_var("APPDATA", &appdata);
         env::set_var("USERPROFILE", &root);
     }
-    let scope = AgentsScope::Project { project_cwd: normalize_display_path(&root) };
-    let before = resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()]).expect("before signature");
-    write_file(&root.join(".agents/skills/shared/SKILL.md"), "second content");
-    let after = resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()]).expect("after signature");
+    let scope = AgentsScope::Project {
+        project_cwd: normalize_display_path(&root),
+    };
+    let before =
+        resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()])
+            .expect("before signature");
+    write_file(
+        &root.join(".agents/skills/shared/SKILL.md"),
+        "second content",
+    );
+    let after = resource_scan_signature(&scope, ResourceKind::Skill, &[CODEX_PROVIDER.to_string()])
+        .expect("after signature");
     assert_ne!(before, after);
 
     let _ = fs::remove_dir_all(&root);
@@ -226,7 +316,7 @@ fn scan_agents_md_marks_all_statuses() {
     write_file(&root.join("source-missing").join("CLAUDE.md"), "target");
     write_file(&root.join("differs").join("AGENTS.md"), "old");
     thread::sleep(Duration::from_millis(5));
-    write_file(&root.join("differs").join("CLAUDE.md"), "new");
+    write_file(&root.join("differs").join("CLAUDE.md"), "new content");
 
     let result = scan_agents_md_root(&root, &ProjectAgentsPrefs::default()).expect("scan");
     let map = result
@@ -239,6 +329,51 @@ fn scan_agents_md_marks_all_statuses() {
     assert_eq!(map["source-missing"].status, SyncStatus::SourceMissing);
     assert_eq!(map["differs"].status, SyncStatus::Differs);
     assert!(map["differs"].target_newer);
+    assert_eq!(
+        map["sync"]
+            .source_metrics
+            .as_ref()
+            .expect("source metrics")
+            .character_count,
+        4
+    );
+    assert_eq!(
+        map["sync"]
+            .target_metrics
+            .as_ref()
+            .expect("target metrics")
+            .estimated_tokens,
+        1
+    );
+    assert_ne!(
+        map["differs"]
+            .source_metrics
+            .as_ref()
+            .expect("source metrics"),
+        map["differs"]
+            .target_metrics
+            .as_ref()
+            .expect("target metrics")
+    );
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn scan_agents_md_keeps_sync_status_when_content_metrics_are_unavailable() {
+    let _guard = lock_test();
+    let root = unique_test_dir("scan-invalid-utf8");
+    let path = root.join("AGENTS.md");
+    fs::create_dir_all(&root).expect("root");
+    fs::write(&path, [0xff, 0xfe, 0xfd]).expect("invalid utf8 file");
+
+    let result = scan_agents_md_root(&root, &ProjectAgentsPrefs::default()).expect("scan");
+    let entry = &result.entries[0];
+
+    assert_eq!(entry.status, SyncStatus::TargetMissing);
+    assert!(entry.source.exists);
+    assert!(entry.source.hash.is_some());
+    assert_eq!(entry.source_metrics, None);
 
     fs::remove_dir_all(&root).expect("cleanup");
 }
@@ -699,6 +834,9 @@ fn project_skills_scan_extracts_description_from_frontmatter() {
         .find(|skill| skill.name == "demo-skill")
         .expect("demo-skill");
     assert_eq!(entry.description.as_deref(), Some("Does the demo thing."));
+    let metrics = entry.metrics.as_ref().expect("skill metrics");
+    assert_eq!(metrics.character_count, 64);
+    assert!(metrics.estimated_tokens > 0);
 
     fs::remove_dir_all(&root).expect("cleanup root");
 }
@@ -750,6 +888,9 @@ fn project_commands_scan_extracts_description_from_frontmatter() {
         .find(|command| command.name == "apply")
         .expect("apply command");
     assert_eq!(entry.description.as_deref(), Some("Apply the change."));
+    let metrics = entry.metrics.as_ref().expect("command metrics");
+    assert_eq!(metrics.character_count, 47);
+    assert!(metrics.estimated_tokens > 0);
 
     fs::remove_dir_all(&root).expect("cleanup root");
 }

@@ -1,5 +1,6 @@
-import type { AgentsMdScanResult, OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
+import type { AgentsMdScanResult, FileContentMetrics, OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
 import type { MessageKey } from "../locales/zh-TW";
+import { formatEstimatedTokens, formatFileMetrics } from "./formatFileMetrics";
 
 type TranslateFn = (key: MessageKey) => string;
 
@@ -237,7 +238,34 @@ function getAgentsEntryLabel(entry: AgentsMdScanResult["entries"][number], root:
   return segments[segments.length - 1] ?? normalized;
 }
 
-export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): TreeNode[] {
+function getAgentsFileMetrics(
+  entry: AgentsMdScanResult["entries"][number],
+  filePath: string,
+): FileContentMetrics | null {
+  if (entry.source.path === filePath) return entry.sourceMetrics ?? null;
+  if (entry.target.path === filePath) return entry.targetMetrics ?? null;
+  return null;
+}
+
+function getAgentsTrailingMeta(
+  metrics: FileContentMetrics | null,
+  locale: string,
+  t: TranslateFn,
+): Pick<TreeNode, "trailingMeta" | "trailingMetaTitle"> {
+  if (!metrics) return {};
+  const formatted = formatFileMetrics(
+    metrics,
+    locale,
+    t("agents.metrics.characters"),
+    t("agents.metrics.tokens"),
+  );
+  return {
+    trailingMeta: formatEstimatedTokens(metrics.estimatedTokens, locale, t("agents.metrics.tokens")),
+    trailingMetaTitle: formatted,
+  };
+}
+
+export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn, locale: string): TreeNode[] {
   const groups = new Map<string, TreeNode>();
   const roots: TreeNode[] = [];
 
@@ -282,6 +310,11 @@ export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): T
       tone: agentsStatusTone(entry.status),
       filePath: entry.source.exists ? entry.source.path : entry.target.path,
       filePathType: "absolute",
+      ...getAgentsTrailingMeta(
+        getAgentsFileMetrics(entry, entry.source.exists ? entry.source.path : entry.target.path),
+        locale,
+        t,
+      ),
     };
 
     if (entry.status === "differs" && entry.source.exists && entry.target.exists) {
@@ -296,6 +329,7 @@ export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): T
           tone: "in_progress",
           filePath: entry.source.path,
           filePathType: "absolute",
+          ...getAgentsTrailingMeta(entry.sourceMetrics ?? null, locale, t),
         },
         {
           id: `agents-md:${entry.target.path}`,
@@ -304,6 +338,7 @@ export function buildAgentsMdTree(result: AgentsMdScanResult, t: TranslateFn): T
           tone: "in_progress",
           filePath: entry.target.path,
           filePathType: "absolute",
+          ...getAgentsTrailingMeta(entry.targetMetrics ?? null, locale, t),
         },
       ];
     }

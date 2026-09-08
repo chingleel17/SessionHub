@@ -1,6 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { TreeNode } from "../types";
 import { formatDate } from "../utils/formatDate";
@@ -15,6 +15,7 @@ type Props = {
   error: string | null;
   isTaskSaving: boolean;
   onToggleTask: (filePath: string, taskIndex: number, checked: boolean) => Promise<void>;
+  headerMeta?: ReactNode;
 };
 
 function getDisplayPath(filePath: string): string {
@@ -89,6 +90,7 @@ export function ContentViewer({
   error,
   isTaskSaving,
   onToggleTask,
+  headerMeta,
 }: Props) {
   const { t, locale } = useI18n();
   const contentBodyRef = useRef<HTMLDivElement>(null);
@@ -99,6 +101,7 @@ export function ContentViewer({
       {createdAt ? (
         <span className="explorer-content-header-date">{formatDate(createdAt, locale)}</span>
       ) : null}
+      {headerMeta}
     </div>
   );
   const markdownFile = isMarkdownFile(filePath);

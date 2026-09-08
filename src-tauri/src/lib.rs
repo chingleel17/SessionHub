@@ -10,12 +10,13 @@ mod mcp_config;
 mod openspec_scan;
 mod platform;
 mod provider;
-mod resource_discovery;
 mod quota;
+mod resource_discovery;
 mod sessions;
 mod settings;
 mod sisyphus;
 mod stats;
+mod token_estimator;
 mod tray_icon;
 mod types;
 mod watcher;
@@ -297,10 +298,7 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<tauri:
     };
 
     // 尺寸以 logical 為準，避免任何外部還原覆蓋成錯誤的 physical 值
-    let _ = window.set_size(tauri::LogicalSize::new(
-        TRAY_PANEL_WIDTH,
-        TRAY_PANEL_HEIGHT,
-    ));
+    let _ = window.set_size(tauri::LogicalSize::new(TRAY_PANEL_WIDTH, TRAY_PANEL_HEIGHT));
 
     // 定位到系統匣附近（右下角，taskbar 上方）
     position_panel_near_tray(app, &window, tray_rect);
@@ -324,7 +322,10 @@ pub(crate) struct PanelScreen {
 ///
 /// `tray_phys` 為已換算為 physical 的系統匣圖示座標；`None` 時退回可用區域右下角。
 /// panel 尺寸以 logical 定義，需依 `screen.scale` 換算後才能與 work area 比較。
-pub(crate) fn compute_panel_position(screen: PanelScreen, tray_phys: Option<(f64, f64)>) -> (f64, f64) {
+pub(crate) fn compute_panel_position(
+    screen: PanelScreen,
+    tray_phys: Option<(f64, f64)>,
+) -> (f64, f64) {
     let panel_w = TRAY_PANEL_WIDTH * screen.scale;
     let panel_h = TRAY_PANEL_HEIGHT * screen.scale;
     let margin = TRAY_PANEL_MARGIN * screen.scale;
@@ -384,7 +385,10 @@ fn position_panel_near_tray(
         .or_else(|| window.current_monitor().ok().flatten());
 
     // 以命中螢幕自身的 scale 重新換算 tray 座標（混合 DPI 多螢幕）
-    let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(primary_scale);
+    let scale = monitor
+        .as_ref()
+        .map(|m| m.scale_factor())
+        .unwrap_or(primary_scale);
     let tray_phys = to_phys(scale);
     let monitor = find_monitor(tray_phys).cloned().or(monitor);
 

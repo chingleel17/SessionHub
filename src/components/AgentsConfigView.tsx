@@ -3,6 +3,7 @@ import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import { compareProviders } from "../utils/providerOrder";
+import { formatEstimatedTokens, formatFileMetrics } from "../utils/formatFileMetrics";
 import type { MessageKey } from "../locales/zh-TW";
 import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
 import type {
@@ -11,6 +12,7 @@ import type {
   AgentsRootLinkStatus,
   AgentsScope,
   CommandsScanResult,
+  FileContentMetrics,
   McpProviderConfig,
   ProjectAgentsPrefs,
   SkillEntry,
@@ -186,7 +188,7 @@ function syncStatusForProvider(entry: GroupedMatrixEntry, provider: string): Syn
 }
 
 export function AgentsConfigView(props: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { onReadFile, onWriteFile, onOpenExternal, onRevealPath, globalData, onActiveTabChange, ...projectOrGlobalData } = props;
   const primary = projectOrGlobalData as AgentsScopeDataBundle;
   const scopeStoragePrefix = getScopeStorageKey(primary.scope, "");
@@ -203,6 +205,7 @@ export function AgentsConfigView(props: Props) {
   const [draft, setDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [syncModalTab, setSyncModalTab] = useState<AgentsTab | null>(null);
+  const [previewMetrics, setPreviewMetrics] = useState<FileContentMetrics | null>(null);
 
   const groups: AgentsScopeDataBundle[] = globalData ? [primary, globalData] : [primary];
 
@@ -219,6 +222,7 @@ export function AgentsConfigView(props: Props) {
     setContentError(null);
     setSearchQuery("");
     setSyncModalTab(null);
+    setPreviewMetrics(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeStoragePrefix]);
 
@@ -227,6 +231,7 @@ export function AgentsConfigView(props: Props) {
     setContent(null);
     setContentError(null);
     setSearchQuery("");
+    setPreviewMetrics(null);
   }, [activeTab]);
 
   const loadContent = useCallback(async (filePath: string) => {
@@ -255,6 +260,7 @@ export function AgentsConfigView(props: Props) {
     setSelectedNode(null);
     setContent(null);
     setContentError(null);
+    setPreviewMetrics(null);
   };
 
   const previewHtml = useMemo(() => buildPreviewHtml(draft), [draft]);
@@ -272,7 +278,7 @@ export function AgentsConfigView(props: Props) {
   // ─── AGENTS.md 頁籤：單一群組的樹狀檢視 ─────────────────────────────────
 
   const renderAgentsMdGroup = (data: AgentsScopeDataBundle) => {
-    const treeNodes = data.agentsMdData ? buildAgentsMdTree(data.agentsMdData, t) : [];
+    const treeNodes = data.agentsMdData ? buildAgentsMdTree(data.agentsMdData, t, locale) : [];
     const isActiveGroup = groupIsSelectedNodeOwner(data, selectedNode, treeNodes);
     const groupSelectedNode = isActiveGroup ? selectedNode : null;
 
@@ -281,6 +287,23 @@ export function AgentsConfigView(props: Props) {
         (entry) => entry.source.path === groupSelectedNode.filePath || entry.target.path === groupSelectedNode.filePath,
       ) ?? null
       : null;
+
+    const selectedMdMetrics = selectedMdEntry && groupSelectedNode?.filePath
+      ? selectedMdEntry.source.path === groupSelectedNode.filePath
+        ? selectedMdEntry.sourceMetrics ?? null
+        : selectedMdEntry.target.path === groupSelectedNode.filePath
+          ? selectedMdEntry.targetMetrics ?? null
+          : null
+      : null;
+    const selectedMdMetricsLabel = selectedMdMetrics
+      ? formatFileMetrics(
+        selectedMdMetrics,
+        locale,
+        t("agents.metrics.characters"),
+        t("agents.metrics.tokens"),
+      )
+      : null;
+    const selectedFilePath = groupSelectedNode?.filePath;
 
     const mdActions = (
       <div className="settings-actions agents-toolbar-actions">
@@ -296,6 +319,27 @@ export function AgentsConfigView(props: Props) {
         <IconButton label={t("agents.action.syncThisDir")} className="agents-icon-button" disabled={!selectedMdEntry} onClick={() => selectedMdEntry && void handlePreview(data, buildAgentsMdSyncRequest(selectedMdEntry, true))}>
           <SyncIcon size={15} />
         </IconButton>
+        {groupSelectedNode?.filePath ? (
+          <button type="button" className="ghost-button agents-inline-button" onClick={() => setIsEditing((current) => !current)}>
+            {isEditing ? <EyeIcon size={15} /> : <EditNotesIcon size={15} />}
+            {isEditing ? t("agents.action.preview") : t("agents.action.edit")}
+          </button>
+        ) : null}
+        {isEditing && selectedFilePath ? (
+          <button
+            type="button"
+            className="primary-button agents-inline-button"
+            onClick={async () => {
+              await onWriteFile(selectedFilePath, draft);
+              setContent(draft);
+              setIsEditing(false);
+              await data.onRefreshAgentsMd();
+            }}
+          >
+            <SaveIcon size={15} />
+            {t("agents.action.save")}
+          </button>
+        ) : null}
       </div>
     );
 
@@ -314,44 +358,32 @@ export function AgentsConfigView(props: Props) {
               <ExplorerTree
                 nodes={treeNodes}
                 selectedId={groupSelectedNode?.id ?? null}
-                onSelect={(node) => setSelectedNode(node)}
+                onSelect={(node) => {
+                  setIsEditing(false);
+                  setSelectedNode(node);
+                }}
               />
             </div>
             <div className="explorer-content agents-content-pane">
-              <div className="agents-content-actions">
-                <button type="button" className="ghost-button agents-inline-button" disabled={!groupSelectedNode?.filePath} onClick={() => setIsEditing((current) => !current)}>
-                  {isEditing ? <EyeIcon size={15} /> : <EditNotesIcon size={15} />}
-                  {isEditing ? t("agents.action.preview") : t("agents.action.edit")}
-                </button>
-                {isEditing ? (
-                  <button
-                    type="button"
-                    className="primary-button agents-inline-button"
-                    disabled={!groupSelectedNode?.filePath}
-                    onClick={async () => {
-                      if (!groupSelectedNode?.filePath) return;
-                      await onWriteFile(groupSelectedNode.filePath, draft);
-                      setContent(draft);
-                      setIsEditing(false);
-                    }}
-                  >
-                    <SaveIcon size={15} />
-                    {t("agents.action.save")}
-                  </button>
-                ) : null}
-              </div>
-
               {isEditing ? (
-                <div className="plan-editor-layout">
-                  <label className="field-group">
-                    <span>{t("plan.editor")}</span>
-                    <textarea className="plan-textarea" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
-                  </label>
-                  <div className="plan-preview">
-                    <span className="session-meta-label">{t("plan.preview")}</span>
-                    <div className="plan-preview-markdown" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                <>
+                  {groupSelectedNode?.filePath ? (
+                    <div className="explorer-content-header">
+                      <span className="explorer-content-header-path path-text path-text--truncate">{groupSelectedNode.filePath}</span>
+                      {selectedMdMetricsLabel ? <span className="explorer-content-header-metrics">{selectedMdMetricsLabel}</span> : null}
+                    </div>
+                  ) : null}
+                  <div className="plan-editor-layout">
+                    <label className="field-group">
+                      <span>{t("plan.editor")}</span>
+                      <textarea className="plan-textarea" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
+                    </label>
+                    <div className="plan-preview">
+                      <span className="session-meta-label">{t("plan.preview")}</span>
+                      <div className="plan-preview-markdown" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                    </div>
                   </div>
-                </div>
+                </>
               ) : (
                 <ContentViewer
                   content={groupSelectedNode ? content : null}
@@ -361,6 +393,7 @@ export function AgentsConfigView(props: Props) {
                   error={contentError}
                   isTaskSaving={false}
                   onToggleTask={async () => {}}
+                  headerMeta={selectedMdMetricsLabel ? <span className="explorer-content-header-metrics">{selectedMdMetricsLabel}</span> : null}
                 />
               )}
             </div>
@@ -422,6 +455,7 @@ export function AgentsConfigView(props: Props) {
         filePath: previewPath,
         filePathType: "absolute",
       });
+      setPreviewMetrics(entry.metrics ?? null);
     };
 
     const syncLegend = (
@@ -536,6 +570,14 @@ export function AgentsConfigView(props: Props) {
                         </span>
                       ))}
                     </span>
+                    {entry.metrics ? (
+                      <span
+                        className="agents-list-file-metrics"
+                        title={formatFileMetrics(entry.metrics, locale, t("agents.metrics.characters"), t("agents.metrics.tokens"))}
+                      >
+                        {formatEstimatedTokens(entry.metrics.estimatedTokens, locale, t("agents.metrics.tokens"))}
+                      </span>
+                    ) : null}
                   </button>
                 </li>
               );
@@ -719,6 +761,11 @@ export function AgentsConfigView(props: Props) {
               error={contentError}
               isTaskSaving={false}
               onToggleTask={async () => {}}
+              headerMeta={previewMetrics ? (
+                <span className="explorer-content-header-metrics">
+                  {formatFileMetrics(previewMetrics, locale, t("agents.metrics.characters"), t("agents.metrics.tokens"))}
+                </span>
+              ) : null}
             />
         </Modal>
       ) : null}

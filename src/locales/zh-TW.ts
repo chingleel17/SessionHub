@@ -406,6 +406,8 @@ export const zhTwMessages = {
   "agents.preview.hint": "點選項目名稱即可預覽內容。",
   "agents.tree.title": "指示檔樹",
   "agents.tree.root": "根目錄",
+  "agents.metrics.characters": "字元",
+  "agents.metrics.tokens": "tokens",
   "agents.table.item": "項目",
   "agents.prefs.loading": "偏好載入中",
   "agents.prefs.targetsHint": "欄位勾選控制此 scope 的同步目標。",
