@@ -54,6 +54,8 @@ pub(crate) struct QuotaSnapshot {
     pub(crate) extra_credits: Option<ExtraCredits>,
     #[serde(default)]
     pub(crate) reset_credits: Option<ResetCredits>,
+    #[serde(default)]
+    pub(crate) plan: Option<String>,
 }
 
 pub(crate) struct QuotaCache {

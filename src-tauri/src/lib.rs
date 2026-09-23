@@ -569,6 +569,7 @@ pub fn run() {
             refresh_claude_quota,
             get_quota_snapshots,
             refresh_quota,
+            consume_codex_reset_credit,
             scan_agents_md,
             scan_global_agents_md,
             scan_agents_skills,

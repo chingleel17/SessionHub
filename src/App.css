@@ -8245,6 +8245,16 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   color: var(--quota-pct-text);
 }
 
+.qo-plan-badge {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-transform: capitalize;
+}
+
 .qo-source-badge {
   font-size: 11px;
   font-weight: 600;
@@ -8357,6 +8367,20 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+}
+
+.qo-reset-credits-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.qo-reset-credits-button.ui-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .qo-reset-credits-title {

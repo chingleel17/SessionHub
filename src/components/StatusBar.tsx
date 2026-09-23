@@ -21,6 +21,8 @@ type Props = {
   quotaSnapshots?: QuotaSnapshot[];
   quotaEnabledProviders?: string[];
   onRefreshQuota?: (provider?: string) => void;
+  onConsumeResetCredit?: () => void;
+  resetCreditBusy?: boolean;
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -231,6 +233,8 @@ export function StatusBar({
   quotaSnapshots = [],
   quotaEnabledProviders = [],
   onRefreshQuota,
+  onConsumeResetCredit,
+  resetCreditBusy,
 }: Props) {
   const { t } = useI18n();
   const [isQuotaPopupOpen, setIsQuotaPopupOpen] = useState(false);
@@ -361,6 +365,8 @@ export function StatusBar({
                 snapshots={quotaSnapshots.filter((snapshot) => quotaEnabledProviders.includes(snapshot.provider))}
                 onRefresh={() => onRefreshQuota?.()}
                 onRefreshProvider={(provider) => onRefreshQuota?.(provider)}
+                onConsumeResetCredit={onConsumeResetCredit}
+                resetBusy={resetCreditBusy}
                 storageKey="quota-popup-active-provider"
               />
             </div>

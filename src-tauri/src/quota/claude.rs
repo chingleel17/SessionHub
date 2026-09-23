@@ -1,5 +1,13 @@
 use std::env;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+use crate::types::CREATE_NO_WINDOW;
 use crate::types::{AppSettings, ExtraCredits, QuotaSnapshot, QuotaWindow, CLAUDE_PROVIDER};
 
 use super::http;
@@ -21,6 +29,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -34,6 +43,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -55,18 +65,21 @@ fn rate_limited_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
 /// Claude Code OAuth client ID (public PKCE client, same as Claude Code CLI)
 const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct ClaudeCredentials {
     access_token: Option<String>,
     refresh_token: Option<String>,
     /// Unix ms timestamp
     expires_at_ms: Option<i64>,
+    subscription_type: Option<String>,
 }
 
 fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, String> {
@@ -120,6 +133,11 @@ fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, Strin
     let expires_at_ms = oauth
         .and_then(|o| o.get("expiresAt"))
         .and_then(|v| v.as_i64());
+    let subscription_type = oauth
+        .and_then(|o| o.get("subscriptionType"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
 
     if access_token.is_none() && refresh_token.is_none() {
         let keys: Vec<String> = json
@@ -137,7 +155,71 @@ fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, Strin
         access_token,
         refresh_token,
         expires_at_ms,
+        subscription_type,
     })
+}
+
+fn parse_auth_status_plan(body: &serde_json::Value) -> Option<String> {
+    if body.get("loggedIn").and_then(|value| value.as_bool()) != Some(true) {
+        return None;
+    }
+    body.get("subscriptionType")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn claude_cli_executable() -> PathBuf {
+    if let Some(profile) = env::var_os("USERPROFILE") {
+        let native_cli = PathBuf::from(profile)
+            .join(".local")
+            .join("bin")
+            .join("claude.exe");
+        if native_cli.is_file() {
+            return native_cli;
+        }
+    }
+    PathBuf::from("claude")
+}
+
+/// 憑證未附方案時，使用 Claude Code 自身的登入狀態作為唯讀備援來源。
+fn read_cli_subscription_type(claude_root: &str) -> Option<String> {
+    let mut command = Command::new(claude_cli_executable());
+    command
+        .args(["auth", "status"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if !claude_root.trim().is_empty() {
+        command.env("CLAUDE_CONFIG_DIR", claude_root.trim());
+    }
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command.spawn().ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => return None,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) if started.elapsed() < AUTH_STATUS_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    parse_auth_status_plan(&body)
 }
 
 fn is_token_expired(expires_at_ms: Option<i64>) -> bool {
@@ -431,6 +513,9 @@ impl QuotaAdapter for ClaudeAdapter {
             },
             extra_credits,
             reset_credits: None,
+            plan: creds
+                .subscription_type
+                .or_else(|| read_cli_subscription_type(&settings.claude_root)),
         }
     }
 }
@@ -439,6 +524,19 @@ impl QuotaAdapter for ClaudeAdapter {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn auth_status_plan_requires_logged_in_subscription() {
+        assert_eq!(
+            parse_auth_status_plan(&json!({ "loggedIn": true, "subscriptionType": "max" })),
+            Some("max".to_string())
+        );
+        assert_eq!(
+            parse_auth_status_plan(&json!({ "loggedIn": false, "subscriptionType": "pro" })),
+            None
+        );
+        assert_eq!(parse_auth_status_plan(&json!({ "loggedIn": true })), None);
+    }
 
     #[test]
     fn parse_scoped_weekly_windows_extracts_fable() {

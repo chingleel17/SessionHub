@@ -44,6 +44,8 @@ type Props = {
   enableQuotaMonitoring?: boolean;
   quotaEnabledProviders?: string[];
   onRefreshQuota?: (provider?: string) => void;
+  onConsumeResetCredit?: () => void;
+  resetCreditBusy?: boolean;
 };
 
 const RECENT_TITLE_MAX_LEN = 80;
@@ -462,6 +464,8 @@ export function DashboardView({
   quotaEnabledProviders = [],
   enableQuotaMonitoring = true,
   onRefreshQuota,
+  onConsumeResetCredit,
+  resetCreditBusy,
 }: Props) {
   const { t } = useI18n();
 
@@ -676,6 +680,8 @@ export function DashboardView({
             snapshots={filteredQuotaSnapshots}
             onRefresh={onRefreshQuota}
             onRefreshProvider={(provider) => onRefreshQuota?.(provider)}
+            onConsumeResetCredit={onConsumeResetCredit}
+            resetBusy={resetCreditBusy}
           />
         </article>
       ) : null}

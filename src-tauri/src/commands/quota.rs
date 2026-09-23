@@ -7,6 +7,7 @@ use crate::db::{
 use crate::quota::cache::{
     prune_disabled_provider_quota, read_snapshots_from_cache, write_snapshot_to_cache_and_db,
 };
+use crate::quota::codex::consume_reset_credit_internal;
 use crate::quota::QuotaManager;
 use crate::settings::{load_settings_internal, resolve_claude_root};
 use crate::stats::{build_claude_usage_blocks, compute_claude_stats, is_claude_session_file};
@@ -120,6 +121,20 @@ pub fn get_quota_snapshots(
     quota_cache: State<'_, QuotaCache>,
 ) -> Result<Vec<QuotaSnapshot>, String> {
     read_snapshots_from_cache(&quota_cache)
+}
+
+#[tauri::command]
+pub fn consume_codex_reset_credit(request_id: String) -> Result<String, String> {
+    let settings = load_settings_internal().map_err(|error| format!("無法讀取設定: {error}"))?;
+    if !settings.enable_quota_monitoring
+        || !settings
+            .quota_enabled_providers
+            .iter()
+            .any(|provider| provider == CODEX_PROVIDER)
+    {
+        return Err("請先啟用 Codex 額度監控".to_string());
+    }
+    consume_reset_credit_internal(&settings.codex_root, &request_id)
 }
 
 #[tauri::command]

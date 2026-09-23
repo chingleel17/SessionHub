@@ -345,6 +345,7 @@ mod tests {
             ),
             extra_credits: None,
             reset_credits: None,
+            plan: None,
         }
     }
 

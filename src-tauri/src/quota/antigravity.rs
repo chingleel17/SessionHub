@@ -19,6 +19,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -299,6 +301,7 @@ impl QuotaAdapter for AntigravityAdapter {
                         },
                         extra_credits: None,
                         reset_credits: None,
+                        plan: None,
                     };
                 }
                 Err(error) => {

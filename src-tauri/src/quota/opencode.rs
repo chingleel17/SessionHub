@@ -25,6 +25,7 @@ impl QuotaAdapter for OpenCodeAdapter {
             windows: None,
             extra_credits: None,
             reset_credits: None,
+            plan: None,
         }
     }
 }

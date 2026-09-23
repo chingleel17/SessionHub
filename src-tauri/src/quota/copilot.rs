@@ -29,6 +29,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -42,6 +43,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -232,6 +234,7 @@ impl QuotaAdapter for CopilotAdapter {
                     windows: None,
                     extra_credits: None,
                     reset_credits: None,
+                    plan: None,
                 };
             }
             http::ApiOutcome::RateLimited { .. } => {
@@ -311,6 +314,7 @@ impl QuotaAdapter for CopilotAdapter {
                 windows: None,
                 extra_credits: None,
                 reset_credits: None,
+                plan: None,
             };
         }
 
@@ -323,6 +327,11 @@ impl QuotaAdapter for CopilotAdapter {
             windows: Some(windows),
             extra_credits: None,
             reset_credits: None,
+            plan: body
+                .get("copilot_plan")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string),
         }
     }
 }

@@ -5,6 +5,8 @@ import type { QuotaSnapshot, QuotaWindow, ResetCreditEntry } from "../types";
 import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
+import { quotaPlanLabel } from "../utils/quotaPlanLabel";
+import { Button } from "./ui/Button";
 
 const DEFAULT_STORAGE_KEY = "quota-overview-active-provider";
 const ALL_PROVIDER_KEY = "all";
@@ -159,17 +161,27 @@ function ResetCreditRow({ credit }: { credit: ResetCreditEntry }) {
   );
 }
 
-function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
+function ProviderPanel({ snap, onConsumeResetCredit, resetBusy }: {
+  snap: QuotaSnapshot;
+  onConsumeResetCredit?: () => void;
+  resetBusy: boolean;
+}) {
   const { t } = useI18n();
   const isOk = snap.status === "ok";
   const windows = snap.windows ?? [];
   const resetCredits = snap.resetCredits;
+  const planDetails = isOk && snap.plan ? quotaPlanLabel(snap.provider, snap.plan, t) : null;
 
   return (
     <div className="qo-panel">
       <div className="qo-panel-header">
         <div className="qo-panel-title-row">
           <span className="qo-panel-name">{PROVIDER_LABELS[snap.provider] ?? snap.provider}</span>
+          {planDetails ? (
+            <span className="qo-plan-badge" title={planDetails.title}>
+              {planDetails.label}
+            </span>
+          ) : null}
           <span className={`qo-source-badge qo-source-badge--${snap.source}`}>
             {t(snap.source === "remote_api" ? "quota.monitoring.source.remote_api" : "quota.monitoring.source.local_scan")}
           </span>
@@ -197,7 +209,16 @@ function ProviderPanel({ snap }: { snap: QuotaSnapshot }) {
       {isOk && resetCredits ? (
         <div className="qo-reset-credits">
           <div className="qo-reset-credits-header">
-            <span className="qo-reset-credits-title">{t("quota.resetCredits.title")}</span>
+            <div className="qo-reset-credits-actions">
+              {snap.provider === "codex" && onConsumeResetCredit ? (
+                <Button variant="secondary" className="qo-reset-credits-button"
+                  disabled={resetBusy || resetCredits.availableCount === 0}
+                  onClick={(event) => { event.stopPropagation(); onConsumeResetCredit(); }}>
+                  {resetBusy ? t("quota.resetCredits.busy") : t("quota.resetCredits.use")}
+                </Button>
+              ) : null}
+              <span className="qo-reset-credits-title">{t("quota.resetCredits.title")}</span>
+            </div>
             <span className="qo-reset-credits-count">
               {t("quota.resetCredits.availableCount", { count: resetCredits.availableCount })}
             </span>
@@ -243,6 +264,8 @@ interface Props {
   snapshots: QuotaSnapshot[];
   onRefresh?: () => void;
   onRefreshProvider?: (provider: string) => void;
+  onConsumeResetCredit?: () => void;
+  resetBusy?: boolean;
   storageKey?: string;
 }
 
@@ -254,6 +277,8 @@ export function QuotaOverview({
   snapshots,
   onRefresh,
   onRefreshProvider,
+  onConsumeResetCredit,
+  resetBusy = false,
   storageKey = DEFAULT_STORAGE_KEY,
 }: Props) {
   const { t } = useI18n();
@@ -314,7 +339,7 @@ export function QuotaOverview({
 
       <div className={`qo-panels${resolvedProvider === ALL_PROVIDER_KEY ? " qo-panels--stack" : ""}`}>
         {activePanels.map((snap) => (
-          <ProviderPanel key={snap.provider} snap={snap} />
+          <ProviderPanel key={snap.provider} snap={snap} onConsumeResetCredit={onConsumeResetCredit} resetBusy={resetBusy} />
         ))}
       </div>
 

@@ -16,6 +16,8 @@ const FIVE_HOUR_MAX_SECONDS: i64 = DAY_SECONDS;
 const SEVEN_DAY_MIN_SECONDS: i64 = 2 * DAY_SECONDS;
 const SEVEN_DAY_MAX_SECONDS: i64 = 14 * DAY_SECONDS;
 const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CONSUME_RESET_CREDIT_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
 fn current_timestamp() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -31,6 +33,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -44,6 +47,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         windows: None,
         extra_credits: None,
         reset_credits: None,
+        plan: None,
     }
 }
 
@@ -236,6 +240,70 @@ fn parse_reset_credits_response(body: &serde_json::Value) -> ResetCredits {
     }
 }
 
+fn parse_plan(body: &serde_json::Value) -> Option<String> {
+    body.get("plan_type")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty() && *value != "unknown")
+        .map(str::to_string)
+}
+
+fn parse_consume_outcome(body: &serde_json::Value) -> Result<String, String> {
+    match body.get("code").and_then(|value| value.as_str()) {
+        Some("reset" | "nothing_to_reset" | "no_credit" | "already_redeemed") => {
+            Ok(body["code"].as_str().unwrap_or_default().to_string())
+        }
+        _ => Err("Codex 重置額度回應格式未知，請重新整理用量確認結果".to_string()),
+    }
+}
+
+pub(crate) fn consume_reset_credit_internal(
+    codex_root: &str,
+    request_id: &str,
+) -> Result<String, String> {
+    if request_id.trim().is_empty() {
+        return Err("缺少重置請求識別碼".to_string());
+    }
+    let creds = read_codex_credentials(codex_root)?;
+    if creds.account_id.is_none() {
+        return Err("請先以 ChatGPT 帳號登入 Codex CLI 才能使用重置額度".to_string());
+    }
+    let credits = fetch_reset_credits(&creds)?;
+    if credits.is_none_or(|credits| credits.available_count == 0) {
+        return Err("目前沒有可用的 Codex 重置額度".to_string());
+    }
+
+    let payload = serde_json::json!({ "redeem_request_id": request_id });
+    let mut request = http::post(CONSUME_RESET_CREDIT_URL, None)
+        .header("Authorization", &format!("Bearer {}", creds.access_token))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json");
+    if let Some(account_id) = &creds.account_id {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+    let response = request
+        .send(payload.to_string())
+        .map_err(|error| format!("Codex 重置請求失敗，請重新整理確認結果: {error}"))?;
+    let mut response = match http::classify(response) {
+        http::ApiOutcome::Success(response) => response,
+        http::ApiOutcome::Unauthorized => {
+            return Err("Codex 登入憑證已失效，請重新登入".to_string())
+        }
+        http::ApiOutcome::RateLimited { .. } => {
+            return Err("Codex 請求過於頻繁，請稍後重新整理確認結果".to_string())
+        }
+        http::ApiOutcome::UnexpectedStatus(status) => {
+            return Err(format!(
+                "Codex 重置失敗 (HTTP {status})，請重新整理確認結果"
+            ));
+        }
+    };
+    let body: serde_json::Value = response
+        .body_mut()
+        .read_json()
+        .map_err(|error| format!("Codex 重置回應無法解析，請重新整理確認結果: {error}"))?;
+    parse_consume_outcome(&body)
+}
+
 fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>, String> {
     let mut request = http::get(RESET_CREDITS_URL, None)
         .header("Authorization", &format!("Bearer {}", creds.access_token))
@@ -353,6 +421,7 @@ impl QuotaAdapter for CodexAdapter {
             },
             extra_credits: None,
             reset_credits,
+            plan: parse_plan(&body),
         }
     }
 }
@@ -517,6 +586,24 @@ mod tests {
 
         assert_eq!(parsed.available_count, 0);
         assert!(parsed.credits.is_empty());
+    }
+
+    #[test]
+    fn plan_and_reset_outcomes_are_parsed_without_guessing() {
+        assert_eq!(
+            parse_plan(&json!({ "plan_type": "pro" })),
+            Some("pro".to_string())
+        );
+        assert_eq!(parse_plan(&json!({ "plan_type": "unknown" })), None);
+        assert_eq!(
+            parse_consume_outcome(&json!({ "code": "reset", "windows_reset": 2 })).as_deref(),
+            Ok("reset")
+        );
+        assert_eq!(
+            parse_consume_outcome(&json!({ "code": "no_credit" })).as_deref(),
+            Ok("no_credit")
+        );
+        assert!(parse_consume_outcome(&json!({ "code": "other" })).is_err());
     }
 
     #[test]

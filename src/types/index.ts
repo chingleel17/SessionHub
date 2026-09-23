@@ -598,6 +598,7 @@ export type QuotaSnapshot = {
     windows?: QuotaWindow[] | null;
     extraCredits?: ExtraCredits | null;
     resetCredits?: ResetCredits | null;
+    plan?: string | null;
 };
 
 export type ClaudeUsageBlock = {

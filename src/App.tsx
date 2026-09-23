@@ -286,6 +286,7 @@ function App() {
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [resetCreditBusy, setResetCreditBusy] = useState(false);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
   const [tagEditDialog, setTagEditDialog] = useState<{
     session: SessionInfo;
@@ -1910,6 +1911,35 @@ function App() {
       .catch(() => null);
   }, [queryClient]);
 
+  const handleConsumeResetCredit = () => {
+    if (resetCreditBusy) return;
+    setConfirmDialog({
+      title: t("quota.resetCredits.confirmTitle"),
+      message: t("quota.resetCredits.confirmMessage"),
+      actionLabel: t("quota.resetCredits.use"),
+      tone: "danger",
+      onConfirm: () => {
+        if (resetCreditBusy) return;
+        setResetCreditBusy(true);
+        void invoke<string>("consume_codex_reset_credit", { requestId: crypto.randomUUID() })
+          .then((outcome) => {
+            const messages = {
+              reset: "quota.resetCredits.outcome.reset",
+              nothing_to_reset: "quota.resetCredits.outcome.nothing_to_reset",
+              no_credit: "quota.resetCredits.outcome.no_credit",
+              already_redeemed: "quota.resetCredits.outcome.already_redeemed",
+            } as const;
+            showToast(t(messages[outcome as keyof typeof messages] ?? "quota.resetCredits.failed"));
+          })
+          .catch((error: unknown) => showToast(resolveErrorMessage(error, t("quota.resetCredits.failed"))))
+          .finally(() => {
+            setResetCreditBusy(false);
+            handleRefreshQuota("codex");
+          });
+      },
+    });
+  };
+
   const handleOpenProviderPath = async (integration: ProviderIntegrationStatus) => {
     const targetPath = resolveProviderTargetPath(integration);
     if (!targetPath) {
@@ -2137,6 +2167,8 @@ function App() {
               enableQuotaMonitoring={settingsForm.enableQuotaMonitoring ?? true}
               quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
               onRefreshQuota={handleRefreshQuota}
+              onConsumeResetCredit={handleConsumeResetCredit}
+              resetCreditBusy={resetCreditBusy}
             />
           ) : null}
 
@@ -2298,6 +2330,8 @@ function App() {
             quotaSnapshots={quotaSnapshotQuery.data ?? []}
             quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
             onRefreshQuota={handleRefreshQuota}
+            onConsumeResetCredit={handleConsumeResetCredit}
+            resetCreditBusy={resetCreditBusy}
           />
         ) : null}
       </section>

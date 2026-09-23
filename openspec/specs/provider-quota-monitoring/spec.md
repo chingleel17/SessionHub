@@ -1,3 +1,7 @@
+## Purpose
+
+定義 SessionHub 的平台額度快照、方案資訊、Codex 手動重置額度，以及各介面的查詢與顯示行為。
+
 ## Requirements
 
 ### Requirement: 系統提供統一的 provider quota snapshot
@@ -15,6 +19,7 @@ error_message: Option<String>  — 查詢失敗時的錯誤描述
 windows:       Option<Vec<QuotaWindow>>  — rolling window 用量（claude / copilot 適用）
 extra_credits: Option<ExtraCredits>      — overage / 超額用量（claude extra_usage 適用）
 reset_credits: Option<ResetCredits>      — 手動重置額度（codex 適用）
+plan:          Option<String>            — provider 回傳的原始方案／帳戶類型（claude / copilot / codex 適用）
 ```
 
 `QuotaWindow` 欄位：
@@ -75,6 +80,12 @@ status:     String          — API 原始狀態字串（如 "active"）
 - **WHEN** 從 SQLite 載入本欄位新增前序列化的 snapshot JSON
 - **THEN** 反序列化成功，`reset_credits` 為 null
 - **AND** 不產生錯誤或阻斷載入
+
+#### Scenario: 舊快照缺少 plan 欄位
+
+- **WHEN** 從 SQLite 載入 `plan` 欄位新增前序列化的 snapshot JSON
+- **THEN** 反序列化成功，`plan` 為 null
+- **AND** 不需要 DB migration，也不影響既有額度視窗
 
 #### Scenario: 舊快照含已移除的 local_tokens 欄位
 
@@ -229,6 +240,58 @@ Dashboard 的 QuotaOverview Codex 面板 SHALL 在 snapshot 含 `reset_credits` 
 
 - **WHEN** Codex snapshot 的 `reset_credits` 為 null
 - **THEN** Codex 面板不顯示重置額度區塊，其餘內容照常
+
+### Requirement: quota 面板顯示 provider 方案資訊
+
+成功查詢的 Claude、Copilot 與 Codex quota snapshot SHALL 在可取得時保留 provider 原始方案／帳戶類型於選填的 `plan` 欄位。Dashboard 與狀態列彈出面板共用的 QuotaOverview SHALL 在 `status: "ok"` 且 `plan` 非空時，於 provider 名稱旁顯示方案標籤；無方案值時不顯示空標籤。標籤 SHALL 透過 zh-TW／en-US 翻譯與 provider 專屬對映取得，不得改寫 snapshot 內的原始值。
+
+#### Scenario: Claude 憑證含訂閱類型
+
+- **WHEN** Claude OAuth 憑證的 `claudeAiOauth.subscriptionType` 非空且 usage API 查詢成功
+- **THEN** Claude snapshot 的 `plan` 為該原始訂閱類型（例如 `pro` 或 `max`）
+
+#### Scenario: Claude 憑證缺少訂閱類型
+
+- **WHEN** Claude OAuth 憑證可用但缺少 `subscriptionType`，且 usage API 查詢成功
+- **THEN** 後端以對應 `CLAUDE_CONFIG_DIR` 執行 `claude auth status`，優先尋找 Windows 原生安裝位置，找不到時使用 PATH
+- **AND** 僅在 CLI 成功回傳 `loggedIn: true` 與非空 `subscriptionType` 時填入 `plan`
+- **AND** CLI 不可用、逾時（5 秒）、失敗或回應不可解析時，`plan` 為 null，不影響已成功取得的用量 snapshot
+
+#### Scenario: Copilot 顯示社群方案對映
+
+- **WHEN** Copilot `GET /copilot_internal/user` 回傳 `copilot_plan: "individual"` 或 `"individual_pro"` 且用量查詢成功
+- **THEN** snapshot 的 `plan` 保留原始 `copilot_plan`
+- **AND** 面板分別顯示 `Copilot Pro` 或 `Copilot Pro+`，提示文字保留原始類型並說明此對映來自社群
+- **AND** 其他以 `individual_` 開頭的未知類型只顯示「個人方案」，不得套用 Pro 或 Pro+ 對映
+
+#### Scenario: Codex 顯示 Business Premium 對映
+
+- **WHEN** Codex `GET /wham/usage` 回傳 `plan_type: "self_serve_business_prolite"`
+- **THEN** snapshot 的 `plan` 保留原始 `plan_type`，面板顯示 `Business Premium`
+- **AND** 提示文字說明此對映依 Codex 內部分類，並保留原始類型供核對
+- **AND** 其他以 `self_serve_business_` 開頭的類型只顯示「商業帳戶」，不得套用 Premium 對映
+
+### Requirement: 可於 App 內消耗 Codex 手動重置額度
+
+QuotaOverview 的 Codex 重置額度標題前 SHALL 顯示使用重置按鈕，僅在 snapshot 有 `reset_credits` 時出現。可用次數為 0 或操作進行中時 SHALL 停用按鈕。按下按鈕 SHALL 先經應用程式共用確認對話框二次確認，不得單次點擊即送出消耗請求；Tauri IPC 由 App 元件發起。
+
+#### Scenario: 確認後使用一筆重置額度
+
+- **WHEN** 使用者確認操作，且 Codex 額度監控已啟用、具有 ChatGPT 帳戶 ID 與可用重置額度
+- **THEN** 後端先重新查詢可用重置額度，再以相同 Codex 憑證呼叫 `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`
+- **AND** 請求 JSON 包含新產生的 `redeem_request_id`，若有 account ID 則附帶 `ChatGPT-Account-Id` header
+- **AND** 前端顯示後端回傳的 `reset`、`nothing_to_reset`、`no_credit` 或 `already_redeemed` 對應結果，完成後重新整理 Codex 額度與可用次數
+
+#### Scenario: 取消確認或額度不可用
+
+- **WHEN** 使用者取消確認，或可用重置額度為 0
+- **THEN** 不送出消耗請求
+
+#### Scenario: 重置請求失敗或結果不明
+
+- **WHEN** 憑證無效、請求失敗、回應格式未知或網路逾時
+- **THEN** 顯示錯誤或提示使用者重新整理確認結果
+- **AND** 操作按鈕恢復可用狀態，並重新整理 Codex snapshot；不得自行宣稱已完成重置
 
 ### Requirement: quota monitoring 以內建 adapter 為主，保留 Rust trait 擴充點
 
