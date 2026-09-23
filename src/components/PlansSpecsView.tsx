@@ -254,9 +254,8 @@ export function PlansSpecsView({
     setViewMode(mode);
     localStorage.setItem(viewModeStorageKey, mode);
   }, [viewModeStorageKey]);
-  const [columnsOpenGroups, setColumnsOpenGroups] = useState<Set<string>>(
-    () => new Set(["openspec:active-changes"]),
-  );
+  const [columnsOpenGroups, setColumnsOpenGroups] = useState<Set<string>>(() => new Set());
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
   const [columnsChangeId, setColumnsChangeId] = useState<string | null>(null);
   const [copiedEntryId, setCopiedEntryId] = useState<string | null>(null);
   const isDragging = useRef(false);
@@ -374,56 +373,49 @@ export function PlansSpecsView({
     document.addEventListener("mouseup", onMouseUp);
   }, [explorerWidth]);
 
-  const hasSisyphus =
-    sisyphusData &&
-    (sisyphusData.plans.length > 0 ||
-      sisyphusData.notepads.length > 0 ||
-      sisyphusData.evidenceFiles.length > 0 ||
-      sisyphusData.draftFiles.length > 0 ||
-      sisyphusData.activePlan !== null);
-
-  const hasOpenSpec =
-    openspecData &&
-    (openspecData.activeChanges.length > 0 ||
-      openspecData.archivedChanges.length > 0 ||
-      openspecData.specs.length > 0);
+  const sisyphusNodes = useMemo(
+    () => sisyphusData ? buildSisyphusTree(sisyphusData, t) : [],
+    [sisyphusData, t],
+  );
+  const openspecNodes = useMemo(() => {
+    if (!openspecData) return [];
+    return buildOpenSpecTree({
+      ...openspecData,
+      activeChanges: sortChanges(openspecData.activeChanges, sortField, sortDir),
+      archivedChanges: sortChanges(openspecData.archivedChanges, sortField, sortDir),
+    }, t);
+  }, [openspecData, sortField, sortDir, t]);
+  const hasSisyphus = sisyphusNodes.length > 0;
+  const hasOpenSpec = openspecNodes.length > 0;
 
   const rootNodes = useMemo<TreeNode[]>(() => {
-    const sisyphusNodes = hasSisyphus && sisyphusData ? buildSisyphusTree(sisyphusData, t) : [];
-    const sortedOpenspecData = hasOpenSpec && openspecData
-      ? {
-          ...openspecData,
-          activeChanges: sortChanges(openspecData.activeChanges, sortField, sortDir),
-          archivedChanges: sortChanges(openspecData.archivedChanges, sortField, sortDir),
-        }
-      : openspecData;
-    const openspecNodes = hasOpenSpec && sortedOpenspecData ? buildOpenSpecTree(sortedOpenspecData, t) : [];
-
     return [
-      ...(sisyphusNodes.length > 0
+      ...(hasSisyphus
         ? [
             {
               id: "root:sisyphus",
               label: t("plansSpecs.sisyphus.title"),
               icon: "folder" as const,
+              sourceKind: "sisyphus" as const,
               defaultOpen: true,
               children: sisyphusNodes,
             },
           ]
         : []),
-      ...(openspecNodes.length > 0
+      ...(hasOpenSpec
         ? [
             {
               id: "root:openspec",
               label: t("plansSpecs.openspec.title"),
               icon: "folder" as const,
+              sourceKind: "openspec" as const,
               defaultOpen: true,
               children: openspecNodes,
             },
           ]
         : []),
     ];
-  }, [hasOpenSpec, hasSisyphus, openspecData, sisyphusData, t, sortField, sortDir]);
+  }, [hasOpenSpec, hasSisyphus, openspecNodes, sisyphusNodes, t]);
 
   // 依目前顯示的檔案反查所屬 change 的建立日期（僅 openspec change 的 artifact 有值）
   const contentCreatedAt = useMemo<string | null>(() => {
@@ -439,45 +431,63 @@ export function PlansSpecsView({
     return pool.find((c) => c.name === changeName)?.createdAt ?? null;
   }, [contentFilePath, contentFilePathType, openspecData]);
 
-  // 蒐集所有狀態群組（扁平），供 Cols 模式使用
-  const allColsStatusGroups = useMemo<TreeNode[]>(() => {
-    const groups: TreeNode[] = [];
-    for (const rootNode of rootNodes) {
-      for (const child of rootNode.children ?? []) {
-        groups.push(child);
-      }
+  const sourceSections = useMemo(
+    () => rootNodes.map((sourceNode) => ({
+      sourceNode,
+      groups: sourceNode.children ?? [],
+    })),
+    [rootNodes],
+  );
+
+  useEffect(() => {
+    setExpandedSources(new Set(sourceSections.map(({ sourceNode }) => sourceNode.id)));
+  }, [sourceSections]);
+
+  useEffect(() => {
+    const groups = sourceSections.flatMap(({ groups }) => groups);
+    if (!groups.length) {
+      setColumnsOpenGroups(new Set());
+      return;
     }
-    return groups;
-  }, [rootNodes]);
+    const preferred = groups.find((group) => group.id === "openspec:active-changes") ?? groups[0];
+    setColumnsOpenGroups(new Set([preferred.id]));
+  }, [sourceSections]);
 
   // 同步 selectedNode → 展開對應群組 + 選中對應 change
   useEffect(() => {
     if (!selectedNode?.id) return;
     const path = findNodePath(rootNodes, selectedNode.id);
     if (!path) return;
-    // path[0] = root, path[1] = status group, path[2] = change
-    const statusGroup = path[1];
-    if (statusGroup && allColsStatusGroups.some((g) => g.id === statusGroup.id)) {
-      setColumnsOpenGroups((prev) => {
-        if (prev.has(statusGroup.id)) return prev;
+    const sourceNode = path.find((node) => sourceSections.some(({ sourceNode: source }) => source.id === node.id));
+    const statusGroupIndex = path.findIndex((node) => sourceSections.some(({ groups }) => groups.some((group) => group.id === node.id)));
+    const statusGroup = statusGroupIndex >= 0 ? path[statusGroupIndex] : null;
+    if (sourceNode) {
+      setExpandedSources((prev) => {
+        if (prev.has(sourceNode.id)) return prev;
         const next = new Set(prev);
-        next.add(statusGroup.id);
+        next.add(sourceNode.id);
         return next;
       });
     }
-    const changeNode = path[2];
+    if (statusGroup) {
+      setColumnsOpenGroups(new Set([statusGroup.id]));
+    }
+    const changeNode = statusGroupIndex >= 0 ? path[statusGroupIndex + 1] : null;
     if (changeNode) {
       setColumnsChangeId(changeNode.id);
     }
-  }, [rootNodes, selectedNode?.id, allColsStatusGroups]);
+  }, [rootNodes, selectedNode?.id, sourceSections]);
 
   // Cols 模式：若 columnsChangeId 失效，自動選第一個可見 change
   useEffect(() => {
-    if (!allColsStatusGroups.length) {
+    const visibleGroups = sourceSections
+      .filter(({ sourceNode }) => expandedSources.has(sourceNode.id))
+      .flatMap(({ groups }) => groups);
+    if (!visibleGroups.length) {
       setColumnsChangeId(null);
       return;
     }
-    const allVisibleChanges = allColsStatusGroups
+    const allVisibleChanges = visibleGroups
       .filter((g) => columnsOpenGroups.has(g.id))
       .flatMap((g) => g.children ?? []);
     if (!allVisibleChanges.length) return;
@@ -486,7 +496,7 @@ export function PlansSpecsView({
         ? current
         : allVisibleChanges[0].id
     ));
-  }, [allColsStatusGroups, columnsOpenGroups]);
+  }, [columnsOpenGroups, expandedSources, sourceSections]);
 
   useEffect(() => {
     if (!selectedNode?.id) return;
@@ -521,11 +531,12 @@ export function PlansSpecsView({
   }, [contentFilePath, loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
 
   const renderListChangeRow = (item: TreeNode) => {
+    const isOpenSpecItem = item.sourceKind === "openspec";
     const artifactNodes = item.children ?? [];
     const specsNode = artifactNodes.find((a) => a.id.endsWith(":specs"));
     const badgeArtifacts = artifactNodes.filter((a) => !a.id.endsWith(":specs"));
     const specsCount = specsNode?.children?.length ?? 0;
-    const isAnyArtifactActive = badgeArtifacts.some((a) => {
+    const isAnyArtifactActive = isOpenSpecItem && badgeArtifacts.some((a) => {
       const leaf = getSelectableNode(a);
       return leaf && selectedNode?.id === leaf.id;
     });
@@ -545,11 +556,11 @@ export function PlansSpecsView({
           <span className="explorer-list-row-name" title={item.label}>
             {item.label}
           </span>
-          {specsCount > 0 ? (
+          {isOpenSpecItem && specsCount > 0 ? (
             <span className="explorer-list-specs-count">{specsCount} specs</span>
           ) : null}
         </div>
-        {badgeArtifacts.length > 0 ? (
+        {isOpenSpecItem && badgeArtifacts.length > 0 ? (
           <div className="explorer-chip-row">
             {badgeArtifacts.map((artifact) => {
               const targetNode = getSelectableNode(artifact);
@@ -587,25 +598,38 @@ export function PlansSpecsView({
   };
 
   const renderListView = () => {
-    // 蒐集所有群組（Active Changes、Archived Changes、Specs 等）
-    const groups: TreeNode[] = [];
-    for (const rootNode of rootNodes) {
-      for (const child of rootNode.children ?? []) {
-        groups.push(child);
-      }
-    }
-
     return (
       <div className="explorer-list-view">
-        {groups.map((groupNode) => (
-          <ListGroup key={groupNode.id} groupNode={groupNode} renderItem={renderListChangeRow} />
-        ))}
+        {sourceSections.map(({ sourceNode, groups }) => {
+          const isOpen = expandedSources.has(sourceNode.id);
+          return (
+            <section key={sourceNode.id} className="explorer-list-source">
+              <button
+                type="button"
+                className="explorer-list-source-header"
+                onClick={() => setExpandedSources((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(sourceNode.id)) next.delete(sourceNode.id);
+                  else next.add(sourceNode.id);
+                  return next;
+                })}
+              >
+                <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
+                <span className="explorer-list-source-label">{sourceNode.label}</span>
+                <span className="explorer-list-source-count">{groups.length}</span>
+              </button>
+              {isOpen ? groups.map((groupNode) => (
+                <ListGroup key={groupNode.id} groupNode={groupNode} renderItem={renderListChangeRow} />
+              )) : null}
+            </section>
+          );
+        })}
       </div>
     );
   };
 
   const renderColumnsPanel = () => {
-    const groups = allColsStatusGroups;
+    const groups = sourceSections.flatMap(({ groups: sourceGroups }) => sourceGroups);
     const activeChange = groups
       .flatMap((g) => g.children ?? [])
       .find((c) => c.id === columnsChangeId) ?? null;
@@ -617,30 +641,42 @@ export function PlansSpecsView({
           {/* 左欄 master：手風琴群組 + change 進度列 */}
           <div className="explorer-cols-master">
             <div className="explorer-cols-entries">
-              {groups.map((groupNode) => {
-                const isOpen = columnsOpenGroups.has(groupNode.id);
-                const entryNodes = groupNode.children ?? [];
+              {sourceSections.map(({ sourceNode, groups: sourceGroups }) => {
+                const sourceIsOpen = expandedSources.has(sourceNode.id);
                 return (
-                  <div key={groupNode.id} className="explorer-cols-group">
+                  <section key={sourceNode.id} className="explorer-cols-source">
                     <button
                       type="button"
-                      className="explorer-cols-group-header"
-                      onClick={() => setColumnsOpenGroups((prev) => {
+                      className="explorer-cols-source-header"
+                      onClick={() => setExpandedSources((prev) => {
                         const next = new Set(prev);
-                        if (next.has(groupNode.id)) {
-                          next.delete(groupNode.id);
-                        } else {
-                          next.add(groupNode.id);
-                        }
+                        if (next.has(sourceNode.id)) next.delete(sourceNode.id);
+                        else next.add(sourceNode.id);
                         return next;
                       })}
                     >
-                      <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
-                      <span className="explorer-cols-group-label">{groupNode.label}</span>
+                      <span className={`tree-group-arrow${sourceIsOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
+                      <span className="explorer-cols-source-label">{sourceNode.label}</span>
                     </button>
-                    {isOpen ? (
-                      <div className="explorer-cols-group-items">
-                        {entryNodes.map((entryNode) => {
+                    {sourceIsOpen ? sourceGroups.map((groupNode) => {
+                      const isOpen = columnsOpenGroups.has(groupNode.id);
+                      const entryNodes = groupNode.children ?? [];
+                      return (
+                        <div key={groupNode.id} className="explorer-cols-group">
+                          <button
+                            type="button"
+                            className="explorer-cols-group-header"
+                            onClick={() => setColumnsOpenGroups((prev) => {
+                              if (prev.has(groupNode.id)) return new Set();
+                              return new Set([groupNode.id]);
+                            })}
+                          >
+                            <span className={`tree-group-arrow${isOpen ? " tree-group-arrow--open" : ""}`}>▶</span>
+                            <span className="explorer-cols-group-label">{groupNode.label}</span>
+                          </button>
+                          {isOpen ? (
+                            <div className="explorer-cols-group-items">
+                              {entryNodes.map((entryNode) => {
                           const isActive = entryNode.id === columnsChangeId;
                           const progress = entryNode.progress;
                           const progressPct = progress && progress.total > 0
@@ -653,7 +689,7 @@ export function PlansSpecsView({
                               className={`explorer-cols-entry${isActive ? " explorer-cols-entry--active" : ""}`}
                               onClick={() => {
                                 setColumnsChangeId(entryNode.id);
-                                if (entryNode.icon === "spec") {
+                                if (entryNode.sourceKind === "sisyphus" || entryNode.icon === "spec") {
                                   const selectableNode = getSelectableNode(entryNode);
                                   if (selectableNode) void handleSelect(selectableNode);
                                   return;
@@ -681,7 +717,7 @@ export function PlansSpecsView({
                                   />
                                 </div>
                               ) : null}
-                              {entryNode.icon === "spec" ? null : (() => {
+                              {entryNode.sourceKind !== "openspec" || entryNode.icon === "spec" ? null : (() => {
                                 const action = resolveChangeAction(entryNode, groupNode.id === ARCHIVED_CHANGES_GROUP_ID);
                                 const isCopied = copiedEntryId === entryNode.id;
                                 return (
@@ -710,10 +746,13 @@ export function PlansSpecsView({
                               })()}
                             </button>
                           );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    }) : null}
+                  </section>
                 );
               })}
             </div>

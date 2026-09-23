@@ -28,6 +28,8 @@ pub(crate) struct SisyphusNotepad {
     pub(crate) name: String,
     pub(crate) has_issues: bool,
     pub(crate) has_learnings: bool,
+    pub(crate) issues_path: Option<String>,
+    pub(crate) learnings_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

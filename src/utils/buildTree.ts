@@ -26,6 +26,7 @@ function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn)
       icon: "proposal",
       filePath: `${basePath}/proposal.md`,
       filePathType: "openspec",
+      sourceKind: "openspec",
     });
   }
   if (change.hasDesign) {
@@ -35,6 +36,7 @@ function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn)
       icon: "design",
       filePath: `${basePath}/design.md`,
       filePathType: "openspec",
+      sourceKind: "openspec",
     });
   }
   if (change.hasTasks) {
@@ -47,6 +49,7 @@ function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn)
       tone: progressTone(change.taskProgress?.status),
       filePath: `${basePath}/tasks.md`,
       filePathType: "openspec",
+      sourceKind: "openspec",
     });
   }
   if (change.specs.length > 0) {
@@ -61,7 +64,9 @@ function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn)
         icon: "spec",
         filePath: spec.path,
         filePathType: "absolute" as const,
+        sourceKind: "openspec" as const,
       })),
+      sourceKind: "openspec",
     });
   }
   return artifacts;
@@ -75,6 +80,7 @@ export function buildSisyphusTree(data: SisyphusData, t: TranslateFn): TreeNode[
       id: "sisyphus:plans",
       label: `${t("plansSpecs.sisyphus.plans")} (${data.plans.length})`,
       icon: "section",
+      sourceKind: "sisyphus",
       defaultOpen: true,
       children: data.plans.map((plan) => ({
         id: `sisyphus:plan:${plan.path}`,
@@ -82,6 +88,7 @@ export function buildSisyphusTree(data: SisyphusData, t: TranslateFn): TreeNode[
         icon: "plan",
         filePath: plan.path,
         filePathType: "absolute" as const,
+        sourceKind: "sisyphus",
       })),
     });
   }
@@ -91,30 +98,31 @@ export function buildSisyphusTree(data: SisyphusData, t: TranslateFn): TreeNode[
       id: "sisyphus:notepads",
       label: `${t("plansSpecs.sisyphus.notepads")} (${data.notepads.length})`,
       icon: "section",
+      sourceKind: "sisyphus",
       defaultOpen: false,
       children: data.notepads.map((np) => ({
         id: `sisyphus:notepad:${np.name}`,
         label: np.name,
         icon: "note",
-        badge: [np.hasIssues ? "issues" : null, np.hasLearnings ? "learnings" : null]
-          .filter(Boolean)
-          .join(", ") || undefined,
-      })),
-    });
-  }
-
-  if (data.evidenceFiles.length > 0) {
-    sections.push({
-      id: "sisyphus:evidence",
-      label: `${t("plansSpecs.sisyphus.evidence")} (${data.evidenceFiles.length})`,
-      icon: "section",
-      defaultOpen: false,
-      children: data.evidenceFiles.map((f) => ({
-        id: `sisyphus:evidence:${f}`,
-        label: f.split(/[\\/]/).pop() ?? f,
-        icon: "evidence",
-        filePath: f,
-        filePathType: "absolute" as const,
+        sourceKind: "sisyphus" as const,
+        children: [
+          ...(np.issuesPath ? [{
+            id: `sisyphus:notepad:${np.name}:issues`,
+            label: "issues.md",
+            icon: "draft" as const,
+            filePath: np.issuesPath,
+            filePathType: "absolute" as const,
+            sourceKind: "sisyphus" as const,
+          }] : []),
+          ...(np.learningsPath ? [{
+            id: `sisyphus:notepad:${np.name}:learnings`,
+            label: "learnings.md",
+            icon: "draft" as const,
+            filePath: np.learningsPath,
+            filePathType: "absolute" as const,
+            sourceKind: "sisyphus" as const,
+          }] : []),
+        ],
       })),
     });
   }
@@ -124,6 +132,7 @@ export function buildSisyphusTree(data: SisyphusData, t: TranslateFn): TreeNode[
       id: "sisyphus:drafts",
       label: `${t("plansSpecs.sisyphus.drafts")} (${data.draftFiles.length})`,
       icon: "section",
+      sourceKind: "sisyphus",
       defaultOpen: false,
       children: data.draftFiles.map((f) => ({
         id: `sisyphus:draft:${f}`,
@@ -131,6 +140,7 @@ export function buildSisyphusTree(data: SisyphusData, t: TranslateFn): TreeNode[
         icon: "draft",
         filePath: f,
         filePathType: "absolute" as const,
+        sourceKind: "sisyphus",
       })),
     });
   }
@@ -146,6 +156,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
       id: "openspec:active-changes",
       label: `${t("plansSpecs.openspec.activeChanges")} (${data.activeChanges.length})`,
       icon: "section",
+      sourceKind: "openspec",
       defaultOpen: true,
       children: data.activeChanges.map((change) => ({
         id: `openspec:change:${change.name}`,
@@ -156,6 +167,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
         tone: progressTone(change.taskProgress?.status),
         defaultOpen: false,
         children: changeToNodes(change, `changes/${change.name}`, t),
+        sourceKind: "openspec",
       })),
     });
   }
@@ -165,6 +177,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
       id: ARCHIVED_CHANGES_GROUP_ID,
       label: `${t("plansSpecs.openspec.archivedChanges")} (${data.archivedChanges.length})`,
       icon: "section",
+      sourceKind: "openspec",
       defaultOpen: false,
       children: data.archivedChanges.map((change) => ({
         id: `openspec:archived:${change.name}`,
@@ -175,6 +188,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
         tone: progressTone(change.taskProgress?.status),
         defaultOpen: false,
         children: changeToNodes(change, `changes/archive/${change.name}`, t),
+        sourceKind: "openspec",
       })),
     });
   }
@@ -184,6 +198,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
       id: "openspec:specs",
       label: `${t("plansSpecs.openspec.specs")} (${data.specs.length})`,
       icon: "section",
+      sourceKind: "openspec",
       defaultOpen: false,
       children: data.specs.map((spec) => ({
         id: `openspec:spec:${spec.path}`,
@@ -191,6 +206,7 @@ export function buildOpenSpecTree(data: OpenSpecData, t: TranslateFn): TreeNode[
         icon: "spec",
         filePath: spec.path,
         filePathType: "absolute" as const,
+        sourceKind: "openspec",
       })),
     });
   }

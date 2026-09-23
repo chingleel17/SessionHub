@@ -2147,16 +2147,47 @@ mod tests {
         assert_eq!(data.notepads[0].name, "alpha");
         assert!(data.notepads[0].has_issues);
         assert!(data.notepads[0].has_learnings);
+        assert_eq!(
+            data.notepads[0].issues_path.as_deref(),
+            Some(
+                project_dir
+                    .join(".sisyphus")
+                    .join("notepads")
+                    .join("alpha")
+                    .join("issues.md")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert_eq!(
+            data.notepads[0].learnings_path.as_deref(),
+            Some(
+                project_dir
+                    .join(".sisyphus")
+                    .join("notepads")
+                    .join("alpha")
+                    .join("learnings.md")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
         assert_eq!(data.notepads[1].name, "beta");
         assert!(data.notepads[1].has_issues);
         assert!(!data.notepads[1].has_learnings);
+        assert!(data.notepads[1].learnings_path.is_none());
         assert_eq!(
             data.evidence_files,
-            vec!["a.txt".to_string(), "b.txt".to_string()]
+            vec![
+                sisyphus_dir.join("evidence").join("a.txt").to_string_lossy().to_string(),
+                sisyphus_dir.join("evidence").join("b.txt").to_string_lossy().to_string(),
+            ]
         );
         assert_eq!(
             data.draft_files,
-            vec!["draft-a.md".to_string(), "draft-b.md".to_string()]
+            vec![
+                sisyphus_dir.join("drafts").join("draft-a.md").to_string_lossy().to_string(),
+                sisyphus_dir.join("drafts").join("draft-b.md").to_string_lossy().to_string(),
+            ]
         );
 
         fs::remove_dir_all(&project_dir).expect("cleanup project dir");

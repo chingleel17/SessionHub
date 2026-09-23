@@ -444,6 +444,8 @@ export type SisyphusNotepad = {
     name: string;
     hasIssues: boolean;
     hasLearnings: boolean;
+    issuesPath: string | null;
+    learningsPath: string | null;
 };
 
 export type SisyphusData = {
@@ -500,6 +502,7 @@ export type TreeNode = {
     filePathType?: "absolute" | "openspec";
     trailingMeta?: string;
     trailingMetaTitle?: string;
+    sourceKind?: "sisyphus" | "openspec";
 };
 
 export type SessionTargetedPayload = {

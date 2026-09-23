@@ -137,6 +137,10 @@ pub(crate) fn scan_sisyphus_internal(project_dir: &Path) -> SisyphusData {
                             name,
                             has_issues,
                             has_learnings,
+                            issues_path: has_issues
+                                .then(|| path.join("issues.md").to_string_lossy().to_string()),
+                            learnings_path: has_learnings
+                                .then(|| path.join("learnings.md").to_string_lossy().to_string()),
                         });
                     }
                 }
@@ -169,9 +173,7 @@ pub(crate) fn list_files_with_ext(dir: &Path, ext: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some(ext) {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    result.push(name.to_string());
-                }
+                result.push(path.to_string_lossy().to_string());
             }
         }
     }

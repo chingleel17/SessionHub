@@ -1,23 +1,4 @@
-## Purpose
-
-定義 Plans & Specs Explorer 的雙面板佈局、可切換導覽模式、面板尺寸行為與標題列對齊要求，確保 OpenSpec 與 Sisyphus 文件在同一檢視流程中可讀且可操作。
-
-## Requirements
-
-### Requirement: 雙面板 Explorer 佈局
-
-系統 SHALL 將 PlansSpecsView 渲染為左右雙面板佈局：左側為 Explorer 樹狀導覽面板，右側為內容檢視面板。
-
-#### Scenario: 雙面板同時顯示
-
-- **WHEN** PlansSpecsView 有可顯示的資料（Sisyphus 或 OpenSpec 資料存在）
-- **THEN** 畫面分為左側 Explorer 面板與右側內容面板
-- **AND** 兩個面板均可獨立捲動
-
-#### Scenario: 右側面板初始空白狀態
-
-- **WHEN** 使用者尚未選取任何節點
-- **THEN** 右側面板顯示提示文字（如「請從左側選取文件」）
+## MODIFIED Requirements
 
 ### Requirement: 左側 Explorer 樹狀導覽
 
@@ -49,7 +30,7 @@
 
 - **WHEN** Tree 模式渲染節點
 - **THEN** 系統僅為 `proposal.md`、`design.md`、`tasks.md` 三種 artifact 葉節點顯示固定 icon
-- **AND** 根節點、群組節點與 change 節點不顯示前置圓點或字母 icon
+- **AND** 來源節點、群組節點與 change 節點不顯示前置圓點或字母 icon
 - **AND** 群組與 change 節點僅以展開/折疊指示符與文字標籤呈現
 
 #### Scenario: List 模式以列表列顯示 change 區塊
@@ -62,7 +43,7 @@
 - **AND** OpenSpec change 列第二行顯示其具備的 `proposal`、`design`、`tasks` 可點擊 badge，缺少的 artifact 不顯示對應 badge
 - **AND** `tasks` badge 顯示 `done/total` 進度數字與依狀態著色的狀態指示
 - **AND** Sisyphus 項目僅顯示名稱，不套用 artifact badge 與 spec 計數
-- **AND** 點擊任一 badge 在右側載入對應文件並高亮該列
+- **AND** 點擊任一 badge 或可讀取的列在右側載入對應文件並高亮該列
 
 #### Scenario: Cols 模式以兩欄逐層選取且單一狀態展開
 
@@ -87,7 +68,7 @@
 #### Scenario: Cols 模式 Specs 群組不顯示 change 動作徽章
 
 - **WHEN** Cols 模式第二欄呈現 OpenSpec `Specs` 群組內的規格項目，或任一 Sisyphus 來源層級下的項目
-- **THEN** 系統不對規格項目套用 `hasProposal`/`hasDesign`/`hasTasks` 等 change 專屬完整性檢查
+- **THEN** 系統不對這些項目套用 `hasProposal`/`hasDesign`/`hasTasks` 等 change 專屬完整性檢查
 - **AND** 不顯示「待 propose」或任何 change 動作徽章與可複製指令
 - **AND** 僅含 `spec.md` 的規格目錄視為完整規格
 
@@ -103,84 +84,3 @@
 - **THEN** 左側在 `tasks.md` 與所屬 change 項目上顯示 `done/total` badge
 - **AND** badge 或狀態標記依 progress 狀態顯示不同色彩
 - **AND** 未開始、進行中、已完成三種狀態須可被視覺區分
-
-### Requirement: 記住各專案最後使用的檢視模式
-
-系統 SHALL 以每個專案為單位記住使用者最後選用的 explorer 檢視模式，並在重新選取該專案時自動還原。
-
-#### Scenario: 切換專案時還原該專案上次的檢視模式
-
-- **WHEN** 使用者在 A 專案選用 `Cols` 模式後切換到 B 專案
-- **THEN** B 專案還原其自身上次使用的檢視模式，不受 A 專案影響
-- **AND** 使用者再切回 A 專案時，仍呈現 `Cols` 模式
-
-#### Scenario: 首次開啟專案的預設模式
-
-- **WHEN** 某專案尚無已記錄的檢視模式偏好
-- **THEN** 系統以 `Tree` 作為該專案的預設檢視模式
-- **AND** 使用者選用任一模式後即成為該專案的最後使用模式
-
-### Requirement: 左側面板寬度可調整
-
-系統 SHALL 允許使用者透過拖曳分隔線調整左側 Explorer 面板的寬度，並讓新版標題列與三種模式都能正常顯示。
-
-#### Scenario: 拖曳調整寬度
-
-- **WHEN** 使用者按住分隔線並拖曳
-- **THEN** 左側面板寬度隨滑鼠移動即時調整
-- **AND** 左側最小寬度須足以同時容納模式切換、icon 與進度 badge
-- **AND** 右側內容面板保持可閱讀的最小寬度
-
-#### Scenario: 折疊左側面板
-
-- **WHEN** 使用者點擊折疊切換按鈕
-- **THEN** 左側面板縮小至折疊狀態
-- **AND** 右側面板佔用釋放的空間
-- **AND** `.explorer-panel-header` 的 `border-bottom` SHALL 不顯示
-- **AND** header 高度 SHALL 自動縮小至剛好容納折疊按鈕
-- **AND** 使用者可再次展開並恢復 explorer 導覽
-
-### Requirement: 右側內容檢視面板
-
-系統 SHALL 在右側面板以 markdown 方式顯示選取文件的完整內容；若選取的是 `tasks.md`，其 checkbox 應可直接互動。
-
-#### Scenario: 顯示選取文件內容
-
-- **WHEN** 使用者在左側選取葉節點
-- **THEN** 右側面板顯示該文件的完整 markdown 內容
-- **AND** 文件路徑顯示於面板頂部作為標題列
-
-#### Scenario: 互動勾選 tasks.md
-
-- **WHEN** 使用者在右側面板查看 `tasks.md`
-- **THEN** task list checkbox 可直接點擊切換
-- **AND** 切換後的內容會寫回原始文件
-
-#### Scenario: 文件載入中狀態
-
-- **WHEN** 文件內容正在讀取
-- **THEN** 右側面板顯示載入指示器
-
-#### Scenario: 文件讀取錯誤顯示
-
-- **WHEN** 文件讀取失敗
-- **THEN** 右側面板以醒目的錯誤樣式（紅色 banner）顯示錯誤訊息
-- **AND** 錯誤訊息不出現在左側樹狀清單中
-
-### Requirement: Explorer 佈局高度與標題列對齊
-
-系統 SHALL 確保 Explorer 佈局的高度受限於視窗可視區域，且左側與右側標題列在新版設計下維持一致的對齊關係。
-
-#### Scenario: Explorer 整體高度限制
-
-- **WHEN** PlansSpecsView 在任意視窗大小下渲染
-- **THEN** Explorer 佈局高度受限於可視區域
-- **AND** 左右兩側面板可獨立捲動
-- **AND** 不因 explorer 模式切換而產生頁面級捲動
-
-#### Scenario: 兩側標題列等高對齊
-
-- **WHEN** Explorer 面板與內容面板同時顯示
-- **THEN** 左右標題列保持固定高度並水平對齊
-- **AND** 左側可容納模式切換與操作按鈕
-- **AND** 右側仍顯示目前文件路徑作為標題列內容

@@ -1,8 +1,4 @@
-## Purpose
-
-讀取專案目錄下的 `.sisyphus/` 資料夾，將其文件作為 Plans & Specs 的另一種 AI task 管理資料來源呈現。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 讀取 .sisyphus 目錄結構
 
