@@ -7,6 +7,26 @@ const PROVIDER_ABBR: Record<string, string> = {
   antigravity: "AG",
 };
 
+/** 執行平台正式顯示名稱，全 App 共用。 */
+export const PROVIDER_LABELS: Record<string, string> = {
+  claude: "Claude Code",
+  copilot: "GitHub Copilot",
+  "github-copilot": "GitHub Copilot",
+  opencode: "OpenCode",
+  codex: "Codex",
+  antigravity: "Antigravity",
+};
+
+/** 模型供應商正式顯示名稱，全 App 共用。 */
+export const MODEL_PROVIDER_LABELS: Record<string, string> = {
+  claude: "Anthropic",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+  copilot: "GitHub Copilot",
+  "github-copilot": "GitHub Copilot",
+};
+
 /**
  * 取得 provider 的兩碼縮寫，未知 provider 以名稱前兩碼大寫作為後備。
  *
@@ -17,18 +37,9 @@ export function getProviderAbbr(provider: string): string {
 }
 
 export function getProviderLabel(provider: string): string {
-  switch (provider) {
-    case "copilot":
-      return "Copilot";
-    case "opencode":
-      return "OpenCode";
-    case "codex":
-      return "Codex";
-    case "claude":
-      return "Claude Code";
-    case "antigravity":
-      return "Antigravity";
-    default:
-      return provider;
-  }
+  return PROVIDER_LABELS[provider.trim().toLowerCase()] ?? provider;
+}
+
+export function getModelProviderLabel(provider: string): string {
+  return MODEL_PROVIDER_LABELS[provider.trim().toLowerCase()] ?? provider;
 }

@@ -116,7 +116,10 @@ mod tests {
     fn dev_build_skips_autostart_registration() {
         // dev 與正式版共用 settings.json，但 autostart 登錄名稱依 productName 分開。
         // dev build 必須跳過註冊，否則共用的 launch_on_startup 會讓 dev 版也進開機啟動。
-        assert_eq!(super::should_skip_autostart_registration(), cfg!(debug_assertions));
+        assert_eq!(
+            super::should_skip_autostart_registration(),
+            cfg!(debug_assertions)
+        );
     }
 
     #[test]

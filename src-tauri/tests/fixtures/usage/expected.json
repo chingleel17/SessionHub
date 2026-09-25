@@ -1,0 +1,32 @@
+{
+  "claude": {
+    "deduplicatedMessageCount": 2,
+    "rawInputTokens": 310,
+    "cacheCreationInputTokens": 40,
+    "cacheReadInputTokens": 45,
+    "normalizedInputTokens": 395,
+    "outputTokens": 75,
+    "totalTokens": 470,
+    "estimatedUsd": 0.0022185
+  },
+  "opencode": {
+    "messageCount": 2,
+    "inputTokens": 500,
+    "outputTokens": 100,
+    "reasoningTokens": 40,
+    "cacheReadTokens": 80,
+    "cacheWriteTokens": 15,
+    "totalTokens": 600
+  },
+  "copilot": {
+    "eventOutputTokens": 130,
+    "eventInputTokens": null,
+    "eventTotalTokens": null,
+    "shutdownSummaryInputTokens": 900,
+    "shutdownSummaryOutputTokens": 700,
+    "shutdownRequestCost": 0.25,
+    "shutdownRequestCostUnit": "premium request cost; not treated as USD",
+    "shutdownAiCreditsNano": 25000000000,
+    "shutdownEstimatedUsd": 0.25
+  }
+}

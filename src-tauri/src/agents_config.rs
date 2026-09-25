@@ -371,6 +371,7 @@ pub(crate) fn scan_global_agents_md_internal() -> Result<AgentsMdScanResult, Str
     })
 }
 
+#[cfg(test)]
 pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsScanResult, String> {
     let settings = load_agents_settings()?;
     let prefs = match scope {
@@ -985,6 +986,7 @@ fn command_file_suffix(target_id: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn strip_command_file_suffix(relative: &Path, target_id: &str) -> Option<String> {
     let raw = relative.to_string_lossy().replace('\\', "/");
     let suffix = command_file_suffix(target_id);
@@ -996,6 +998,7 @@ fn command_relative_path(name: &str, target_id: &str) -> PathBuf {
     PathBuf::from(file_name.replace('/', "\\"))
 }
 
+#[cfg(test)]
 pub(crate) fn scan_agents_commands_internal(
     scope: &AgentsScope,
 ) -> Result<CommandsScanResult, String> {

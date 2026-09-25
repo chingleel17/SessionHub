@@ -11,11 +11,14 @@ use std::os::windows::process::CommandExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::settings::{default_app_data_dir, default_agents_root, default_opencode_config_root,
-    resolve_antigravity_root, resolve_claude_root,
-    resolve_codex_root, resolve_copilot_root};
-use crate::types::{AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER,
-    COPILOT_PROVIDER, CREATE_NO_WINDOW, OPENCODE_PROVIDER};
+use crate::settings::{
+    default_agents_root, default_app_data_dir, default_opencode_config_root,
+    resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
+};
+use crate::types::{
+    AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
+    CREATE_NO_WINDOW, OPENCODE_PROVIDER,
+};
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
@@ -131,7 +134,11 @@ fn capability_command(capability: CliCapability) -> (&'static str, &'static [&'s
 pub(crate) fn known_provider(provider: &str) -> bool {
     matches!(
         provider,
-        CLAUDE_PROVIDER | CODEX_PROVIDER | OPENCODE_PROVIDER | COPILOT_PROVIDER | ANTIGRAVITY_PROVIDER
+        CLAUDE_PROVIDER
+            | CODEX_PROVIDER
+            | OPENCODE_PROVIDER
+            | COPILOT_PROVIDER
+            | ANTIGRAVITY_PROVIDER
     )
 }
 
@@ -161,7 +168,10 @@ pub(crate) fn global_probe_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-pub(crate) fn probe_cwd(scope: DiscoveryScope, project_cwd: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn probe_cwd(
+    scope: DiscoveryScope,
+    project_cwd: Option<&str>,
+) -> Result<PathBuf, String> {
     match scope {
         DiscoveryScope::Project => project_cwd
             .map(PathBuf::from)
@@ -243,8 +253,14 @@ fn run_process_internal(
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to start {executable}: {error}"))?;
-    let stdout = child.stdout.take().ok_or_else(|| "CLI stdout pipe unavailable".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "CLI stderr pipe unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "CLI stdout pipe unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "CLI stderr pipe unavailable".to_string())?;
     let stdout_reader = spawn_reader(stdout);
     let stderr_reader = spawn_reader(stderr);
     let started = Instant::now();
@@ -272,7 +288,12 @@ fn run_process_internal(
     })
 }
 
-fn run_process(executable: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Result<CliOutput, String> {
+fn run_process(
+    executable: &str,
+    args: &[&str],
+    cwd: &Path,
+    timeout: Duration,
+) -> Result<CliOutput, String> {
     run_process_internal(executable, args, cwd, timeout, true)
 }
 
@@ -311,8 +332,19 @@ fn clean_text(bytes: &[u8]) -> String {
 fn sanitize_diagnostic(message: &str) -> String {
     let mut sanitized = message.to_string();
     for key in [
-        "Authorization", "authorization", "Bearer", "token", "Token", "api_key", "API_KEY",
-        "password", "PASSWORD", "secret", "SECRET", "env", "headers",
+        "Authorization",
+        "authorization",
+        "Bearer",
+        "token",
+        "Token",
+        "api_key",
+        "API_KEY",
+        "password",
+        "PASSWORD",
+        "secret",
+        "SECRET",
+        "env",
+        "headers",
     ] {
         let mut cursor = 0;
         while let Some(relative) = sanitized[cursor..].find(key) {
@@ -323,19 +355,31 @@ fn sanitize_diagnostic(message: &str) -> String {
                 .unwrap_or(sanitized.len());
             sanitized.replace_range(start..end, "[redacted]");
             cursor = start + "[redacted]".len();
-            if cursor >= sanitized.len() { break; }
+            if cursor >= sanitized.len() {
+                break;
+            }
         }
     }
     sanitized
 }
 
-fn diagnostic(provider: &str, kind: ResourceKind, scope: DiscoveryScope, message: &str) -> DiscoveryDiagnostic {
+fn diagnostic(
+    provider: &str,
+    kind: ResourceKind,
+    scope: DiscoveryScope,
+    message: &str,
+) -> DiscoveryDiagnostic {
     let mut message = sanitize_diagnostic(&clean_text(message.as_bytes()));
     if message.len() > MAX_DIAGNOSTIC_BYTES {
         message.truncate(MAX_DIAGNOSTIC_BYTES);
         message.push_str("…");
     }
-    DiscoveryDiagnostic { provider_id: provider.to_string(), kind, scope, message }
+    DiscoveryDiagnostic {
+        provider_id: provider.to_string(),
+        kind,
+        scope,
+        message,
+    }
 }
 
 fn json_root(output: &CliOutput) -> Result<Value, String> {
@@ -346,19 +390,31 @@ fn json_root(output: &CliOutput) -> Result<Value, String> {
         return Err("CLI output exceeded the safety limit".to_string());
     }
     if output.exit_code != Some(0) {
-        let error = if output.stderr.trim().is_empty() { "CLI exited with a non-zero status" } else { &output.stderr };
+        let error = if output.stderr.trim().is_empty() {
+            "CLI exited with a non-zero status"
+        } else {
+            &output.stderr
+        };
         return Err(error.to_string());
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| format!("invalid CLI JSON: {error}"))
 }
 
 fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_str).map(ToString::to_string))
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    })
 }
 
+#[cfg(test)]
 fn collect_json_resources(value: &Value, output: &mut Vec<CliResource>) {
     match value {
-        Value::Array(items) => items.iter().for_each(|item| collect_json_resources(item, output)),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_json_resources(item, output)),
         Value::Object(map) => {
             if let Some(name) = string_field(value, &["name", "id", "key"]) {
                 output.push(CliResource {
@@ -369,7 +425,17 @@ fn collect_json_resources(value: &Value, output: &mut Vec<CliResource>) {
                 });
             }
             for (key, item) in map {
-                if matches!(key.as_str(), "servers" | "mcpServers" | "skills" | "commands" | "command" | "items" | "resolved" | "config") {
+                if matches!(
+                    key.as_str(),
+                    "servers"
+                        | "mcpServers"
+                        | "skills"
+                        | "commands"
+                        | "command"
+                        | "items"
+                        | "resolved"
+                        | "config"
+                ) {
                     collect_json_resources(item, output);
                 } else if matches!(value, Value::Object(_)) && item.is_object() {
                     let has_identity = string_field(item, &["name", "id", "key"]).is_some();
@@ -387,14 +453,18 @@ fn collect_json_resources(value: &Value, output: &mut Vec<CliResource>) {
     }
 }
 
+#[cfg(test)]
 fn parse_fixture_resources(raw: &str) -> Result<Vec<CliResource>, String> {
-    let value: Value = serde_json::from_str(raw).map_err(|error| format!("invalid fixture JSON: {error}"))?;
+    let value: Value =
+        serde_json::from_str(raw).map_err(|error| format!("invalid fixture JSON: {error}"))?;
     let mut resources = Vec::new();
     collect_json_resources(&value, &mut resources);
     let mut unique = BTreeMap::new();
     for resource in resources {
         if !resource.name.trim().is_empty() {
-            unique.entry(resource.name.to_lowercase()).or_insert(resource);
+            unique
+                .entry(resource.name.to_lowercase())
+                .or_insert(resource);
         }
     }
     Ok(unique.into_values().collect())
@@ -409,7 +479,10 @@ fn parse_named_resources(value: &Value) -> Vec<CliResource> {
                     if let Some(name) = string_field(item, &["name", "id", "key"]) {
                         resources.push(CliResource {
                             name,
-                            effective_path: string_field(item, &["path", "file", "filePath", "location"]),
+                            effective_path: string_field(
+                                item,
+                                &["path", "file", "filePath", "location"],
+                            ),
                             source: string_field(item, &["source", "scope", "origin"]),
                             enabled: item.get("enabled").and_then(Value::as_bool),
                         });
@@ -417,7 +490,10 @@ fn parse_named_resources(value: &Value) -> Vec<CliResource> {
                         if let Some((name, item)) = map.iter().next() {
                             resources.push(CliResource {
                                 name: name.clone(),
-                                effective_path: string_field(item, &["path", "file", "filePath", "location"]),
+                                effective_path: string_field(
+                                    item,
+                                    &["path", "file", "filePath", "location"],
+                                ),
                                 source: string_field(item, &["source", "scope", "origin"]),
                                 enabled: item.get("enabled").and_then(Value::as_bool),
                             });
@@ -431,7 +507,10 @@ fn parse_named_resources(value: &Value) -> Vec<CliResource> {
                 if let Value::Object(item_map) = item {
                     resources.push(CliResource {
                         name: name.clone(),
-                        effective_path: string_field(item, &["path", "file", "filePath", "location"]),
+                        effective_path: string_field(
+                            item,
+                            &["path", "file", "filePath", "location"],
+                        ),
                         source: string_field(item, &["source", "scope", "origin"]),
                         enabled: item_map.get("enabled").and_then(Value::as_bool),
                     });
@@ -462,7 +541,9 @@ fn parse_cli_resources(provider: &str, kind: ResourceKind, root: &Value) -> Vec<
     let mut unique = BTreeMap::new();
     for resource in resources {
         if !resource.name.trim().is_empty() {
-            unique.entry(resource.name.to_lowercase()).or_insert(resource);
+            unique
+                .entry(resource.name.to_lowercase())
+                .or_insert(resource);
         }
     }
     unique.into_values().collect()
@@ -478,8 +559,8 @@ pub(crate) fn discover_cli(
         return Ok(Vec::new());
     };
     let (executable, args) = capability_command(capability);
-    let cwd = probe_cwd(scope, project_cwd)
-        .map_err(|error| diagnostic(provider, kind, scope, &error))?;
+    let cwd =
+        probe_cwd(scope, project_cwd).map_err(|error| diagnostic(provider, kind, scope, &error))?;
     let output = run_process(executable, args, &cwd, CLI_TIMEOUT)
         .map_err(|error| diagnostic(provider, kind, scope, &error))?;
     let root = json_root(&output).map_err(|error| diagnostic(provider, kind, scope, &error))?;
@@ -498,11 +579,64 @@ pub(crate) fn skill_roots(
     };
     let root_for = |provider: &str| -> Result<Vec<PathBuf>, String> {
         let roots = match provider {
-            CLAUDE_PROVIDER => vec![project.clone().map(|root| root.join(".claude/skills")).unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills"))],
-            CODEX_PROVIDER => vec![project.clone().map(|root| root.join(".codex/skills")).unwrap_or(resolve_codex_root(Some(&settings.codex_root))?.join("skills")), project.clone().map(|root| root.join(".agents/skills")).unwrap_or(default_agents_root()?.join("skills"))],
-            OPENCODE_PROVIDER => vec![project.clone().map(|root| root.join(".opencode/skill")).unwrap_or(default_opencode_config_root()?.join("skill")), project.clone().map(|root| root.join(".opencode/skills")).unwrap_or(default_opencode_config_root()?.join("skills")), project.clone().map(|root| root.join(".claude/skills")).unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills")), project.clone().map(|root| root.join(".agents/skills")).unwrap_or(default_agents_root()?.join("skills"))],
-            COPILOT_PROVIDER => vec![project.clone().map(|root| root.join(".github/skills")).unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("skills")), project.clone().map(|root| root.join(".agents/skills")).unwrap_or(default_agents_root()?.join("skills")), project.clone().map(|root| root.join(".claude/skills")).unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills"))],
-            ANTIGRAVITY_PROVIDER => vec![project.clone().map(|root| root.join(".gemini/skills")).unwrap_or(resolve_antigravity_root(Some(&settings.antigravity_root))?.join("skills")), project.clone().map(|root| root.join(".agents/skills")).unwrap_or(default_agents_root()?.join("skills"))],
+            CLAUDE_PROVIDER => vec![project
+                .clone()
+                .map(|root| root.join(".claude/skills"))
+                .unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills"))],
+            CODEX_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".codex/skills"))
+                    .unwrap_or(resolve_codex_root(Some(&settings.codex_root))?.join("skills")),
+                project
+                    .clone()
+                    .map(|root| root.join(".agents/skills"))
+                    .unwrap_or(default_agents_root()?.join("skills")),
+            ],
+            OPENCODE_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".opencode/skill"))
+                    .unwrap_or(default_opencode_config_root()?.join("skill")),
+                project
+                    .clone()
+                    .map(|root| root.join(".opencode/skills"))
+                    .unwrap_or(default_opencode_config_root()?.join("skills")),
+                project
+                    .clone()
+                    .map(|root| root.join(".claude/skills"))
+                    .unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills")),
+                project
+                    .clone()
+                    .map(|root| root.join(".agents/skills"))
+                    .unwrap_or(default_agents_root()?.join("skills")),
+            ],
+            COPILOT_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".github/skills"))
+                    .unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("skills")),
+                project
+                    .clone()
+                    .map(|root| root.join(".agents/skills"))
+                    .unwrap_or(default_agents_root()?.join("skills")),
+                project
+                    .clone()
+                    .map(|root| root.join(".claude/skills"))
+                    .unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("skills")),
+            ],
+            ANTIGRAVITY_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".gemini/skills"))
+                    .unwrap_or(
+                        resolve_antigravity_root(Some(&settings.antigravity_root))?.join("skills"),
+                    ),
+                project
+                    .clone()
+                    .map(|root| root.join(".agents/skills"))
+                    .unwrap_or(default_agents_root()?.join("skills")),
+            ],
             _ => Vec::new(),
         };
         Ok(roots)
@@ -529,11 +663,40 @@ pub(crate) fn command_roots(
     };
     let roots = |provider: &str| -> Result<Vec<PathBuf>, String> {
         Ok(match provider {
-            CLAUDE_PROVIDER => vec![project.clone().map(|root| root.join(".claude/commands")).unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("commands"))],
-            CODEX_PROVIDER => vec![project.clone().map(|root| root.join(".codex/prompts")).unwrap_or(resolve_codex_root(Some(&settings.codex_root))?.join("prompts"))],
-            OPENCODE_PROVIDER => vec![project.clone().map(|root| root.join(".opencode/command")).unwrap_or(default_opencode_config_root()?.join("command")), project.clone().map(|root| root.join(".opencode/commands")).unwrap_or(default_opencode_config_root()?.join("commands"))],
-            COPILOT_PROVIDER => vec![project.clone().map(|root| root.join(".github/prompts")).unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("prompts")), project.clone().map(|root| root.join(".copilot/prompts")).unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("prompts"))],
-            ANTIGRAVITY_PROVIDER => vec![project.clone().map(|root| root.join(".gemini/commands")).unwrap_or(resolve_antigravity_root(Some(&settings.antigravity_root))?.join("commands"))],
+            CLAUDE_PROVIDER => vec![project
+                .clone()
+                .map(|root| root.join(".claude/commands"))
+                .unwrap_or(resolve_claude_root(Some(&settings.claude_root))?.join("commands"))],
+            CODEX_PROVIDER => vec![project
+                .clone()
+                .map(|root| root.join(".codex/prompts"))
+                .unwrap_or(resolve_codex_root(Some(&settings.codex_root))?.join("prompts"))],
+            OPENCODE_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".opencode/command"))
+                    .unwrap_or(default_opencode_config_root()?.join("command")),
+                project
+                    .clone()
+                    .map(|root| root.join(".opencode/commands"))
+                    .unwrap_or(default_opencode_config_root()?.join("commands")),
+            ],
+            COPILOT_PROVIDER => vec![
+                project
+                    .clone()
+                    .map(|root| root.join(".github/prompts"))
+                    .unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("prompts")),
+                project
+                    .clone()
+                    .map(|root| root.join(".copilot/prompts"))
+                    .unwrap_or(resolve_copilot_root(Some(&settings.copilot_root))?.join("prompts")),
+            ],
+            ANTIGRAVITY_PROVIDER => vec![project
+                .clone()
+                .map(|root| root.join(".gemini/commands"))
+                .unwrap_or(
+                    resolve_antigravity_root(Some(&settings.antigravity_root))?.join("commands"),
+                )],
             _ => Vec::new(),
         })
     };
@@ -564,7 +727,12 @@ mod tests {
 
     #[test]
     fn diagnostics_are_truncated() {
-        let diagnostic = diagnostic("copilot", ResourceKind::Mcp, DiscoveryScope::Global, &"x".repeat(2048));
+        let diagnostic = diagnostic(
+            "copilot",
+            ResourceKind::Mcp,
+            DiscoveryScope::Global,
+            &"x".repeat(2048),
+        );
         assert!(diagnostic.message.len() <= MAX_DIAGNOSTIC_BYTES + 3);
     }
 
@@ -633,7 +801,9 @@ mod tests {
     #[test]
     fn provider_order_is_deduplicated_and_unknowns_are_reported() {
         let (providers, unknown) = normalize_enabled_providers(&[
-            "opencode".to_string(), "opencode".to_string(), "unknown".to_string(),
+            "opencode".to_string(),
+            "opencode".to_string(),
+            "unknown".to_string(),
         ]);
         assert_eq!(providers, vec!["opencode"]);
         assert_eq!(unknown, vec!["unknown"]);
@@ -646,7 +816,10 @@ mod tests {
         )
         .expect("skills fixture");
         assert_eq!(skills[0].name, "review");
-        assert_eq!(skills[0].effective_path.as_deref(), Some("D:/skills/review/SKILL.md"));
+        assert_eq!(
+            skills[0].effective_path.as_deref(),
+            Some("D:/skills/review/SKILL.md")
+        );
 
         let commands = parse_fixture_resources(
             r#"{"config":{"commands":[{"name":"deploy","file":"D:/commands/deploy.md"}]}}"#,
@@ -654,10 +827,9 @@ mod tests {
         .expect("commands fixture");
         assert_eq!(commands[0].name, "deploy");
 
-        let keyed = parse_fixture_resources(
-            r#"{"commands":{"review":{"file":"D:/commands/review.md"}}}"#,
-        )
-        .expect("keyed commands fixture");
+        let keyed =
+            parse_fixture_resources(r#"{"commands":{"review":{"file":"D:/commands/review.md"}}}"#)
+                .expect("keyed commands fixture");
         assert_eq!(keyed[0].name, "review");
 
         let config: Value = serde_json::from_str(
@@ -699,7 +871,9 @@ mod tests {
             &[CODEX_PROVIDER.to_string()],
         )
         .expect("skill roots");
-        assert!(skill_roots.iter().all(|(provider, _)| provider == CODEX_PROVIDER));
+        assert!(skill_roots
+            .iter()
+            .all(|(provider, _)| provider == CODEX_PROVIDER));
         assert_eq!(skill_roots.len(), 2);
 
         let command_roots = command_roots(
@@ -710,7 +884,9 @@ mod tests {
         )
         .expect("command roots");
         assert_eq!(command_roots.len(), 1);
-        assert!(command_roots[0].1.ends_with(Path::new(".gemini").join("commands")));
+        assert!(command_roots[0]
+            .1
+            .ends_with(Path::new(".gemini").join("commands")));
     }
 
     #[test]
@@ -726,9 +902,13 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let project = PathBuf::from("D:/project");
-        assert_eq!(probe_cwd(DiscoveryScope::Project, Some("D:/project")).unwrap(), project);
+        assert_eq!(
+            probe_cwd(DiscoveryScope::Project, Some("D:/project")).unwrap(),
+            project
+        );
 
-        let appdata = std::env::temp_dir().join(format!("sessionhub-probe-test-{}", std::process::id()));
+        let appdata =
+            std::env::temp_dir().join(format!("sessionhub-probe-test-{}", std::process::id()));
         let previous = std::env::var_os("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
         unsafe {
             std::env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &appdata);

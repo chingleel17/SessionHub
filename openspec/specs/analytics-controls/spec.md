@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義專案分析頁籤與查詢控制項的操作行為。
+
+## Requirements
 
 ### Requirement: Analytics 頁籤置於 Agents 之後
 

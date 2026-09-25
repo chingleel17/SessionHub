@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::sessions::dir_mtime_secs;
-use crate::types::*;
+use crate::types::{OpencodeMessage, SessionStats, UsageEventRecord};
 
 use super::{get_session_stats_cache, upsert_session_stats_cache};
 
@@ -272,6 +272,65 @@ pub(crate) fn calculate_opencode_session_stats(message_dir: &Path) -> Result<Ses
     }
 
     Ok(stats)
+}
+
+pub(crate) fn build_opencode_usage_events(
+    message_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<UsageEventRecord>, String> {
+    let storage_root = message_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "cannot determine storage root from message_dir".to_string())?;
+    let mut events = scan_opencode_messages_for_session(storage_root, session_id)
+        .into_iter()
+        .filter(|message| message.role == "assistant")
+        .filter_map(|message| {
+            let tokens = message.tokens()?;
+            let time = message.time()?;
+            let timestamp = time.completed.or(time.created)?;
+            let occurred_at = chrono::DateTime::from_timestamp_millis(timestamp)?
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+            let cache = tokens.cache.as_ref();
+            let source_event_id = message.id.clone();
+            let model = message.model_id().unwrap_or("unknown").to_string();
+            let estimated_usd_micros = message
+                .estimated_cost()
+                .map(|value| (value * 1_000_000.0).round() as i64);
+            Some(UsageEventRecord {
+                provider: "opencode".to_string(),
+                model_provider_id: message.model_provider_id().map(str::to_string),
+                service_tier: None,
+                session_id: session_id.to_string(),
+                source_event_id,
+                occurred_at,
+                cwd: None,
+                model: Some(model),
+                // OpenCode 的 input/output 已是正規化欄位；cache 與 reasoning 僅作子集合。
+                input_tokens: tokens.effective_input().try_into().ok(),
+                output_tokens: tokens.effective_output().try_into().ok(),
+                cache_read_tokens: cache
+                    .and_then(|value| value.read)
+                    .and_then(|value| value.try_into().ok()),
+                cache_write_tokens: cache
+                    .and_then(|value| value.write)
+                    .and_then(|value| value.try_into().ok()),
+                reasoning_tokens: tokens.reasoning.and_then(|value| value.try_into().ok()),
+                estimated_usd_micros,
+                estimated_usd_price_version: estimated_usd_micros
+                    .map(|_| "opencode-persisted-cost-v1".to_string()),
+                cost_points_micros: None,
+                source_kind: "opencode_message".to_string(),
+                parser_version: 3,
+            })
+        })
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.occurred_at
+            .cmp(&right.occurred_at)
+            .then_with(|| left.source_event_id.cmp(&right.source_event_id))
+    });
+    Ok(events)
 }
 
 pub(crate) fn get_opencode_session_stats_internal(

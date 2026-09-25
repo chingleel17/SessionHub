@@ -302,14 +302,193 @@ export type McpProviderConfig = {
 
 export type AnalyticsGroupBy = "day" | "week" | "month";
 
-export type AnalyticsDataPoint = {
+export type AnalyticsMetric = "tokens" | "estimated_usd" | "copilot_points";
+export type AnalyticsTokenField = "total" | "input" | "output";
+export type AnalyticsBreakdown = "total" | "provider" | "model" | "token_type";
+export type AnalyticsCoverageStatus =
+    | "complete"
+    | "partial"
+    | "pending"
+    | "unsupported"
+    | "error"
+    | "summary_only";
+export type AnalyticsDetailStatus = "ready" | "stale_revision";
+export type AnalyticsSessionSort = "event_time_desc";
+
+export type AnalyticsQuery = {
+    startDate: string;
+    endDate: string;
+    timeZone: string;
+    groupBy: AnalyticsGroupBy;
+    providers: string[];
+    cwd: string | null;
+    model: string | null;
+    cwds: string[];
+    models: string[];
+    includeArchived: boolean;
+    metric: AnalyticsMetric;
+    tokenField: AnalyticsTokenField;
+    breakdown: AnalyticsBreakdown;
+};
+
+export type AnalyticsMetricValue = {
+    knownValue: number | null;
+    eligibleEventCount: number;
+    missingFieldEventCount: number;
+    priceVersions: string[];
+};
+
+export type AnalyticsValues = {
+    totalTokens: AnalyticsMetricValue;
+    inputTokens: AnalyticsMetricValue;
+    outputTokens: AnalyticsMetricValue;
+    cacheReadTokens: AnalyticsMetricValue;
+    cacheWriteTokens: AnalyticsMetricValue;
+    reasoningTokens: AnalyticsMetricValue;
+    estimatedUsd: AnalyticsMetricValue;
+    copilotPoints: AnalyticsMetricValue;
+};
+
+export type AnalyticsSeriesPoint = {
     label: string;
-    outputTokens: number;
-    inputTokens: number;
+    startAt: string;
+    endAt: string;
+    values: AnalyticsValues;
     interactionCount: number;
-    costPoints: number;
     sessionCount: number;
-    missingCount: number;
+};
+
+export type AnalyticsMetricCoverage = {
+    eligibleEventCount: number;
+    missingFieldEventCount: number;
+    status: AnalyticsCoverageStatus;
+};
+
+export type AnalyticsProviderCoverage = {
+    provider: string;
+    status: AnalyticsCoverageStatus;
+    completeSessionCount: number;
+    partialSessionCount: number;
+    pendingSessionCount: number;
+    unsupportedSessionCount: number;
+    errorSessionCount: number;
+    summaryOnlySessionCount: number;
+    periodUnknownSessionCount: number;
+};
+
+export type AnalyticsCoverage = {
+    metrics: Record<string, AnalyticsMetricCoverage>;
+    providers: AnalyticsProviderCoverage[];
+};
+
+export type AnalyticsRankingEntry = {
+    key: string;
+    label: string;
+    value: AnalyticsMetricValue;
+    sessionCount: number;
+    shareOfKnownValue: number | null;
+};
+
+export type AnalyticsSessionSummaryOnly = {
+    provider: string;
+    sessionId: string;
+    cwd: string | null;
+    model: string | null;
+    activeFrom: string | null;
+    activeUntil: string | null;
+    values: AnalyticsValues;
+    status: AnalyticsCoverageStatus;
+};
+
+export type AnalyticsReport = {
+    summary: AnalyticsValues;
+    previousSummary: AnalyticsValues | null;
+    comparison: AnalyticsComparison;
+    series: AnalyticsSeriesPoint[];
+    projectRanking: AnalyticsRankingEntry[];
+    modelRanking: AnalyticsRankingEntry[];
+    platformRanking: AnalyticsRankingEntry[];
+    supplierRanking: AnalyticsRankingEntry[];
+    coverage: AnalyticsCoverage;
+    sessionSummaryOnly: AnalyticsSessionSummaryOnly[];
+    revision: number;
+    generatedAt: string;
+    timeZone: string;
+};
+
+export type AnalyticsComparisonStatus =
+    | "comparable"
+    | "new_usage"
+    | "no_change"
+    | "not_comparable";
+
+export type AnalyticsComparison = {
+    status: AnalyticsComparisonStatus;
+    percentChange: number | null;
+    reason: string | null;
+};
+
+export type AnalyticsSessionDetail = {
+    provider: string;
+    modelProviderIds: string[];
+    sessionId: string;
+    cwd: string | null;
+    model: string | null;
+    firstEventAt: string | null;
+    lastEventAt: string | null;
+    values: AnalyticsValues;
+    sessionSummaryOnly: AnalyticsValues | null;
+    status: AnalyticsCoverageStatus;
+};
+
+export type AnalyticsSessionPage = {
+    status: AnalyticsDetailStatus;
+    revision: number;
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    items: AnalyticsSessionDetail[];
+};
+
+export type AnalyticsSessionPageQuery = {
+    query: AnalyticsQuery;
+    revision: number;
+    page: number;
+    pageSize: number;
+    sort: AnalyticsSessionSort;
+};
+
+export type UsageIndexProgress = {
+    totalSessions: number;
+    indexedSessions: number;
+    pendingSessions: number;
+    unsupportedSessions: number;
+    errorSessions: number;
+    unindexedSessions: number;
+};
+
+export type ModelPricingEntry = {
+    provider: string;
+    model: string;
+    status: string;
+    promptUsdPerMillion: number | null;
+    completionUsdPerMillion: number | null;
+    cacheReadUsdPerMillion: number | null;
+    cacheWriteUsdPerMillion: number | null;
+    source: string;
+    fetchedAt: number;
+    expiresAt: number;
+    errorKind: string | null;
+    hidden: boolean;
+};
+
+export type ManualModelPricingInput = {
+    provider: string;
+    model: string;
+    promptUsdPerMillion: number;
+    completionUsdPerMillion: number;
+    cacheReadUsdPerMillion: number | null;
+    cacheWriteUsdPerMillion: number | null;
 };
 
 export type SessionActivityStatus = {

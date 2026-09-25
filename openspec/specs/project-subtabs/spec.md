@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義專案子頁籤架構、導覽與呈現行為。
+
+## Requirements
 
 ### Requirement: ProjectView 子分頁架構
 

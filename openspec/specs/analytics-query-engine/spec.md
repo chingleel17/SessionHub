@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義分析資料查詢、聚合結果及參數驗證契約。
+
+## Requirements
 
 ### Requirement: 提供時序聚合統計查詢
 

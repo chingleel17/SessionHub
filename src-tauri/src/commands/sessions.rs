@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tauri::Emitter;
 use tauri::State;
 
 use crate::activity::get_session_activity_statuses_internal;
@@ -14,7 +15,9 @@ use crate::sessions::{
     open_terminal_internal, unarchive_session_internal,
 };
 use crate::settings::resolve_copilot_root;
-use crate::stats::{backfill_missing_stats_internal, get_session_stats_internal};
+use crate::stats::{
+    backfill_missing_stats_internal, get_session_stats_internal, index_usage_batch_internal,
+};
 use crate::types::*;
 
 pub(crate) fn get_sessions_cached_internal(
@@ -219,13 +222,14 @@ pub async fn get_sessions(
     enabled_providers: Option<Vec<String>>,
     force_full: Option<bool>,
     scan_cache: State<'_, Arc<ScanCache>>,
+    app_handle: tauri::AppHandle,
     _db: State<'_, DbState>,
 ) -> Result<Vec<SessionInfo>, String> {
     // 將整個掃描（磁碟 I/O + git 子程序）移至背景執行緒，避免阻塞 Tauri 主執行緒導致 UI 白屏無回應。
     // ScanCache 以 Arc 共享，可安全移入 spawn_blocking 閉包；DB 則於背景執行緒另開連線，
     // 與 trigger_stats_backfill 採相同模式。
     let scan_cache = Arc::clone(scan_cache.inner());
-    tauri::async_runtime::spawn_blocking(move || {
+    let sessions = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_db_connection()?;
         get_sessions_internal(
             root_dir,
@@ -241,7 +245,42 @@ pub async fn get_sessions(
         )
     })
     .await
-    .map_err(|error| format!("failed to join sessions scan task: {error}"))?
+    .map_err(|error| format!("failed to join sessions scan task: {error}"))??;
+
+    let sessions_for_indexing = sessions.clone();
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = match open_db_connection() {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("[usage-index] failed to open database: {error}");
+                return;
+            }
+        };
+        let revision_before = connection
+            .query_row(
+                "SELECT revision FROM analytics_revision WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+        if let Err(error) = index_usage_batch_internal(&connection, &sessions_for_indexing) {
+            eprintln!("[usage-index] backfill batch failed: {error}");
+            return;
+        }
+        let revision_after = connection
+            .query_row(
+                "SELECT revision FROM analytics_revision WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(revision_before);
+        if revision_after != revision_before {
+            let _ = app_handle.emit("analytics-revision-updated", revision_after);
+        }
+    });
+
+    Ok(sessions)
 }
 
 #[tauri::command]

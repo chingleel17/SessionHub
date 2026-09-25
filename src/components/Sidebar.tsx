@@ -11,6 +11,7 @@ import {
   PanelLeftOpenIcon,
   PinIcon,
   RefreshIcon,
+  StatsIcon,
   SettingsIcon,
 } from "./Icons";
 
@@ -278,7 +279,17 @@ export function Sidebar({
           <span className="sidebar-link-icon"><DashboardIcon size={18} /></span>
           <span>{t("sidebar.menu.dashboard")}</span>
         </button>
-
+        <button
+          type="button"
+          className={`sidebar-link ${activeView === "analytics" ? "active" : ""}`}
+          title={t("sidebar.menu.analytics")}
+          aria-label={t("sidebar.menu.analytics")}
+          aria-current={activeView === "analytics" ? "page" : undefined}
+          onClick={() => onNavigate("analytics")}
+        >
+          <span className="sidebar-link-icon"><StatsIcon size={18} /></span>
+          <span>{t("sidebar.menu.analytics")}</span>
+        </button>
         <div className="sidebar-project-divider">
           <div className="sidebar-section-divider" aria-hidden="true" />
           <button

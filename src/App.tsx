@@ -11,8 +11,10 @@ import { useI18n } from "./i18n/I18nProvider";
 import type {
   AgentsMdScanResult,
   AgentsRootLinkStatus,
-  AnalyticsDataPoint,
-  AnalyticsGroupBy,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsSessionPage,
+  AnalyticsSessionSort,
   AppSettings,
   BridgeEventLogEntry,
   CommandsScanResult,
@@ -20,6 +22,8 @@ import type {
   EditDialogState,
   IdeLauncherType,
   McpProviderConfig,
+  ManualModelPricingInput,
+  ModelPricingEntry,
   OpenSpecData,
   ProjectAgentsPrefs,
   ProjectGroup,
@@ -45,7 +49,13 @@ import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
+import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
+import {
+  createDashboardAnalyticsQuery,
+  createDefaultAnalyticsQuery,
+  resolveAnalyticsTimeZone,
+} from "./utils/analyticsTimeZone";
 import { useSessionRealtimeEvents } from "./hooks/useSessionRealtimeEvents";
 import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useAppSettingsForm";
 
@@ -62,6 +72,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SyncConflictDialog } from "./components/SyncConflictDialog";
 import { StatusBar } from "./components/StatusBar";
 import { TagEditDialog } from "./components/TagEditDialog";
+import { UsageAnalyticsView } from "./components/UsageAnalyticsView";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -121,10 +132,6 @@ function getDashboardPeriodStart(period: "week" | "month"): number {
   }
 
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-}
-
-function formatDateInput(value: Date): string {
-  return value.toISOString().slice(0, 10);
 }
 
 function getDirectoryPath(filePath: string): string {
@@ -257,6 +264,9 @@ function App() {
 
   const [openProjectKeys, setOpenProjectKeys] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<string>("dashboard");
+  const [analyticsQueryByScope, setAnalyticsQueryByScope] = useState<Record<string, AnalyticsQuery>>({});
+  const [analyticsPageByScope, setAnalyticsPageByScope] = useState<Record<string, number>>({});
+  const [analyticsPageSize, setAnalyticsPageSize] = useState(10);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [showEmptySessions, setShowEmptySessions] = useState(false);
   const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
@@ -285,6 +295,7 @@ function App() {
   };
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = useCallback((message: string) => setToastMessage(message), []);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [resetCreditBusy, setResetCreditBusy] = useState(false);
   const [editDialog, setEditDialog] = useState<EditDialogState | null>(null);
@@ -468,7 +479,7 @@ function App() {
       hasShownOutdatedToast.current = true;
       showToast(t("toast.providerOutdatedOnStartup"));
     }
-  }, [settingsQuery.data, t]);
+  }, [settingsQuery.data, showToast, t]);
 
 
   useEffect(() => {
@@ -555,7 +566,6 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const showToast = (message: string) => setToastMessage(message);
   const searchSessionContent = (query: string, sessions: SessionSearchTarget[]) =>
     invoke<string[]>("search_session_content", { query, sessions });
 
@@ -793,6 +803,7 @@ function App() {
 
     if (
       activeView !== "dashboard" &&
+      activeView !== "analytics" &&
       activeView !== "agents-global" &&
       activeView !== "settings" &&
       !availableProjectKeys.has(activeView)
@@ -805,6 +816,149 @@ function App() {
     () => groupedProjects.find((p) => p.key === activeView) ?? null,
     [activeView, groupedProjects],
   );
+  const isProjectAnalyticsActive = activeProject !== null
+    && getProjectSubTabState(activeProject.key).activeSubTab === "analytics";
+  const isAnalyticsWorkspaceActive = activeView === "analytics" || isProjectAnalyticsActive;
+  const analyticsScopeKey = activeProject ? `project:${activeProject.pathLabel}` : "global";
+  const activeAnalyticsQuery = analyticsQueryByScope[analyticsScopeKey] ?? null;
+  const activeAnalyticsPage = analyticsPageByScope[analyticsScopeKey] ?? 1;
+  const updateActiveAnalyticsQuery = useCallback((query: AnalyticsQuery) => {
+    const scopedQuery = activeProject ? { ...query, cwd: activeProject.pathLabel } : query;
+    setAnalyticsQueryByScope((previous) => ({ ...previous, [analyticsScopeKey]: scopedQuery }));
+    setAnalyticsPageByScope((previous) => ({ ...previous, [analyticsScopeKey]: 1 }));
+  }, [activeProject, analyticsScopeKey]);
+
+  useEffect(() => {
+    if (!isAnalyticsWorkspaceActive || activeAnalyticsQuery) return;
+    const timeZone = resolveAnalyticsTimeZone(false);
+    if (!timeZone) return;
+    const cwd = activeProject?.pathLabel ?? null;
+    setAnalyticsQueryByScope((previous) => {
+      if (previous[analyticsScopeKey]) return previous;
+      return {
+        ...previous,
+        [analyticsScopeKey]: {
+          ...createDefaultAnalyticsQuery(
+          timeZone,
+          settingsForm.enabledProviders,
+          ),
+          cwd,
+        },
+      };
+    });
+  }, [activeAnalyticsQuery, activeProject, analyticsScopeKey, isAnalyticsWorkspaceActive, settingsForm.enabledProviders]);
+
+  const analyticsSourceSettingsKey = {
+    copilotRoot: settingsForm.copilotRoot,
+    opencodeRoot: settingsForm.opencodeRoot,
+    codexRoot: settingsForm.codexRoot,
+    claudeRoot: settingsForm.claudeRoot,
+    antigravityRoot: settingsForm.antigravityRoot,
+    enabledProviders: [...settingsForm.enabledProviders].sort(),
+  };
+  const analyticsRevisionQuery = useQuery({
+    queryKey: ["analyticsRevision"],
+    queryFn: () => invoke<number>("get_analytics_revision"),
+    enabled: isAnalyticsWorkspaceActive
+      || (activeView === "dashboard" && !settingsForm.analyticsPanelCollapsed),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const analyticsRevision = analyticsRevisionQuery.data ?? 0;
+  const analyticsReportQuery = useQuery({
+    queryKey: [
+      "analyticsReport",
+      analyticsScopeKey,
+      analyticsSourceSettingsKey,
+      activeAnalyticsQuery,
+      analyticsRevision,
+    ],
+    queryFn: () => {
+      if (!activeAnalyticsQuery) throw new Error(t("analytics.error.timeZoneUnavailable"));
+      return invoke<AnalyticsReport>("get_analytics_report", { query: activeAnalyticsQuery });
+    },
+    placeholderData: (previousData) => previousData,
+    retry: false,
+    enabled: isAnalyticsWorkspaceActive && activeAnalyticsQuery !== null && analyticsRevisionQuery.isSuccess,
+    staleTime: (settingsForm.analyticsRefreshInterval ?? 30) * 60_000,
+    refetchInterval: isAnalyticsWorkspaceActive
+      ? (settingsForm.analyticsRefreshInterval ?? 30) * 60_000
+      : false,
+  });
+  const analyticsSessionPageQuery = useQuery({
+    queryKey: [
+      "analyticsSessionPage",
+      analyticsScopeKey,
+      analyticsSourceSettingsKey,
+      activeAnalyticsQuery,
+      analyticsReportQuery.data?.revision ?? analyticsRevision,
+      activeAnalyticsPage,
+      analyticsPageSize,
+      "event_time_desc",
+    ],
+    queryFn: () => {
+      if (!activeAnalyticsQuery) throw new Error(t("analytics.error.timeZoneUnavailable"));
+      return invoke<AnalyticsSessionPage>("get_analytics_session_page", {
+        query: activeAnalyticsQuery,
+        requestedRevision: analyticsReportQuery.data?.revision ?? analyticsRevision,
+        page: activeAnalyticsPage,
+        pageSize: analyticsPageSize,
+        sort: "event_time_desc" satisfies AnalyticsSessionSort,
+      });
+    },
+    enabled: isAnalyticsWorkspaceActive
+      && activeAnalyticsQuery !== null
+      && Boolean(analyticsReportQuery.data)
+      && !analyticsReportQuery.isPlaceholderData,
+    staleTime: (settingsForm.analyticsRefreshInterval ?? 30) * 60_000,
+    retry: false,
+  });
+  const modelPricingQuery = useQuery({
+    queryKey: ["modelPricing"],
+    queryFn: () => invoke<ModelPricingEntry[]>("list_model_pricing"),
+    enabled: isAnalyticsWorkspaceActive,
+  });
+  const saveModelPricingMutation = useMutation({
+    mutationFn: (input: ManualModelPricingInput) =>
+      invoke<ModelPricingEntry[]>("save_manual_model_pricing", { input }),
+    onSuccess: (entries) => queryClient.setQueryData(["modelPricing"], entries),
+    onError: (error) => showToast(resolveErrorMessage(error, t("pricing.error.save"))),
+  });
+  const deleteModelPricingMutation = useMutation({
+    mutationFn: ({ provider, model }: { provider: string; model: string }) =>
+      invoke<ModelPricingEntry[]>("delete_manual_model_pricing", { provider, model }),
+    onSuccess: (entries) => queryClient.setQueryData(["modelPricing"], entries),
+    onError: (error) => showToast(resolveErrorMessage(error, t("pricing.error.delete"))),
+  });
+  const modelPricingVisibilityMutation = useMutation({
+    mutationFn: ({ provider, model, hidden }: { provider: string; model: string; hidden: boolean }) =>
+      invoke<ModelPricingEntry[]>("set_model_pricing_visibility", { provider, model, hidden }),
+    onSuccess: (entries) => queryClient.setQueryData(["modelPricing"], entries),
+    onError: (error) => showToast(resolveErrorMessage(error, t("pricing.error.visibility"))),
+  });
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<number>("analytics-revision-updated", (event) => {
+      queryClient.setQueryData(["analyticsRevision"], event.payload);
+      void queryClient.invalidateQueries({ queryKey: ["analyticsReport"] });
+      void queryClient.invalidateQueries({ queryKey: ["analyticsSessionPage"] });
+    }).then((stopListening) => {
+      unlisten = stopListening;
+    }).catch(() => undefined);
+    return () => unlisten?.();
+  }, [queryClient]);
+
+  useEffect(() => {
+    const result = analyticsSessionPageQuery.data;
+    if (result?.status !== "stale_revision") return;
+    queryClient.setQueryData(["analyticsRevision"], result.revision);
+    setAnalyticsPageByScope((previous) => ({ ...previous, [analyticsScopeKey]: 1 }));
+    void queryClient.invalidateQueries({ queryKey: ["analyticsReport"] });
+  }, [analyticsScopeKey, analyticsSessionPageQuery.data, queryClient]);
+
+  const handleUseUtcFallback = () => {
+    updateActiveAnalyticsQuery(createDefaultAnalyticsQuery("UTC", settingsForm.enabledProviders));
+  };
 
   const projectPathExistsQuery = useQuery({
     queryKey: ["project_path_exists", activeProject?.pathLabel ?? ""],
@@ -897,6 +1051,11 @@ function App() {
       (sessionsQuery.data ?? []).map((session) => [session.id, sessionStatsQuery.data?.[session.sessionDir]]),
     ) as Record<string, SessionStats | undefined>,
     [sessionStatsQuery.data, sessionsQuery.data],
+  );
+
+  const analyticsModelOptions = useMemo(
+    () => [...new Set(Object.values(sessionStatsMap).flatMap((stats) => Object.keys(stats?.modelMetrics ?? {})))].sort(),
+    [sessionStatsMap],
   );
 
   const sessionStatsLoadingMap = useMemo(
@@ -1526,12 +1685,48 @@ function App() {
 
   const [dashboardPeriod, setDashboardPeriod] = useState<"week" | "month">("week");
   const [dashboardViewMode, setDashboardViewMode] = useState<"list" | "kanban">("kanban");
-  const [dashboardAnalyticsData, setDashboardAnalyticsData] = useState<AnalyticsDataPoint[]>([]);
-  const [dashboardAnalyticsLoading, setDashboardAnalyticsLoading] = useState(false);
-  const [dashboardAnalyticsRefreshing, setDashboardAnalyticsRefreshing] = useState(false);
-  const [dashboardAnalyticsError, setDashboardAnalyticsError] = useState<string | null>(null);
-  const [dashboardAnalyticsFetchedAt, setDashboardAnalyticsFetchedAt] = useState<number | null>(null);
+  const [dashboardUtcFallbackConfirmed, setDashboardUtcFallbackConfirmed] = useState(false);
 
+  const dashboardTimeZone = resolveAnalyticsTimeZone(dashboardUtcFallbackConfirmed);
+  const dashboardAnalyticsQuery = useMemo(
+    () => dashboardTimeZone
+      ? createDashboardAnalyticsQuery(
+        dashboardTimeZone,
+        settingsForm.enabledProviders,
+        dashboardPeriod,
+      )
+      : null,
+    [dashboardPeriod, dashboardTimeZone, settingsForm.enabledProviders],
+  );
+  const dashboardReportQuery = useQuery({
+    queryKey: [
+      "analyticsReport",
+      "dashboard",
+      analyticsSourceSettingsKey,
+      dashboardAnalyticsQuery,
+      analyticsRevision,
+    ],
+    queryFn: () => {
+      if (!dashboardAnalyticsQuery) throw new Error(t("analytics.error.timeZoneUnavailable"));
+      return invoke<AnalyticsReport>("get_analytics_report", { query: dashboardAnalyticsQuery });
+    },
+    placeholderData: (previousData) => previousData,
+    retry: false,
+    enabled: activeView === "dashboard"
+      && !settingsForm.analyticsPanelCollapsed
+      && dashboardAnalyticsQuery !== null
+      && analyticsRevisionQuery.isSuccess,
+    staleTime: (settingsForm.analyticsRefreshInterval ?? 30) * 60_000,
+    refetchInterval: activeView === "dashboard" && !settingsForm.analyticsPanelCollapsed
+      ? (settingsForm.analyticsRefreshInterval ?? 30) * 60_000
+      : false,
+  });
+  const [dashboardDisplayedPeriod, setDashboardDisplayedPeriod] = useState(dashboardPeriod);
+  useEffect(() => {
+    if (dashboardReportQuery.data && !dashboardReportQuery.isPlaceholderData) {
+      setDashboardDisplayedPeriod(dashboardPeriod);
+    }
+  }, [dashboardPeriod, dashboardReportQuery.data, dashboardReportQuery.isPlaceholderData]);
   const dashboardPeriodStart = useMemo(
     () => getDashboardPeriodStart(dashboardPeriod),
     [dashboardPeriod],
@@ -1578,91 +1773,6 @@ function App() {
     [filteredDashboardSessions],
   );
 
-  const filteredDashboardTotals = useMemo(() => {
-    return filteredDashboardSessions.reduce(
-      (acc, session) => {
-        const stats = sessionStatsMap[session.id];
-        if (!stats) return acc;
-        acc.totalOutputTokens += stats.outputTokens;
-        acc.totalInteractions += stats.interactionCount;
-        acc.totalCost += Object.values(stats.modelMetrics ?? {}).reduce(
-          (sum, metric) => sum + metric.requestsCost,
-          0,
-        );
-        return acc;
-      },
-      { totalOutputTokens: 0, totalInteractions: 0, totalCost: 0 },
-    );
-  }, [filteredDashboardSessions, sessionStatsMap]);
-
-  const dashboardProjectSlices = useMemo(() => {
-    const palette = ["#6366f1", "#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
-    return filteredDashboardProjects
-      .map((project, index) => {
-        const total = project.sessions.reduce((sum, session) => {
-          const stats = sessionStatsMap[session.id];
-          return sum + (stats?.outputTokens ?? 0) + (stats?.inputTokens ?? 0);
-        }, 0);
-        return {
-          label: project.title,
-          value: total,
-          color: palette[index % palette.length],
-        };
-      })
-      .filter((slice) => slice.value > 0);
-  }, [filteredDashboardProjects, sessionStatsMap]);
-
-  const fetchAnalyticsData = useCallback(
-    async (
-      cwd: string | null,
-      startDate: string,
-      endDate: string,
-      groupBy: AnalyticsGroupBy,
-    ): Promise<AnalyticsDataPoint[] | null> => {
-      try {
-        return await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
-          cwd,
-          startDate,
-          endDate,
-          groupBy,
-        });
-      } catch (error) {
-        showToast(resolveErrorMessage(error, t("analytics.error.loadFailed")));
-        return null;
-      }
-    },
-    [t],
-  );
-
-  const fetchDashboardAnalytics = useCallback(async () => {
-    const startDate = formatDateInput(new Date(dashboardPeriodStart));
-    const endDate = formatDateInput(new Date());
-    const hasExistingData = dashboardAnalyticsData.length > 0;
-
-    setDashboardAnalyticsError(null);
-    if (hasExistingData) {
-      setDashboardAnalyticsRefreshing(true);
-    } else {
-      setDashboardAnalyticsLoading(true);
-    }
-
-    try {
-      const result = await invoke<AnalyticsDataPoint[]>("get_analytics_data", {
-        cwd: null,
-        startDate,
-        endDate,
-        groupBy: "day",
-      });
-      setDashboardAnalyticsData(result);
-      setDashboardAnalyticsFetchedAt(Date.now());
-    } catch (error) {
-      setDashboardAnalyticsError(resolveErrorMessage(error, t("analytics.error.loadFailed")));
-    } finally {
-      setDashboardAnalyticsLoading(false);
-      setDashboardAnalyticsRefreshing(false);
-    }
-  }, [dashboardAnalyticsData.length, dashboardPeriodStart, t]);
-
   const planPreviewHtml = useMemo(
     () =>
       DOMPurify.sanitize(
@@ -1674,6 +1784,27 @@ function App() {
   const openProjectTab = (projectKey: string) => {
     setOpenProjectKeys((v) => (v.includes(projectKey) ? v : [...v, projectKey]));
     setActiveView(projectKey);
+  };
+
+  const handleOpenFullAnalytics = () => {
+    if (dashboardAnalyticsQuery) {
+      setAnalyticsQueryByScope((previous) => ({
+        ...previous,
+        global: dashboardAnalyticsQuery,
+      }));
+    }
+    setActiveView("analytics");
+  };
+
+  const handleOpenAnalyticsSession = (provider: string, sessionId: string) => {
+    const session = sessionsQuery.data?.find(
+      (item) => item.provider === provider && item.id === sessionId,
+    );
+    if (!session) {
+      showToast(t("analytics.sessionDetail.sessionUnavailable"));
+      return;
+    }
+    openProjectTab(getProjectKey(session, uncategorizedLabel));
   };
 
   const closeProjectPicker = useCallback(() => {
@@ -1772,10 +1903,6 @@ function App() {
     const nextCollapsed = !(settingsForm.analyticsPanelCollapsed ?? false);
     setSettingsForm((current) => ({ ...current, analyticsPanelCollapsed: nextCollapsed }));
     await persistSettingsSilently(buildSettingsPayload({ analyticsPanelCollapsed: nextCollapsed }));
-    const refreshIntervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
-    if (!nextCollapsed && (!dashboardAnalyticsFetchedAt || Date.now() - dashboardAnalyticsFetchedAt >= refreshIntervalMs)) {
-      await fetchDashboardAnalytics();
-    }
   };
 
   const handleArchiveSession = (session: SessionInfo) => {
@@ -1909,16 +2036,11 @@ function App() {
         return queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
       })
       .catch(() => null);
-  }, [queryClient]);
+  }, [queryClient, showToast, t]);
 
   const handleConsumeResetCredit = () => {
     if (resetCreditBusy) return;
-    setConfirmDialog({
-      title: t("quota.resetCredits.confirmTitle"),
-      message: t("quota.resetCredits.confirmMessage"),
-      actionLabel: t("quota.resetCredits.use"),
-      tone: "danger",
-      onConfirm: () => {
+    setConfirmDialog(createCodexResetCreditConfirmation(t, () => {
         if (resetCreditBusy) return;
         setResetCreditBusy(true);
         void invoke<string>("consume_codex_reset_credit", { requestId: crypto.randomUUID() })
@@ -1936,8 +2058,7 @@ function App() {
             setResetCreditBusy(false);
             handleRefreshQuota("codex");
           });
-      },
-    });
+      }));
   };
 
   const handleOpenProviderPath = async (integration: ProviderIntegrationStatus) => {
@@ -1998,25 +2119,6 @@ function App() {
       showToast(error instanceof Error ? error.message : t("toast.planOpenFailed"));
     }
   };
-
-  useEffect(() => {
-    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return;
-    void fetchDashboardAnalytics();
-  }, [activeView, dashboardPeriod, settingsForm.analyticsPanelCollapsed, fetchDashboardAnalytics]);
-
-  useEffect(() => {
-    if (activeView !== "dashboard" || settingsForm.analyticsPanelCollapsed) return undefined;
-    const intervalMs = (settingsForm.analyticsRefreshInterval ?? 30) * 60_000;
-    const timer = window.setInterval(() => {
-      void fetchDashboardAnalytics();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [
-    activeView,
-    settingsForm.analyticsPanelCollapsed,
-    settingsForm.analyticsRefreshInterval,
-    fetchDashboardAnalytics,
-  ]);
 
   const handleOpenPathExternal = (path: string) => {
     openPath(path).catch((error) => {
@@ -2108,6 +2210,8 @@ function App() {
                 <h2 className="workspace-title">
                   {activeView === "dashboard"
                     ? t("tabs.dashboard")
+                    : activeView === "analytics"
+                      ? t("analytics.workspace.title")
                     : activeView === "agents-global"
                       ? t("agents.nav")
                     : activeView === "settings"
@@ -2121,6 +2225,8 @@ function App() {
               <p className="workspace-subtitle">
                 {activeView === "dashboard"
                   ? t("dashboard.subtitle")
+                  : activeView === "analytics"
+                    ? t("analytics.workspace.subtitle")
                   : activeView === "agents-global"
                     ? t("agents.globalSubtitle")
                   : activeView === "settings"
@@ -2142,9 +2248,6 @@ function App() {
               recentSessions={filteredRecentSessions}
               dashboardPeriod={dashboardPeriod}
               onPeriodChange={setDashboardPeriod}
-              filteredTotalOutputTokens={filteredDashboardTotals.totalOutputTokens}
-              filteredTotalInteractions={filteredDashboardTotals.totalInteractions}
-              filteredTotalCost={filteredDashboardTotals.totalCost}
               onOpenProject={openProjectTab}
               onOpenRecentSession={(session) =>
                 openProjectTab(getProjectKey(session, uncategorizedLabel))
@@ -2155,20 +2258,82 @@ function App() {
               onFocusTerminal={(session) => void handleFocusTerminal(session)}
               viewMode={dashboardViewMode}
               onViewModeChange={setDashboardViewMode}
-              analyticsData={dashboardAnalyticsData}
-              analyticsError={dashboardAnalyticsError}
-              analyticsLoading={dashboardAnalyticsLoading}
-              analyticsRefreshing={dashboardAnalyticsRefreshing}
-              analyticsProjectSlices={dashboardProjectSlices}
+              analyticsReport={dashboardReportQuery.data}
+              analyticsError={dashboardReportQuery.error
+                ? resolveErrorMessage(dashboardReportQuery.error, t("analytics.error.loadFailed"))
+                : null}
+              analyticsLoading={dashboardReportQuery.isLoading}
+              analyticsRefreshing={dashboardReportQuery.isFetching || dashboardReportQuery.isPlaceholderData}
+              analyticsStale={dashboardReportQuery.isPlaceholderData}
+              analyticsTimeZoneUnavailable={dashboardTimeZone === null}
+              analyticsDisplayedPeriod={dashboardDisplayedPeriod}
               analyticsCollapsed={settingsForm.analyticsPanelCollapsed ?? false}
-              onAnalyticsRetry={() => void fetchDashboardAnalytics()}
+              onAnalyticsRetry={() => void dashboardReportQuery.refetch()}
               onAnalyticsToggleCollapsed={() => void handleToggleAnalyticsPanel()}
+              onOpenAnalytics={handleOpenFullAnalytics}
+              onUseUtcAnalyticsFallback={() => setDashboardUtcFallbackConfirmed(true)}
               quotaSnapshots={quotaSnapshotQuery.data ?? []}
               enableQuotaMonitoring={settingsForm.enableQuotaMonitoring ?? true}
               quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
               onRefreshQuota={handleRefreshQuota}
               onConsumeResetCredit={handleConsumeResetCredit}
               resetCreditBusy={resetCreditBusy}
+            />
+          ) : null}
+
+          {activeView === "analytics" ? (
+            <UsageAnalyticsView
+              query={activeAnalyticsQuery}
+              report={analyticsReportQuery.data}
+              sessionPage={analyticsSessionPageQuery.data}
+              pageNumber={activeAnalyticsPage}
+              pageSize={analyticsPageSize}
+              isStaleResult={analyticsReportQuery.isPlaceholderData}
+              availableProviders={settingsForm.enabledProviders}
+              projects={groupedProjects}
+              models={analyticsModelOptions}
+              isLoading={analyticsReportQuery.isLoading || analyticsSessionPageQuery.isLoading}
+              isRefreshing={analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching}
+              errorMessage={analyticsReportQuery.error
+                ? resolveErrorMessage(analyticsReportQuery.error, t("analytics.error.loadFailed"))
+                : analyticsSessionPageQuery.error
+                  ? resolveErrorMessage(analyticsSessionPageQuery.error, t("analytics.error.loadFailed"))
+                  : null}
+              onQueryChange={updateActiveAnalyticsQuery}
+              onRetry={() => void analyticsReportQuery.refetch()}
+              onPageChange={(page) => setAnalyticsPageByScope((previous) => ({
+                ...previous,
+                [analyticsScopeKey]: page,
+              }))}
+              onPageSizeChange={(pageSize) => {
+                setAnalyticsPageSize(pageSize);
+                setAnalyticsPageByScope((previous) => ({ ...previous, [analyticsScopeKey]: 1 }));
+              }}
+              onRefresh={() => {
+                void sessionsQuery.refetch().then(() => analyticsReportQuery.refetch());
+              }}
+              onUseUtcFallback={handleUseUtcFallback}
+              onOpenSession={handleOpenAnalyticsSession}
+              quotaSnapshots={quotaSnapshotQuery.data ?? []}
+              quotaEnabled={settingsForm.enableQuotaMonitoring ?? true}
+              quotaError={quotaSnapshotQuery.error
+                ? resolveErrorMessage(quotaSnapshotQuery.error, t("analytics.error.loadFailed"))
+                : null}
+              onRefreshQuota={handleRefreshQuota}
+              onConsumeResetCredit={handleConsumeResetCredit}
+              resetCreditBusy={resetCreditBusy}
+              pricingEntries={modelPricingQuery.data ?? []}
+              pricingLoading={modelPricingQuery.isLoading}
+              pricingSaving={saveModelPricingMutation.isPending}
+              pricingError={modelPricingQuery.error
+                ? resolveErrorMessage(modelPricingQuery.error, t("pricing.error.load"))
+                : null}
+              onSavePricing={async (input) => {
+                await saveModelPricingMutation.mutateAsync(input);
+              }}
+              onDeletePricing={(provider, model) => deleteModelPricingMutation.mutate({ provider, model })}
+              onPricingVisibilityChange={(provider, model, hidden) =>
+                modelPricingVisibilityMutation.mutate({ provider, model, hidden })}
             />
           ) : null}
 
@@ -2301,9 +2466,59 @@ function App() {
               openDetailKeys={getProjectSubTabState(activeProject.key).openDetailKeys}
               activeSubTab={getProjectSubTabState(activeProject.key).activeSubTab}
               onSubTabStateChange={(state) => handleSubTabStateChange(activeProject.key, state)}
-              onFetchAnalytics={(cwd, startDate, endDate, groupBy) =>
-                fetchAnalyticsData(cwd, startDate, endDate, groupBy)
-              }
+              analyticsWorkspace={{
+                query: activeAnalyticsQuery,
+                report: analyticsReportQuery.data,
+                sessionPage: analyticsSessionPageQuery.data,
+                pageNumber: activeAnalyticsPage,
+                pageSize: analyticsPageSize,
+                isStaleResult: analyticsReportQuery.isPlaceholderData,
+                availableProviders: settingsForm.enabledProviders,
+                projects: groupedProjects,
+                models: analyticsModelOptions,
+                isLoading: analyticsReportQuery.isLoading || analyticsSessionPageQuery.isLoading,
+                isRefreshing: analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching,
+                errorMessage: analyticsReportQuery.error
+                  ? resolveErrorMessage(analyticsReportQuery.error, t("analytics.error.loadFailed"))
+                  : analyticsSessionPageQuery.error
+                    ? resolveErrorMessage(analyticsSessionPageQuery.error, t("analytics.error.loadFailed"))
+                    : null,
+                onQueryChange: updateActiveAnalyticsQuery,
+                onRetry: () => void analyticsReportQuery.refetch(),
+                onRefresh: () => {
+                  void sessionsQuery.refetch().then(() => analyticsReportQuery.refetch());
+                },
+                onUseUtcFallback: handleUseUtcFallback,
+                onPageChange: (page) => setAnalyticsPageByScope((previous) => ({
+                  ...previous,
+                  [analyticsScopeKey]: page,
+                })),
+                onPageSizeChange: (pageSize) => {
+                  setAnalyticsPageSize(pageSize);
+                  setAnalyticsPageByScope((previous) => ({ ...previous, [analyticsScopeKey]: 1 }));
+                },
+                onOpenSession: handleOpenAnalyticsSession,
+                quotaSnapshots: quotaSnapshotQuery.data ?? [],
+                quotaEnabled: settingsForm.enableQuotaMonitoring ?? true,
+                quotaError: quotaSnapshotQuery.error
+                  ? resolveErrorMessage(quotaSnapshotQuery.error, t("analytics.error.loadFailed"))
+                  : null,
+                onRefreshQuota: handleRefreshQuota,
+                onConsumeResetCredit: handleConsumeResetCredit,
+                resetCreditBusy,
+                pricingEntries: modelPricingQuery.data ?? [],
+                pricingLoading: modelPricingQuery.isLoading,
+                pricingSaving: saveModelPricingMutation.isPending,
+                pricingError: modelPricingQuery.error
+                  ? resolveErrorMessage(modelPricingQuery.error, t("pricing.error.load"))
+                  : null,
+                onSavePricing: async (input) => {
+                  await saveModelPricingMutation.mutateAsync(input);
+                },
+                onDeletePricing: (provider, model) => deleteModelPricingMutation.mutate({ provider, model }),
+                onPricingVisibilityChange: (provider, model, hidden) =>
+                  modelPricingVisibilityMutation.mutate({ provider, model, hidden }),
+              }}
               activityStatusMap={activityStatusMap}
               onResumeSession={(session) => void handleResumeSession(session)}
               launchingTarget={launchingTarget}

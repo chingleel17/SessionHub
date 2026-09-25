@@ -535,7 +535,13 @@ pub fn run() {
             get_all_session_stats,
             trigger_stats_backfill,
             read_session_todos,
-            get_analytics_data,
+            get_analytics_report,
+            get_analytics_session_page,
+            get_analytics_revision,
+            list_model_pricing,
+            save_manual_model_pricing,
+            delete_manual_model_pricing,
+            set_model_pricing_visibility,
             open_terminal,
             check_directory_exists,
             check_path_remap_directory_exists,
@@ -714,10 +720,9 @@ mod tests {
     use crate::sisyphus::scan_sisyphus_internal;
     use crate::stats::{
         calculate_opencode_session_stats, get_session_stats_internal, parse_session_stats_internal,
-        upsert_session_stats_cache,
     };
     use rusqlite::Connection;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
     use std::fs;
@@ -2179,15 +2184,31 @@ mod tests {
         assert_eq!(
             data.evidence_files,
             vec![
-                sisyphus_dir.join("evidence").join("a.txt").to_string_lossy().to_string(),
-                sisyphus_dir.join("evidence").join("b.txt").to_string_lossy().to_string(),
+                sisyphus_dir
+                    .join("evidence")
+                    .join("a.txt")
+                    .to_string_lossy()
+                    .to_string(),
+                sisyphus_dir
+                    .join("evidence")
+                    .join("b.txt")
+                    .to_string_lossy()
+                    .to_string(),
             ]
         );
         assert_eq!(
             data.draft_files,
             vec![
-                sisyphus_dir.join("drafts").join("draft-a.md").to_string_lossy().to_string(),
-                sisyphus_dir.join("drafts").join("draft-b.md").to_string_lossy().to_string(),
+                sisyphus_dir
+                    .join("drafts")
+                    .join("draft-a.md")
+                    .to_string_lossy()
+                    .to_string(),
+                sisyphus_dir
+                    .join("drafts")
+                    .join("draft-b.md")
+                    .to_string_lossy()
+                    .to_string(),
             ]
         );
 
@@ -3423,205 +3444,6 @@ mod tests {
                 .expect("load session_mtimes after overwrite");
             assert_eq!(loaded2.len(), 1);
             assert_eq!(loaded2.get("ses-aaa"), Some(&5555));
-        });
-
-        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
-    }
-
-    #[test]
-    fn test_get_analytics_data_internal_groups_by_day_week_month() {
-        let _guard = test_lock().lock().expect("failed to lock test mutex");
-        let appdata_dir = unique_test_dir("appdata-analytics-group");
-        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
-
-        with_appdata(&appdata_dir, || {
-            let connection = open_db_connection().expect("open db");
-            init_db(&connection).expect("init db");
-
-            save_sessions_cache_to_db(
-                &connection,
-                &["copilot".to_string()],
-                &[
-                    SessionInfo {
-                        id: "analytics-a".to_string(),
-                        provider: "copilot".to_string(),
-                        cwd: Some("D:\\repo\\demo".to_string()),
-                        repo_root: Some("D:\\repo\\demo".to_string()),
-                        repo_name: Some("demo".to_string()),
-                        git_branch: Some("main".to_string()),
-                        summary: Some("A".to_string()),
-                        summary_count: Some(1),
-                        created_at: Some("2026-04-01T00:00:00Z".to_string()),
-                        updated_at: Some("2026-04-01T08:00:00Z".to_string()),
-                        session_dir: "D:\\repo\\demo\\a".to_string(),
-                        parse_error: false,
-                        is_archived: false,
-                        notes: None,
-                        tags: Vec::new(),
-                        has_plan: false,
-                        has_events: true,
-                    },
-                    SessionInfo {
-                        id: "analytics-b".to_string(),
-                        provider: "copilot".to_string(),
-                        cwd: Some("D:\\repo\\demo".to_string()),
-                        repo_root: Some("D:\\repo\\demo".to_string()),
-                        repo_name: Some("demo".to_string()),
-                        git_branch: Some("main".to_string()),
-                        summary: Some("B".to_string()),
-                        summary_count: Some(1),
-                        created_at: Some("2026-04-02T00:00:00Z".to_string()),
-                        updated_at: Some("2026-04-08T09:00:00Z".to_string()),
-                        session_dir: "D:\\repo\\demo\\b".to_string(),
-                        parse_error: false,
-                        is_archived: false,
-                        notes: None,
-                        tags: Vec::new(),
-                        has_plan: false,
-                        has_events: true,
-                    },
-                ],
-            )
-            .expect("save sessions cache");
-
-            upsert_session_stats_cache(
-                &connection,
-                "analytics-a",
-                100,
-                &SessionStats {
-                    output_tokens: 120,
-                    input_tokens: 80,
-                    interaction_count: 4,
-                    model_metrics: BTreeMap::from([(
-                        "gpt-5.4".to_string(),
-                        ModelMetricsEntry {
-                            requests_count: 2.0,
-                            requests_cost: 1.5,
-                            input_tokens: 80,
-                            output_tokens: 120,
-                        },
-                    )]),
-                    ..SessionStats::default()
-                },
-            )
-            .expect("upsert stats a");
-
-            upsert_session_stats_cache(
-                &connection,
-                "analytics-b",
-                101,
-                &SessionStats {
-                    output_tokens: 60,
-                    input_tokens: 30,
-                    interaction_count: 2,
-                    model_metrics: BTreeMap::from([(
-                        "gpt-5.4".to_string(),
-                        ModelMetricsEntry {
-                            requests_count: 1.0,
-                            requests_cost: 0.5,
-                            input_tokens: 30,
-                            output_tokens: 60,
-                        },
-                    )]),
-                    ..SessionStats::default()
-                },
-            )
-            .expect("upsert stats b");
-
-            let by_day = get_analytics_data_internal(
-                &connection,
-                Some("D:\\repo\\demo"),
-                "2026-04-01",
-                "2026-04-30",
-                "day",
-            )
-            .expect("analytics by day");
-            assert_eq!(by_day.len(), 2);
-            assert_eq!(by_day[0].label, "2026-04-01");
-            assert_eq!(by_day[0].output_tokens, 120);
-            assert_eq!(by_day[0].cost_points, 1.5);
-            assert_eq!(by_day[1].label, "2026-04-08");
-
-            let by_week = get_analytics_data_internal(
-                &connection,
-                Some("D:\\repo\\demo"),
-                "2026-04-01",
-                "2026-04-30",
-                "week",
-            )
-            .expect("analytics by week");
-            assert_eq!(by_week.len(), 2);
-            assert_eq!(by_week[0].label, "2026-W14");
-            assert_eq!(by_week[1].label, "2026-W15");
-
-            let by_month = get_analytics_data_internal(
-                &connection,
-                Some("D:\\repo\\demo"),
-                "2026-04-01",
-                "2026-04-30",
-                "month",
-            )
-            .expect("analytics by month");
-            assert_eq!(by_month.len(), 1);
-            assert_eq!(by_month[0].label, "2026-04");
-            assert_eq!(by_month[0].output_tokens, 180);
-            assert_eq!(by_month[0].interaction_count, 6);
-            assert_eq!(by_month[0].cost_points, 2.0);
-        });
-
-        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
-    }
-
-    #[test]
-    fn test_get_analytics_data_internal_returns_empty_for_no_matches() {
-        let _guard = test_lock().lock().expect("failed to lock test mutex");
-        let appdata_dir = unique_test_dir("appdata-analytics-empty");
-        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
-
-        with_appdata(&appdata_dir, || {
-            let connection = open_db_connection().expect("open db");
-            init_db(&connection).expect("init db");
-
-            let points = get_analytics_data_internal(
-                &connection,
-                Some("D:\\repo\\demo"),
-                "2026-04-01",
-                "2026-04-30",
-                "day",
-            )
-            .expect("empty analytics");
-            assert!(points.is_empty());
-        });
-
-        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
-    }
-
-    #[test]
-    fn test_get_analytics_data_internal_validates_inputs() {
-        let _guard = test_lock().lock().expect("failed to lock test mutex");
-        let appdata_dir = unique_test_dir("appdata-analytics-errors");
-        fs::create_dir_all(&appdata_dir).expect("create appdata dir");
-
-        with_appdata(&appdata_dir, || {
-            let connection = open_db_connection().expect("open db");
-            init_db(&connection).expect("init db");
-
-            let invalid_start =
-                get_analytics_data_internal(&connection, None, "2026/04/01", "2026-04-30", "day");
-            assert_eq!(invalid_start.unwrap_err(), "invalid date format: startDate");
-
-            let reversed =
-                get_analytics_data_internal(&connection, None, "2026-04-30", "2026-04-01", "day");
-            assert_eq!(reversed.unwrap_err(), "startDate must be before endDate");
-
-            let invalid_group = get_analytics_data_internal(
-                &connection,
-                None,
-                "2026-04-01",
-                "2026-04-30",
-                "quarter",
-            );
-            assert_eq!(invalid_group.unwrap_err(), "invalid groupBy value");
         });
 
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
