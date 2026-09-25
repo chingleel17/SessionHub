@@ -11,21 +11,28 @@ use crate::db::{delete_session_meta_internal, ensure_parent_dir, read_session_me
 use crate::sessions::{
     launch_terminal, project_terminal_label, remember_herdr_tab, TerminalLaunchSpec,
 };
-use crate::settings::{detect_vscode_path, load_settings_internal, resolve_terminal_launcher,
-    TERMINAL_LAUNCHER_SHELL};
+use crate::settings::{
+    detect_vscode_path, load_settings_internal, resolve_terminal_launcher, TERMINAL_LAUNCHER_SHELL,
+};
 use crate::types::*;
 
 pub(crate) fn extract_copilot_session_texts(session_dir: &Path) -> Vec<String> {
-    let Ok(file) = fs::File::open(session_dir.join("events.jsonl")) else { return Vec::new() };
+    let Ok(file) = fs::File::open(session_dir.join("events.jsonl")) else {
+        return Vec::new();
+    };
     BufReader::new(file)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
         .filter_map(|entry| {
             let event_type = entry.get("type").and_then(|value| value.as_str())?;
-            if !matches!(event_type, "user.message" | "assistant.message") { return None; }
+            if !matches!(event_type, "user.message" | "assistant.message") {
+                return None;
+            }
             let data = entry.get("data")?;
-            data.get("content").or_else(|| data.get("message")).and_then(crate::sessions::text_from_value)
+            data.get("content")
+                .or_else(|| data.get("message"))
+                .and_then(crate::sessions::text_from_value)
         })
         .collect()
 }

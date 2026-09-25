@@ -5,8 +5,6 @@ import { DropdownMenu } from "./DropdownMenu";
 import type {
   AgentsMdScanResult,
   CommandsScanResult,
-  AnalyticsDataPoint,
-  AnalyticsGroupBy,
   IdeLauncherType,
   McpProviderConfig,
   OpenSpecData,
@@ -28,6 +26,7 @@ import type {
 import { AgentsConfigView, type AgentsScopeDataBundle } from "./AgentsConfigView";
 import type { McpConnectionTestResult } from "./McpConfigView";
 import { ProjectAnalyticsTab } from "./ProjectAnalyticsTab";
+import type { UsageAnalyticsViewProps } from "./UsageAnalyticsView";
 import { DeleteIcon, PinIcon, UnpinIcon } from "./Icons";
 import { PlanEditor } from "./PlanEditor";
 import { PlansSpecsView } from "./PlansSpecsView";
@@ -43,10 +42,10 @@ const PROJECT_LAUNCHER_OPTIONS: { type: IdeLauncherType; label: string; icon: st
   { type: "terminal", label: "Terminal", icon: ">_" },
   { type: "vscode", label: "外部編輯器", icon: "⌨", availKey: "vscode" },
   { type: "explorer", label: "Explorer", icon: "📁" },
-  { type: "opencode", label: "OpenCode", icon: "O", availKey: "opencode" },
-  { type: "claude", label: "Claude", icon: "C", availKey: "claude" },
-  { type: "codex", label: "Codex", icon: "C", availKey: "codex" },
-  { type: "copilot", label: "Copilot", icon: "C", availKey: "copilot" },
+  { type: "opencode", label: getProviderLabel("opencode"), icon: "O", availKey: "opencode" },
+  { type: "claude", label: getProviderLabel("claude"), icon: "C", availKey: "claude" },
+  { type: "codex", label: getProviderLabel("codex"), icon: "C", availKey: "codex" },
+  { type: "copilot", label: getProviderLabel("copilot"), icon: "C", availKey: "copilot" },
   { type: "gemini", label: "Gemini", icon: "G", availKey: "gemini" },
 ];
 
@@ -171,12 +170,7 @@ type Props = {
   openDetailKeys: string[];
   activeSubTab: string;
   onSubTabStateChange: (state: ProjectSubTabState) => void;
-  onFetchAnalytics: (
-    cwd: string | null,
-    startDate: string,
-    endDate: string,
-    groupBy: AnalyticsGroupBy,
-  ) => Promise<AnalyticsDataPoint[] | null>;
+  analyticsWorkspace: Omit<UsageAnalyticsViewProps, "fixedCwd" | "hideProjectRanking">;
 };
 
 function filterAndSortSessions(
@@ -302,7 +296,7 @@ export function ProjectView({
   openDetailKeys,
   activeSubTab,
   onSubTabStateChange,
-  onFetchAnalytics,
+  analyticsWorkspace,
   activityStatusMap,
   onResumeSession,
   launchingTarget,
@@ -910,9 +904,8 @@ export function ProjectView({
         </div>
       ) : activeSubTab === "analytics" ? (
         <ProjectAnalyticsTab
-          sessions={project.sessions}
-          sessionStats={sessionStats}
-          onFetchAnalytics={onFetchAnalytics}
+          cwd={project.pathLabel}
+          {...analyticsWorkspace}
         />
       ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView

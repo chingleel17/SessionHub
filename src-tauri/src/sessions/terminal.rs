@@ -4,9 +4,7 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-use crate::sessions::{
-    ensure_herdr_client_console, herdr_pane_run, herdr_tab_create, HerdrTab,
-};
+use crate::sessions::{ensure_herdr_client_console, herdr_pane_run, herdr_tab_create, HerdrTab};
 use crate::settings::TERMINAL_LAUNCHER_HERDR;
 use crate::types::HerdrTabState;
 #[cfg(target_os = "windows")]
@@ -79,7 +77,10 @@ fn launch_via_shell(terminal_path: &str, spec: TerminalLaunchSpec<'_>) -> Result
     match spec.command {
         Some(initial_command) => {
             if stem == "cmd" {
-                command.args(["/K", &format!("cd /d \"{}\" && {}", spec.cwd, initial_command)]);
+                command.args([
+                    "/K",
+                    &format!("cd /d \"{}\" && {}", spec.cwd, initial_command),
+                ]);
             } else {
                 command.args([
                     "-NoExit",

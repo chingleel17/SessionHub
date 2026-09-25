@@ -6,8 +6,9 @@ use std::time::Instant;
 use rusqlite::Connection;
 
 use crate::db::{
-    apply_session_metadata, instant_from_unix_secs, list_path_remaps, load_scan_state_from_db,
-    load_session_mtimes_from_db, load_sessions_cache_from_db, persist_provider_cache, remap_path,
+    apply_session_metadata, cleanup_usage_for_missing_sessions, instant_from_unix_secs,
+    list_path_remaps, load_scan_state_from_db, load_session_mtimes_from_db,
+    load_sessions_cache_from_db, persist_provider_cache, remap_path,
 };
 use crate::settings::{
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
@@ -509,6 +510,7 @@ pub(crate) fn get_sessions_internal(
 
     apply_session_metadata(connection, &mut all_sessions)?;
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    cleanup_usage_for_missing_sessions(connection, &providers)?;
 
     Ok(all_sessions)
 }

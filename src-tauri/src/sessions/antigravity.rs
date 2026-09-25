@@ -10,15 +10,24 @@ use crate::sessions::dir_mtime_secs;
 use crate::types::*;
 
 pub(crate) fn extract_antigravity_session_texts(session_dir: &Path) -> Vec<String> {
-    let Ok(file) = fs::File::open(transcript_path(session_dir)) else { return Vec::new() };
+    let Ok(file) = fs::File::open(transcript_path(session_dir)) else {
+        return Vec::new();
+    };
     BufReader::new(file)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
         .filter_map(|entry| {
-            matches!(entry.get("type").and_then(|value| value.as_str()), Some("USER_INPUT" | "MODEL_OUTPUT"))
-                .then(|| entry.get("content").and_then(crate::sessions::text_from_value))
-                .flatten()
+            matches!(
+                entry.get("type").and_then(|value| value.as_str()),
+                Some("USER_INPUT" | "MODEL_OUTPUT")
+            )
+            .then(|| {
+                entry
+                    .get("content")
+                    .and_then(crate::sessions::text_from_value)
+            })
+            .flatten()
         })
         .collect()
 }

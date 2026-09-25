@@ -10,14 +10,24 @@ use crate::sessions::dir_mtime_secs;
 use crate::types::*;
 
 pub(crate) fn extract_claude_session_texts(session_path: &Path) -> Vec<String> {
-    let Ok(file) = fs::File::open(session_path) else { return Vec::new() };
+    let Ok(file) = fs::File::open(session_path) else {
+        return Vec::new();
+    };
     BufReader::new(file)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .filter(|entry| matches!(entry.get("type").and_then(|value| value.as_str()), Some("user" | "assistant"))
-            && entry.get("isMeta").and_then(|value| value.as_bool()) != Some(true))
-        .filter_map(|entry| entry.pointer("/message/content").and_then(crate::sessions::text_from_value))
+        .filter(|entry| {
+            matches!(
+                entry.get("type").and_then(|value| value.as_str()),
+                Some("user" | "assistant")
+            ) && entry.get("isMeta").and_then(|value| value.as_bool()) != Some(true)
+        })
+        .filter_map(|entry| {
+            entry
+                .pointer("/message/content")
+                .and_then(crate::sessions::text_from_value)
+        })
         .collect()
 }
 

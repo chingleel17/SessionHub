@@ -9,9 +9,11 @@ use crate::mcp_config::{
 #[tauri::command]
 pub async fn list_mcp_configs(scope: McpScope) -> Result<Vec<McpProviderConfig>, String> {
     let settings = crate::commands::settings::get_settings_internal()?;
-    tauri::async_runtime::spawn_blocking(move || list_mcp_configs_with_providers(&scope, &settings.enabled_providers))
-        .await
-        .map_err(|error| format!("failed to join list MCP configs task: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        list_mcp_configs_with_providers(&scope, &settings.enabled_providers)
+    })
+    .await
+    .map_err(|error| format!("failed to join list MCP configs task: {error}"))?
 }
 
 #[tauri::command]
@@ -78,4 +80,3 @@ pub async fn test_mcp_http_server(
         .await
         .map_err(|error| format!("failed to join MCP connection test task: {error}"))
 }
-

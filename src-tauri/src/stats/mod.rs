@@ -366,11 +366,291 @@ pub(crate) fn parse_session_stats_internal(session_dir: &Path) -> Result<Session
     Ok(stats)
 }
 
-mod claude;
-mod opencode;
+pub(crate) fn extract_copilot_usage(
+    session_dir: &Path,
+    session_id: &str,
+) -> Result<(Vec<UsageEventRecord>, Vec<UsageSessionSummaryRecord>), String> {
+    let events_path = session_dir.join("events.jsonl");
+    if !events_path.exists() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let file = fs::File::open(&events_path)
+        .map_err(|error| format!("failed to open Copilot usage source: {error}"))?;
+    let mut events = Vec::new();
+    let mut summaries = Vec::new();
+    let mut current_model: Option<String> = None;
+    let mut model_source = "unknown";
+    let mut active_from = None;
+    let mut active_until = None;
+    let mut latest_total_nano_aiu = None;
+    let mut has_model_ai_credit_cost = false;
 
+    for (line_index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|error| format!("failed to read Copilot usage line: {error}"))?;
+        let Ok(event) = serde_json::from_str::<SessionEvent>(&line) else {
+            continue;
+        };
+        let occurred_at = event.timestamp.as_deref().and_then(parse_rfc3339_utc);
+        if let Some(timestamp) = occurred_at.as_ref() {
+            active_until = Some(timestamp.clone());
+        }
+
+        match event.event_type.as_str() {
+            "session.start" => {
+                if let Ok(data) = serde_json::from_value::<SessionStartData>(event.data) {
+                    if let Some(start_time) = data.start_time.as_deref().and_then(parse_rfc3339_utc)
+                    {
+                        active_from = Some(start_time);
+                    } else if active_from.is_none() {
+                        active_from = occurred_at;
+                    }
+                    current_model = data.selected_model.filter(|model| !model.trim().is_empty());
+                    model_source = "session_start";
+                }
+            }
+            "session.model_change" => {
+                if let Ok(data) = serde_json::from_value::<SessionModelChangeData>(event.data) {
+                    if let Some(model) = data.new_model.filter(|model| !model.trim().is_empty()) {
+                        current_model = Some(model);
+                        model_source = "model_change";
+                    }
+                }
+            }
+            "session.usage_checkpoint" => {
+                if let Ok(data) = serde_json::from_value::<SessionUsageCheckpointData>(event.data) {
+                    let previous = latest_total_nano_aiu.unwrap_or(0.0_f64);
+                    let delta = if data.total_nano_aiu >= previous {
+                        data.total_nano_aiu - previous
+                    } else {
+                        data.total_nano_aiu
+                    };
+                    if delta.is_finite() && delta > 0.0 {
+                        if let Some(timestamp) = occurred_at {
+                            events.push(UsageEventRecord {
+                                provider: "copilot".to_string(),
+                                model_provider_id: None,
+                                service_tier: None,
+                                session_id: session_id.to_string(),
+                                source_event_id: format!("ai-credit-checkpoint-{line_index}"),
+                                occurred_at: timestamp,
+                                cwd: None,
+                                model: None,
+                                input_tokens: None,
+                                output_tokens: None,
+                                cache_read_tokens: None,
+                                cache_write_tokens: None,
+                                reasoning_tokens: None,
+                                estimated_usd_micros: Some((delta / 100_000.0).round() as i64),
+                                estimated_usd_price_version: Some(
+                                    "github-copilot-ai-credit-2026-09-24".to_string(),
+                                ),
+                                cost_points_micros: None,
+                                source_kind: "copilot_ai_credit_checkpoint".to_string(),
+                                parser_version: 2,
+                            });
+                        }
+                    }
+                    latest_total_nano_aiu = Some(data.total_nano_aiu);
+                }
+            }
+            "assistant.message" => {
+                let Ok(data) = serde_json::from_value::<AssistantMessageData>(event.data) else {
+                    continue;
+                };
+                let (Some(timestamp), Some(output_tokens)) = (occurred_at, data.output_tokens)
+                else {
+                    continue;
+                };
+                events.push(UsageEventRecord {
+                    provider: "copilot".to_string(),
+                    model_provider_id: None,
+                    service_tier: None,
+                    session_id: session_id.to_string(),
+                    source_event_id: format!("assistant-output-{line_index}"),
+                    occurred_at: timestamp,
+                    cwd: None,
+                    model: current_model
+                        .clone()
+                        .or_else(|| Some("unknown".to_string())),
+                    input_tokens: None,
+                    output_tokens: Some(i64::try_from(output_tokens).unwrap_or(i64::MAX)),
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    estimated_usd_micros: None,
+                    estimated_usd_price_version: None,
+                    cost_points_micros: None,
+                    source_kind: format!("copilot_assistant_output:{model_source}"),
+                    parser_version: 1,
+                });
+            }
+            "session.shutdown" => {
+                let Ok(data) = serde_json::from_value::<SessionShutdownData>(event.data) else {
+                    continue;
+                };
+                for (model, metric) in data.model_metrics {
+                    if model.trim().is_empty() {
+                        continue;
+                    }
+                    let requests_cost = metric
+                        .requests
+                        .as_ref()
+                        .and_then(|value| value.cost)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(|value| (value * 1_000_000.0).round() as i64);
+                    let estimated_usd_micros = metric
+                        .total_nano_aiu
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(|value| (value / 100_000.0).round() as i64);
+                    has_model_ai_credit_cost |= estimated_usd_micros.is_some();
+                    let usage = metric.usage;
+                    summaries.push(UsageSessionSummaryRecord {
+                        provider: "copilot".to_string(),
+                        session_id: session_id.to_string(),
+                        // resume 後同一 session 會有多筆 shutdown，以行號區分避免主鍵衝突。
+                        source_identity: format!("shutdown:{line_index}:{model}"),
+                        cwd: None,
+                        model: Some(model),
+                        active_from: active_from.clone(),
+                        active_until: active_until.clone(),
+                        input_tokens: usage
+                            .as_ref()
+                            .and_then(|value| value.input_tokens)
+                            .and_then(|value| value.try_into().ok()),
+                        output_tokens: usage
+                            .as_ref()
+                            .and_then(|value| value.output_tokens)
+                            .and_then(|value| value.try_into().ok()),
+                        estimated_usd_micros,
+                        cost_points_micros: requests_cost,
+                        source_kind: "copilot_shutdown_summary".to_string(),
+                        parser_version: 2,
+                        integrity_status: "summary_only".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if !has_model_ai_credit_cost {
+        if let Some(estimated_usd_micros) = latest_total_nano_aiu
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(|value| (value / 100_000.0).round() as i64)
+        {
+            summaries.push(UsageSessionSummaryRecord {
+                provider: "copilot".to_string(),
+                session_id: session_id.to_string(),
+                source_identity: "usage-checkpoint".to_string(),
+                cwd: None,
+                model: None,
+                active_from,
+                active_until,
+                input_tokens: None,
+                output_tokens: None,
+                estimated_usd_micros: Some(estimated_usd_micros),
+                cost_points_micros: None,
+                source_kind: "copilot_ai_credit_checkpoint".to_string(),
+                parser_version: 2,
+                integrity_status: "summary_only".to_string(),
+            });
+        }
+    }
+    events.sort_by(|left, right| {
+        left.occurred_at
+            .cmp(&right.occurred_at)
+            .then_with(|| left.source_event_id.cmp(&right.source_event_id))
+    });
+    Ok((events, summaries))
+}
+
+fn parse_rfc3339_utc(value: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn provider_usage_capabilities() -> Vec<ProviderUsageCapability> {
+    use AnalyticsCoverageStatus::{Partial, SummaryOnly, Unsupported};
+
+    vec![
+        ProviderUsageCapability {
+            provider: "claude".to_string(),
+            token_status: Partial,
+            estimated_usd_status: Partial,
+            copilot_points_status: Unsupported,
+            event_usage_supported: true,
+            session_summary_supported: false,
+            reason: Some(
+                "USD estimates are available only for recognized Claude models".to_string(),
+            ),
+        },
+        ProviderUsageCapability {
+            provider: "opencode".to_string(),
+            token_status: Partial,
+            estimated_usd_status: Unsupported,
+            copilot_points_status: Unsupported,
+            event_usage_supported: true,
+            session_summary_supported: false,
+            reason: Some("No validated historical price source is available".to_string()),
+        },
+        ProviderUsageCapability {
+            provider: "copilot".to_string(),
+            token_status: Partial,
+            estimated_usd_status: Partial,
+            copilot_points_status: SummaryOnly,
+            event_usage_supported: true,
+            session_summary_supported: true,
+            reason: Some(
+                "Assistant events expose output only; shutdown summaries may include AI credit cost"
+                    .to_string(),
+            ),
+        },
+        ProviderUsageCapability {
+            provider: "codex".to_string(),
+            token_status: Partial,
+            estimated_usd_status: Partial,
+            copilot_points_status: Unsupported,
+            event_usage_supported: true,
+            session_summary_supported: false,
+            reason: Some(
+                "Persisted token counters are supported; cost requires a recognized model and pricing"
+                    .to_string(),
+            ),
+        },
+        ProviderUsageCapability {
+            provider: "antigravity".to_string(),
+            token_status: Unsupported,
+            estimated_usd_status: Unsupported,
+            copilot_points_status: Unsupported,
+            event_usage_supported: false,
+            session_summary_supported: false,
+            reason: Some("Token analytics is not supported".to_string()),
+        },
+    ]
+}
+
+mod analytics_query;
+mod analytics_report;
+mod analytics_time;
+mod claude;
+mod codex;
+mod model_pricing;
+mod opencode;
+mod usage_indexer;
+
+pub(crate) use analytics_query::*;
+pub(crate) use analytics_report::*;
+pub(crate) use analytics_time::*;
 pub(crate) use claude::*;
+pub(crate) use codex::*;
+pub(crate) use model_pricing::*;
 pub(crate) use opencode::*;
+pub(crate) use usage_indexer::*;
 
 pub(crate) fn get_session_stats_internal(
     connection: &Connection,

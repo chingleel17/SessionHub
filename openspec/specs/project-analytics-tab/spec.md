@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義專案分析子頁籤的查詢、顯示與快取行為。
+
+## Requirements
 
 ### Requirement: ProjectView Analytics 子頁籤
 

@@ -7,13 +7,15 @@ use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
 
 use crate::agents_config::atomic_write_file;
+use crate::resource_discovery::{
+    discover_cli, normalize_enabled_providers, DiscoveryDiagnostic, DiscoveryScope, ResourceKind,
+};
 use crate::settings::{
     default_app_data_dir, default_opencode_config_root, resolve_codex_root, resolve_copilot_root,
 };
 use crate::types::{
-    AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
+    AppSettings, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER, OPENCODE_PROVIDER,
 };
-use crate::resource_discovery::{discover_cli, normalize_enabled_providers, DiscoveryDiagnostic, DiscoveryScope, ResourceKind};
 
 pub(crate) const MCP_PROVIDERS: &[&str] = &[
     CLAUDE_PROVIDER,
@@ -334,12 +336,17 @@ fn json_to_toml_item(value: &Value) -> Result<Item, String> {
 
 // ---------- List ----------
 
+#[cfg(test)]
 pub(crate) fn list_mcp_configs_internal(
     scope: &McpScope,
 ) -> Result<Vec<McpProviderConfig>, String> {
     list_mcp_configs_with_providers_internal(
         scope,
-        MCP_PROVIDERS.iter().map(|provider| provider.to_string()).collect::<Vec<_>>().as_slice(),
+        MCP_PROVIDERS
+            .iter()
+            .map(|provider| provider.to_string())
+            .collect::<Vec<_>>()
+            .as_slice(),
         false,
     )
 }
@@ -359,8 +366,16 @@ fn list_mcp_configs_with_providers_internal(
     let disabled_store = load_disabled_store()?;
     let mut results = Vec::with_capacity(MCP_PROVIDERS.len());
     let (enabled, _) = normalize_enabled_providers(enabled_providers);
-    for provider in enabled.iter().filter(|provider| MCP_PROVIDERS.contains(&provider.as_str())) {
-        results.push(list_one_provider(provider, scope, &disabled_store, include_cli));
+    for provider in enabled
+        .iter()
+        .filter(|provider| MCP_PROVIDERS.contains(&provider.as_str()))
+    {
+        results.push(list_one_provider(
+            provider,
+            scope,
+            &disabled_store,
+            include_cli,
+        ));
     }
     Ok(results)
 }
@@ -458,35 +473,49 @@ fn list_one_provider_inner(
         McpScope::Global => None,
     };
     let codex_trusted = if provider == CODEX_PROVIDER {
-        project_cwd.map(is_codex_project_trusted).transpose()?.unwrap_or(true)
+        project_cwd
+            .map(is_codex_project_trusted)
+            .transpose()?
+            .unwrap_or(true)
     } else {
         true
     };
     let (mut diagnostics, cli_entries) = match (include_cli, provider, codex_trusted) {
-        (true, COPILOT_PROVIDER, _) | (true, CODEX_PROVIDER, true) => match discover_cli(provider, ResourceKind::Mcp, cli_scope, project_cwd) {
-            Ok(entries) => (Vec::new(), entries),
-            Err(error) => (vec![error], Vec::new()),
-        },
+        (true, COPILOT_PROVIDER, _) | (true, CODEX_PROVIDER, true) => {
+            match discover_cli(provider, ResourceKind::Mcp, cli_scope, project_cwd) {
+                Ok(entries) => (Vec::new(), entries),
+                Err(error) => (vec![error], Vec::new()),
+            }
+        }
         _ => (Vec::new(), Vec::new()),
     };
     for server in &mut servers {
-        if let Some(cli) = cli_entries.iter().find(|entry| entry.name.eq_ignore_ascii_case(&server.name)) {
+        if let Some(cli) = cli_entries
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(&server.name))
+        {
             server.effective = Some(true);
             server.source = cli.source.clone();
             server.scope = Some(cli_scope);
         }
     }
-    let configured_names = servers.iter().map(|server| server.name.to_lowercase()).collect::<std::collections::HashSet<_>>();
-    for cli in cli_entries.iter().filter(|entry| !configured_names.contains(&entry.name.to_lowercase())) {
-            servers.push(McpServerEntry {
-                name: cli.name.clone(),
-                enabled: cli.enabled.unwrap_or(true),
-                config_json: "{}".to_string(),
-                effective: Some(true),
-                source: cli.source.clone(),
-                scope: Some(cli_scope),
-                editable: false,
-            });
+    let configured_names = servers
+        .iter()
+        .map(|server| server.name.to_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    for cli in cli_entries
+        .iter()
+        .filter(|entry| !configured_names.contains(&entry.name.to_lowercase()))
+    {
+        servers.push(McpServerEntry {
+            name: cli.name.clone(),
+            enabled: cli.enabled.unwrap_or(true),
+            config_json: "{}".to_string(),
+            effective: Some(true),
+            source: cli.source.clone(),
+            scope: Some(cli_scope),
+            editable: false,
+        });
     }
     Ok(McpProviderConfig {
         provider_id: provider.to_string(),
@@ -904,6 +933,8 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
+    use crate::types::ANTIGRAVITY_PROVIDER;
+
     /// 環境變數守衛：與 lib.rs 測試共用同一把 `shared_env_test_lock`（序列化所有
     /// 會改動行程 env 的測試），並於 Drop 時還原被覆寫的變數原值，避免汙染後續測試。
     struct EnvGuard {
@@ -1246,7 +1277,10 @@ mod tests {
         .unwrap();
         let result = list_mcp_configs_with_providers(
             &McpScope::Global,
-            &[OPENCODE_PROVIDER.to_string(), ANTIGRAVITY_PROVIDER.to_string()],
+            &[
+                OPENCODE_PROVIDER.to_string(),
+                ANTIGRAVITY_PROVIDER.to_string(),
+            ],
         )
         .expect("list filtered providers");
         assert_eq!(result.len(), 1);
@@ -1257,11 +1291,9 @@ mod tests {
     #[test]
     fn unsupported_mcp_provider_does_not_create_empty_config() {
         let _env = EnvGuard::new("antigravity-mcp-filter");
-        let result = list_mcp_configs_with_providers(
-            &McpScope::Global,
-            &[ANTIGRAVITY_PROVIDER.to_string()],
-        )
-        .expect("list unsupported provider");
+        let result =
+            list_mcp_configs_with_providers(&McpScope::Global, &[ANTIGRAVITY_PROVIDER.to_string()])
+                .expect("list unsupported provider");
         assert!(result.is_empty());
     }
 
@@ -1270,7 +1302,9 @@ mod tests {
         assert!(is_json_rpc_response(
             r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#
         ));
-        assert!(is_json_rpc_response(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}"#));
+        assert!(is_json_rpc_response(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}"#
+        ));
     }
 
     #[test]
@@ -1282,7 +1316,9 @@ mod tests {
     #[test]
     fn json_rpc_response_rejects_non_mcp_payloads() {
         // 誤填為一般網頁端點：回 2xx 但內容為 HTML
-        assert!(!is_json_rpc_response("<!doctype html><html><body>hi</body></html>"));
+        assert!(!is_json_rpc_response(
+            "<!doctype html><html><body>hi</body></html>"
+        ));
         // 合法 JSON 但非 JSON-RPC
         assert!(!is_json_rpc_response(r#"{"status":"ok"}"#));
         // 有 jsonrpc 欄位但缺少 result / error

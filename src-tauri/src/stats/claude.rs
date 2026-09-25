@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -18,12 +18,70 @@ struct ClaudeModelPricing {
 
 fn claude_model_pricing(model: &str) -> ClaudeModelPricing {
     let m = model.to_lowercase();
-    if m.contains("opus-4") || m.contains("opus-3-5") || m.contains("opus-3.5") {
+    if m.contains("fable-5-1")
+        || m.contains("fable-5.1")
+        || m.contains("mythos-5-1")
+        || m.contains("mythos-5.1")
+    {
+        ClaudeModelPricing {
+            input: 10.0,
+            output: 50.0,
+            cache_write_1h: 20.0,
+            cache_write_5m: 12.5,
+            cache_read: 0.25,
+        }
+    } else if m.contains("fable-5") || m.contains("mythos-5") {
+        ClaudeModelPricing {
+            input: 10.0,
+            output: 50.0,
+            cache_write_1h: 20.0,
+            cache_write_5m: 12.5,
+            cache_read: 1.0,
+        }
+    } else if m.contains("opus-5-5") || m.contains("opus-5.5") {
+        ClaudeModelPricing {
+            input: 4.0,
+            output: 20.0,
+            cache_write_1h: 8.0,
+            cache_write_5m: 5.0,
+            cache_read: 0.2,
+        }
+    } else if m.contains("opus-5") {
+        ClaudeModelPricing {
+            input: 5.0,
+            output: 25.0,
+            cache_write_1h: 10.0,
+            cache_write_5m: 6.25,
+            cache_read: 0.5,
+        }
+    } else if m.contains("sonnet-5") {
+        ClaudeModelPricing {
+            input: 2.0,
+            output: 10.0,
+            cache_write_1h: 4.0,
+            cache_write_5m: 2.5,
+            cache_read: 0.2,
+        }
+    } else if [
+        "opus-4-8", "opus-4.8", "opus-4-7", "opus-4.7", "opus-4-6", "opus-4.6", "opus-4-5",
+        "opus-4.5",
+    ]
+    .iter()
+    .any(|version| m.contains(version))
+    {
+        ClaudeModelPricing {
+            input: 5.0,
+            output: 25.0,
+            cache_write_1h: 10.0,
+            cache_write_5m: 6.25,
+            cache_read: 0.5,
+        }
+    } else if m.contains("opus-4") || m.contains("opus-3-5") || m.contains("opus-3.5") {
         ClaudeModelPricing {
             input: 15.0,
             output: 75.0,
             cache_write_1h: 30.0,
-            cache_write_5m: 15.0,
+            cache_write_5m: 18.75,
             cache_read: 1.5,
         }
     } else if m.contains("sonnet-4")
@@ -36,24 +94,32 @@ fn claude_model_pricing(model: &str) -> ClaudeModelPricing {
             input: 3.0,
             output: 15.0,
             cache_write_1h: 6.0,
-            cache_write_5m: 3.0,
+            cache_write_5m: 3.75,
             cache_read: 0.3,
         }
-    } else if m.contains("haiku-4") || m.contains("haiku-3-5") || m.contains("haiku-3.5") {
+    } else if m.contains("haiku-4-5") || m.contains("haiku-4.5") {
+        ClaudeModelPricing {
+            input: 1.0,
+            output: 5.0,
+            cache_write_1h: 2.0,
+            cache_write_5m: 1.25,
+            cache_read: 0.1,
+        }
+    } else if m.contains("haiku-3-5") || m.contains("haiku-3.5") {
         ClaudeModelPricing {
             input: 0.8,
             output: 4.0,
             cache_write_1h: 1.6,
-            cache_write_5m: 0.8,
+            cache_write_5m: 1.0,
             cache_read: 0.08,
         }
     } else if m.contains("haiku") {
         ClaudeModelPricing {
             input: 0.25,
             output: 1.25,
-            cache_write_1h: 0.3,
-            cache_write_5m: 0.25,
-            cache_read: 0.03,
+            cache_write_1h: 0.5,
+            cache_write_5m: 0.3125,
+            cache_read: 0.025,
         }
     } else {
         // fallback: sonnet-level pricing
@@ -61,7 +127,7 @@ fn claude_model_pricing(model: &str) -> ClaudeModelPricing {
             input: 3.0,
             output: 15.0,
             cache_write_1h: 6.0,
-            cache_write_5m: 3.0,
+            cache_write_5m: 3.75,
             cache_read: 0.3,
         }
     }
@@ -240,7 +306,7 @@ pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, 
 
         let pricing = claude_model_pricing(&entry.model);
         let fast_multiplier = if entry.usage.speed.as_deref() == Some("fast") {
-            1.3
+            2.0
         } else {
             1.0
         };
@@ -289,6 +355,265 @@ pub(crate) fn compute_claude_stats(session_path: &Path) -> Result<SessionStats, 
         model_metrics,
         is_live: false,
     })
+}
+
+pub(crate) fn build_claude_usage_events(
+    session_path: &Path,
+    session_id: &str,
+) -> Result<Vec<UsageEventRecord>, String> {
+    const PRICE_VERSION: &str = "anthropic-api-pricing-2026-09-24";
+
+    let file = fs::File::open(session_path)
+        .map_err(|error| format!("failed to open Claude usage source: {error}"))?;
+    let reader = BufReader::new(file);
+    let mut messages = HashMap::<String, (String, serde_json::Value)>::new();
+
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if raw.get("type").and_then(|value| value.as_str()) != Some("assistant")
+            || raw
+                .get("isSidechain")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(message) = raw.get("message") else {
+            continue;
+        };
+        let Some(message_id) = message.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(usage) = message.get("usage") else {
+            continue;
+        };
+        if usage
+            .get("input_tokens")
+            .and_then(|value| value.as_u64())
+            .is_none()
+            || usage
+                .get("output_tokens")
+                .and_then(|value| value.as_u64())
+                .is_none()
+        {
+            continue;
+        }
+        let Some(timestamp) = raw.get("timestamp").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Ok(parsed_timestamp) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
+            continue;
+        };
+        let timestamp = parsed_timestamp
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+
+        match messages.get_mut(message_id) {
+            Some((_, latest)) => {
+                latest["message"] = message.clone();
+                if let Some(cwd) = raw.get("cwd") {
+                    latest["cwd"] = cwd.clone();
+                }
+            }
+            None => {
+                messages.insert(message_id.to_string(), (timestamp, raw));
+            }
+        }
+    }
+
+    let mut events = Vec::with_capacity(messages.len());
+    for (source_event_id, (occurred_at, raw)) in messages {
+        let Some(message) = raw.get("message") else {
+            continue;
+        };
+        let Some(usage) = message.get("usage") else {
+            continue;
+        };
+        let input_tokens = usage
+            .get("input_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let cache_creation_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let cache_read_tokens = usage
+            .get("cache_read_input_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let output_tokens = usage
+            .get("output_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let normalized_input_tokens = input_tokens
+            .saturating_add(cache_creation_tokens)
+            .saturating_add(cache_read_tokens);
+        let model = message
+            .get("model")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty() && *value != "<synthetic>")
+            .unwrap_or("unknown")
+            .to_string();
+        let pricing_is_known = [
+            "fable-5",
+            "mythos-5",
+            "opus-5",
+            "opus-4",
+            "opus-3-5",
+            "opus-3.5",
+            "sonnet-5",
+            "sonnet-4",
+            "sonnet-3-7",
+            "sonnet-3.7",
+            "sonnet-3-5",
+            "sonnet-3.5",
+            "haiku-4",
+            "haiku-3-5",
+            "haiku-3.5",
+            "haiku",
+        ]
+        .iter()
+        .any(|known| model.to_lowercase().contains(known));
+        let (estimated_usd_micros, price_version) = if pricing_is_known {
+            let pricing = claude_model_pricing(&model);
+            let cache_creation = usage
+                .get("cache_creation")
+                .filter(|value| value.is_object());
+            let cache_write_1h = cache_creation
+                .and_then(|value| value.get("ephemeral_1h_input_tokens"))
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let cache_write_5m = cache_creation
+                .and_then(|value| value.get("ephemeral_5m_input_tokens"))
+                .and_then(|value| value.as_f64())
+                .unwrap_or(cache_creation_tokens as f64);
+            let fast_multiplier =
+                if usage.get("speed").and_then(|value| value.as_str()) == Some("fast") {
+                    2.0
+                } else {
+                    1.0
+                };
+            let estimate = fast_multiplier
+                * ((input_tokens as f64 / 1_000_000.0) * pricing.input
+                    + (output_tokens as f64 / 1_000_000.0) * pricing.output
+                    + (cache_write_1h / 1_000_000.0) * pricing.cache_write_1h
+                    + (cache_write_5m / 1_000_000.0) * pricing.cache_write_5m
+                    + (cache_read_tokens as f64 / 1_000_000.0) * pricing.cache_read);
+            (usd_to_micros(estimate), Some(PRICE_VERSION.to_string()))
+        } else {
+            (None, None)
+        };
+
+        events.push(UsageEventRecord {
+            provider: "claude".to_string(),
+            model_provider_id: Some("claude".to_string()),
+            service_tier: usage
+                .get("speed")
+                .and_then(|value| value.as_str())
+                .or_else(|| usage.get("service_tier").and_then(|value| value.as_str()))
+                .map(str::to_ascii_lowercase),
+            session_id: session_id.to_string(),
+            source_event_id,
+            occurred_at,
+            cwd: raw
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            model: Some(model),
+            input_tokens: Some(normalized_input_tokens),
+            output_tokens: Some(output_tokens),
+            cache_read_tokens: Some(cache_read_tokens),
+            cache_write_tokens: Some(cache_creation_tokens),
+            reasoning_tokens: usage
+                .pointer("/output_tokens_details/thinking_tokens")
+                .and_then(|value| value.as_i64()),
+            estimated_usd_micros,
+            estimated_usd_price_version: price_version,
+            cost_points_micros: None,
+            source_kind: "claude_message".to_string(),
+            parser_version: 4,
+        });
+    }
+
+    events.sort_by(|left, right| {
+        left.occurred_at
+            .cmp(&right.occurred_at)
+            .then_with(|| left.source_event_id.cmp(&right.source_event_id))
+    });
+    Ok(events)
+}
+
+pub(crate) fn claude_usage_coverage(
+    session_path: &Path,
+) -> Result<(AnalyticsCoverageStatus, Option<String>), String> {
+    let file = fs::File::open(session_path)
+        .map_err(|error| format!("failed to open Claude usage source: {error}"))?;
+    let mut incomplete_records = 0_u64;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&line) else {
+            incomplete_records += 1;
+            continue;
+        };
+        if raw.get("type").and_then(|value| value.as_str()) != Some("assistant")
+            || raw
+                .get("isSidechain")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let complete = raw
+            .get("timestamp")
+            .and_then(|value| value.as_str())
+            .is_some()
+            && raw
+                .pointer("/message/id")
+                .and_then(|value| value.as_str())
+                .is_some()
+            && raw
+                .pointer("/message/usage/input_tokens")
+                .and_then(|value| value.as_u64())
+                .is_some()
+            && raw
+                .pointer("/message/usage/output_tokens")
+                .and_then(|value| value.as_u64())
+                .is_some();
+        if !complete {
+            incomplete_records += 1;
+        }
+    }
+    if incomplete_records == 0 {
+        Ok((AnalyticsCoverageStatus::Complete, None))
+    } else {
+        Ok((
+            AnalyticsCoverageStatus::Partial,
+            Some(format!(
+                "{incomplete_records} Claude assistant records are missing usage identity, timestamp, input tokens, or output tokens"
+            )),
+        ))
+    }
+}
+
+fn usd_to_micros(estimate_usd: f64) -> Option<i64> {
+    if !estimate_usd.is_finite() || estimate_usd < 0.0 {
+        return None;
+    }
+    Some((estimate_usd.mul_add(1_000_000.0, 1e-9)).round() as i64)
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::usd_to_micros;
+
+    #[test]
+    fn estimated_cost_rounds_half_up_to_six_decimal_places() {
+        assert_eq!(usd_to_micros(0.000_000_5), Some(1));
+        assert_eq!(usd_to_micros(0.000_001_5), Some(2));
+        assert_eq!(usd_to_micros(0.000_001_4), Some(1));
+        assert_eq!(usd_to_micros(f64::NAN), None);
+    }
 }
 
 /// 從 message JSON 的 content 陣列中提取 tool_use 的工具名稱清單

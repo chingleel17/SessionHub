@@ -27,7 +27,10 @@ pub(crate) fn command_exists_on_path(command: &str) -> bool {
         .stderr(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
     process.creation_flags(CREATE_NO_WINDOW);
-    process.status().map(|status| status.success()).unwrap_or(false)
+    process
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn command_path_on_path(command: &str) -> Option<PathBuf> {
@@ -382,9 +385,15 @@ mod tests {
 
     #[test]
     fn unknown_terminal_launcher_falls_back_to_shell() {
-        assert_eq!(resolve_terminal_launcher(Some("unknown")), TERMINAL_LAUNCHER_SHELL);
+        assert_eq!(
+            resolve_terminal_launcher(Some("unknown")),
+            TERMINAL_LAUNCHER_SHELL
+        );
         assert_eq!(resolve_terminal_launcher(None), TERMINAL_LAUNCHER_SHELL);
-        assert_eq!(resolve_terminal_launcher(Some("herdr")), TERMINAL_LAUNCHER_HERDR);
+        assert_eq!(
+            resolve_terminal_launcher(Some("herdr")),
+            TERMINAL_LAUNCHER_HERDR
+        );
     }
 
     #[test]
@@ -469,10 +478,8 @@ pub(crate) fn load_settings_internal() -> Result<AppSettings, String> {
 
     let mut settings = serde_json::from_str::<AppSettings>(&content)
         .map_err(|error| format!("failed to parse settings file: {error}"))?;
-    settings.terminal_launcher = Some(resolve_terminal_launcher(
-        settings.terminal_launcher.as_deref(),
-    )
-    .to_string());
+    settings.terminal_launcher =
+        Some(resolve_terminal_launcher(settings.terminal_launcher.as_deref()).to_string());
     Ok(settings)
 }
 
@@ -499,9 +506,11 @@ pub(crate) fn validate_terminal_path_internal(path: &str, launcher: Option<&str>
         return resolve_herdr_executable().is_some()
             && (candidate.is_file()
                 || (!candidate.components().any(|component| {
-                    matches!(component, std::path::Component::RootDir | std::path::Component::Prefix(_))
-                })
-                    && command_exists_on_path(path)));
+                    matches!(
+                        component,
+                        std::path::Component::RootDir | std::path::Component::Prefix(_)
+                    )
+                }) && command_exists_on_path(path)));
     }
 
     if !candidate.exists() || !candidate.is_file() {

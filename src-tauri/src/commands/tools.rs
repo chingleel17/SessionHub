@@ -151,7 +151,11 @@ pub(crate) fn open_in_tool_internal(
                 if term_stem == "cmd" {
                     c.args(["/C", &format!("\"{}\" \"{}\"", editor, cwd)]);
                 } else {
-                    c.args(["-NoProfile", "-Command", &format!("& '{}' '{}'", editor, cwd)]);
+                    c.args([
+                        "-NoProfile",
+                        "-Command",
+                        &format!("& '{}' '{}'", editor, cwd),
+                    ]);
                 }
                 c
             } else {

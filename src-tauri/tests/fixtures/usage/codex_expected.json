@@ -1,0 +1,16 @@
+{
+  "source": "Codex EventMsg::TokenCount / TokenUsageInfo protocol payload",
+  "officialSources": [
+    "https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs",
+    "https://github.com/openai/codex/blob/main/codex-rs/exec/src/exec_events.rs"
+  ],
+  "persistenceWrapperVerified": false,
+  "outcomes": [
+    { "case": "first cumulative observation", "status": "partial", "deltaTokens": null, "reason": "no baseline" },
+    { "case": "duplicate cumulative observation", "status": "partial", "deltaTokens": 0, "reason": "duplicate snapshot" },
+    { "case": "monotonic cumulative observation", "status": "partial", "deltaTokens": 55, "reason": "protocol fields support safe difference; timestamp/model attribution remains unverified" },
+    { "case": "counter rollback", "status": "partial", "deltaTokens": null, "reason": "reset baseline; never emit a negative delta" },
+    { "case": "post-rollback cumulative observation", "status": "partial", "deltaTokens": 20, "reason": "difference is valid only within the new counter epoch" },
+    { "case": "unknown format", "status": "unsupported", "deltaTokens": null, "reason": "unrecognized event schema" }
+  ]
+}

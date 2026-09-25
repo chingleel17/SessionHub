@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import { compareProviders } from "../utils/providerOrder";
 import type {
-  AnalyticsDataPoint,
+  AnalyticsReport,
   ProjectGroup,
   QuotaSnapshot,
   SessionActivityStatus,
@@ -21,9 +21,6 @@ type Props = {
   recentSessions: SessionInfo[];
   dashboardPeriod: "week" | "month";
   onPeriodChange: (period: "week" | "month") => void;
-  filteredTotalOutputTokens: number;
-  filteredTotalInteractions: number;
-  filteredTotalCost: number;
   onOpenProject: (projectKey: string) => void;
   onOpenRecentSession: (session: SessionInfo) => void;
   activityStatusMap: Map<string, SessionActivityStatus>;
@@ -32,14 +29,18 @@ type Props = {
   onFocusTerminal: (session: SessionInfo) => void;
   viewMode: "list" | "kanban";
   onViewModeChange: (mode: "list" | "kanban") => void;
-  analyticsData: AnalyticsDataPoint[];
-  analyticsProjectSlices: { label: string; value: number; color: string }[];
+  analyticsReport: AnalyticsReport | undefined;
   analyticsCollapsed: boolean;
   analyticsLoading: boolean;
   analyticsRefreshing: boolean;
   analyticsError: string | null;
+  analyticsStale: boolean;
+  analyticsTimeZoneUnavailable: boolean;
+  analyticsDisplayedPeriod: "week" | "month";
   onAnalyticsRetry: () => void;
   onAnalyticsToggleCollapsed: () => void;
+  onOpenAnalytics: (bucket?: { startAt: string; endAt: string }) => void;
+  onUseUtcAnalyticsFallback: () => void;
   quotaSnapshots?: QuotaSnapshot[];
   enableQuotaMonitoring?: boolean;
   quotaEnabledProviders?: string[];
@@ -441,9 +442,6 @@ export function DashboardView({
   recentSessions,
   dashboardPeriod,
   onPeriodChange,
-  filteredTotalOutputTokens,
-  filteredTotalInteractions,
-  filteredTotalCost,
   onOpenProject,
   onOpenRecentSession,
   activityStatusMap,
@@ -452,14 +450,18 @@ export function DashboardView({
   onFocusTerminal,
   viewMode,
   onViewModeChange,
-  analyticsData,
-  analyticsProjectSlices,
+  analyticsReport,
   analyticsCollapsed,
   analyticsLoading,
   analyticsRefreshing,
   analyticsError,
+  analyticsStale,
+  analyticsTimeZoneUnavailable,
+  analyticsDisplayedPeriod,
   onAnalyticsRetry,
   onAnalyticsToggleCollapsed,
+  onOpenAnalytics,
+  onUseUtcAnalyticsFallback,
   quotaSnapshots = [],
   quotaEnabledProviders = [],
   enableQuotaMonitoring = true,
@@ -509,22 +511,6 @@ export function DashboardView({
             <span className="stat-card-label">{t("dashboard.stats.parseErrors")}</span>
           </div>
         ) : null}
-        <div className="stat-card stat-card--tokens">
-          <span className="stat-card-icon">🪙</span>
-          <strong className="stat-card-value">{loading ? "…" : formatCompactNumber(filteredTotalOutputTokens)}</strong>
-          <span className="stat-card-label">{t("dashboard.stats.totalTokens")}</span>
-        </div>
-        <div className="stat-card stat-card--interactions">
-          <span className="stat-card-icon">💬</span>
-          <strong className="stat-card-value">{loading ? "…" : formatCompactNumber(filteredTotalInteractions)}</strong>
-          <span className="stat-card-label">{t("dashboard.stats.totalInteractions")}</span>
-        </div>
-        <div className="stat-card stat-card--tokens">
-          <span className="stat-card-icon">🧾</span>
-          <strong className="stat-card-value">{loading ? "…" : filteredTotalCost.toFixed(2).replace(/\.00$/, "")}</strong>
-          <span className="stat-card-label">{t("dashboard.stats.totalCost")}</span>
-        </div>
-
         {/* Toggles on the far right, stacked vertically */}
         <div className="stat-card-toggles">
           <div className="view-mode-toggle">
@@ -687,14 +673,18 @@ export function DashboardView({
       ) : null}
 
       <DashboardAnalyticsPanel
-        data={analyticsData}
-        projectSlices={analyticsProjectSlices}
+        report={analyticsReport}
+        displayedPeriod={analyticsDisplayedPeriod}
+        isStaleResult={analyticsStale}
+        timeZoneUnavailable={analyticsTimeZoneUnavailable}
         collapsed={analyticsCollapsed}
         isLoading={analyticsLoading}
         isRefreshing={analyticsRefreshing}
         errorMessage={analyticsError}
         onRetry={onAnalyticsRetry}
         onToggleCollapsed={onAnalyticsToggleCollapsed}
+        onOpenAnalytics={onOpenAnalytics}
+        onUseUtcFallback={onUseUtcAnalyticsFallback}
       />
     </section>
   );

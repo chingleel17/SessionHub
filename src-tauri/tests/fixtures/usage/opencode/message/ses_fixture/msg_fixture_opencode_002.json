@@ -1,0 +1,1 @@
+{"id":"msg_fixture_opencode_002","sessionID":"ses_fixture","role":"assistant","providerID":"ollama","modelID":"claude-sonnet-4","time":{"created":1775811660000,"completed":1775811665000},"tokens":{"input":200,"output":40,"reasoning":20,"total":240,"cache":{"read":30,"write":5}}}

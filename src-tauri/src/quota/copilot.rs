@@ -406,8 +406,8 @@ mod tests {
     #[test]
     fn removes_credential_blob_terminators() {
         let token = "\0  token-value\r\n\0";
-        let sanitized = token
-            .trim_matches(|character: char| character.is_whitespace() || character == '\0');
+        let sanitized =
+            token.trim_matches(|character: char| character.is_whitespace() || character == '\0');
 
         assert_eq!(sanitized, "token-value");
     }
@@ -419,6 +419,9 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>();
 
-        assert_eq!(decode_credential_blob(&blob).as_deref(), Some("token-value"));
+        assert_eq!(
+            decode_credential_blob(&blob).as_deref(),
+            Some("token-value")
+        );
     }
 }

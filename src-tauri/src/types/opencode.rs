@@ -58,6 +58,16 @@ pub(crate) struct OpencodeTokens {
     pub(crate) input_tokens: Option<u64>,
     #[serde(default, rename = "outputTokens")]
     pub(crate) output_tokens: Option<u64>,
+    #[serde(default)]
+    pub(crate) cache: Option<OpencodeTokenCache>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct OpencodeTokenCache {
+    #[serde(default)]
+    pub(crate) read: Option<u64>,
+    #[serde(default)]
+    pub(crate) write: Option<u64>,
 }
 
 impl OpencodeTokens {
@@ -86,6 +96,10 @@ pub(crate) struct OpencodeMessageTime {
 pub(crate) struct OpencodeAssistantMeta {
     #[serde(default, alias = "modelID")]
     pub(crate) model_id: Option<String>,
+    #[serde(default, alias = "providerID")]
+    pub(crate) provider_id: Option<String>,
+    #[serde(default)]
+    pub(crate) cost: Option<f64>,
     #[serde(default)]
     pub(crate) tokens: Option<OpencodeTokens>,
 }
@@ -114,6 +128,10 @@ pub(crate) struct OpencodeMessage {
     pub(crate) time: Option<OpencodeMessageTime>,
     #[serde(default, alias = "modelID")]
     pub(crate) model_id: Option<String>,
+    #[serde(default, alias = "providerID")]
+    pub(crate) provider_id: Option<String>,
+    #[serde(default)]
+    pub(crate) cost: Option<f64>,
     #[serde(default)]
     pub(crate) tokens: Option<OpencodeTokens>,
     #[serde(default)]
@@ -138,6 +156,32 @@ impl OpencodeMessage {
                     .model_id
                     .as_deref()
                     .filter(|s| !s.is_empty())
+            })
+    }
+    pub(crate) fn model_provider_id(&self) -> Option<&str> {
+        self.provider_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                self.metadata
+                    .as_ref()?
+                    .assistant
+                    .as_ref()?
+                    .provider_id
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+            })
+    }
+    pub(crate) fn estimated_cost(&self) -> Option<f64> {
+        self.cost
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .or_else(|| {
+                self.metadata
+                    .as_ref()?
+                    .assistant
+                    .as_ref()?
+                    .cost
+                    .filter(|value| value.is_finite() && *value >= 0.0)
             })
     }
     pub(crate) fn tokens(&self) -> Option<&OpencodeTokens> {

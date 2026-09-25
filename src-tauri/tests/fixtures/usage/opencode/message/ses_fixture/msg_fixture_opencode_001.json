@@ -1,0 +1,1 @@
+{"id":"msg_fixture_opencode_001","sessionID":"ses_fixture","role":"assistant","providerID":"openai","modelID":"gpt-5.4","cost":0.00125,"time":{"created":1775811600000,"completed":1775811605000},"tokens":{"input":300,"output":60,"reasoning":20,"total":360,"cache":{"read":50,"write":10}}}

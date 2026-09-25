@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+定義 SessionHub 分析圖表的呈現、互動與主題行為。
+
+## Requirements
 
 ### Requirement: TrendChart 折線趨勢圖元件
 

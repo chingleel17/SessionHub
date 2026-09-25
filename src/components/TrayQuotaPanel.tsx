@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
+import { getProviderLabel } from "../utils/providerLabel";
 import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
@@ -11,14 +12,6 @@ type TrayQuotaPanelProps = {
   enabledProviders: string[];
   onRefresh: () => void;
   onOpenSettings: () => void;
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  claude: "Claude",
-  copilot: "Copilot",
-  codex: "Codex",
-  opencode: "OpenCode",
-  antigravity: "Antigravity",
 };
 
 function formatAge(fetchedAt: string, locale: string): string {
@@ -142,7 +135,7 @@ export function TrayQuotaPanel({ snapshots, enabledProviders, onRefresh, onOpenS
           {visibleSnapshots.map((snapshot) => (
             <article className="tray-panel-provider" key={snapshot.provider}>
               <div className="tray-panel-provider-header">
-                <span className="tray-panel-provider-name">{PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider}</span>
+                <span className="tray-panel-provider-name">{getProviderLabel(snapshot.provider)}</span>
                 <span className={`tray-panel-provider-source tray-panel-provider-source--${snapshot.source}`}>
                   {t(snapshot.source === "remote_api" ? "quota.monitoring.source.remote_api" : "quota.monitoring.source.local_scan")}
                 </span>
@@ -165,7 +158,7 @@ export function TrayQuotaPanel({ snapshots, enabledProviders, onRefresh, onOpenS
               ) : (
                 <div className="tray-panel-provider-note tray-panel-provider-note--error">
                   {snapshot.status === "no_auth"
-                    ? t("quota.pleaseLogin", { provider: PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider })
+                    ? t("quota.pleaseLogin", { provider: getProviderLabel(snapshot.provider) })
                     : snapshot.errorMessage || t("quota.monitoring.status.error")}
                 </div>
               )}

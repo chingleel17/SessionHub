@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow, ResetCreditEntry } from "../types";
+import { getProviderLabel } from "../utils/providerLabel";
 import { hasNoQuotaContent } from "../utils/quotaSnapshotContent";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
@@ -66,14 +67,6 @@ function barColor(pct: number): string {
   if (pct >= 0.7) return "var(--quota-bar-warning)";
   return "var(--quota-bar-ok)";
 }
-
-const PROVIDER_LABELS: Record<string, string> = {
-  claude: "Claude",
-  copilot: "Copilot",
-  opencode: "OpenCode",
-  codex: "Codex",
-  antigravity: "Antigravity",
-};
 
 function groupWindows(windows: QuotaWindow[]): Array<{ group: string | null; windows: QuotaWindow[] }> {
   const byGroup = new Map<string | null, QuotaWindow[]>();
@@ -176,7 +169,7 @@ function ProviderPanel({ snap, onConsumeResetCredit, resetBusy }: {
     <div className="qo-panel">
       <div className="qo-panel-header">
         <div className="qo-panel-title-row">
-          <span className="qo-panel-name">{PROVIDER_LABELS[snap.provider] ?? snap.provider}</span>
+          <span className="qo-panel-name">{getProviderLabel(snap.provider)}</span>
           {planDetails ? (
             <span className="qo-plan-badge" title={planDetails.title}>
               {planDetails.label}
@@ -248,7 +241,7 @@ function ProviderPanel({ snap, onConsumeResetCredit, resetBusy }: {
       ) : null}
 
       {snap.status === "no_auth" ? (
-        <p className="qo-hint">{t("quota.pleaseLogin", { provider: PROVIDER_LABELS[snap.provider] ?? snap.provider })}</p>
+        <p className="qo-hint">{t("quota.pleaseLogin", { provider: getProviderLabel(snap.provider) })}</p>
       ) : null}
       {snap.status === "unsupported" ? <p className="qo-hint qo-hint--muted">{t("quota.unsupportedHint")}</p> : null}
       {snap.status === "error" && snap.errorMessage ? (
@@ -328,7 +321,7 @@ export function QuotaOverview({
               onClick={() => handleTabClick(snap.provider)}
             >
               <span className="qo-tab-icon">{providerIcon(snap.provider)}</span>
-              <span className="qo-tab-label">{PROVIDER_LABELS[snap.provider] ?? snap.provider}</span>
+              <span className="qo-tab-label">{getProviderLabel(snap.provider)}</span>
               {snap.status === "ok" && snap.windows && snap.windows[0] ? (
                 <span className="qo-tab-pct">{Math.round(snap.windows[0].utilization * 100)}%</span>
               ) : null}

@@ -187,7 +187,12 @@ pub(crate) fn parse_herdr_server_status(output: &str) -> bool {
         normalized.starts_with("status:") && normalized.contains("running")
     }) || serde_json::from_str::<Value>(output)
         .ok()
-        .and_then(|value| value.get("status").and_then(Value::as_str).map(str::to_ascii_lowercase))
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::to_ascii_lowercase)
+        })
         .is_some_and(|status| status == "running")
 }
 
@@ -308,17 +313,13 @@ fn parse_workspace_pairs_for_cwd(stdout: &str, cwd: &str) -> Option<String> {
     let mut cursor = 0;
     let mut best_match: Option<(usize, String)> = None;
 
-    while let Some((pane_cwd, _, pane_cwd_end)) = extract_json_string_field(stdout, "cwd", cursor)
-    {
+    while let Some((pane_cwd, _, pane_cwd_end)) = extract_json_string_field(stdout, "cwd", cursor) {
         let next_cwd_start = extract_json_string_field(stdout, "cwd", pane_cwd_end)
             .map(|(_, start, _)| start)
             .unwrap_or(stdout.len());
-        let workspace_id = extract_json_string_field(
-            &stdout[pane_cwd_end..next_cwd_start],
-            "workspace_id",
-            0,
-        )
-        .map(|(workspace, _, _)| workspace)?;
+        let workspace_id =
+            extract_json_string_field(&stdout[pane_cwd_end..next_cwd_start], "workspace_id", 0)
+                .map(|(workspace, _, _)| workspace)?;
         let normalized_pane_cwd = normalize_workspace_path(&pane_cwd);
         let common_path_length = if normalized_pane_cwd == normalized_cwd {
             Some(normalized_cwd.len())
@@ -361,9 +362,13 @@ pub(crate) fn parse_herdr_workspace_for_cwd(stdout: &str, cwd: &str) -> Option<S
                             let normalized_pane_cwd = normalize_workspace_path(pane_cwd);
                             let common_path_length = if normalized_pane_cwd == normalized_cwd {
                                 Some(normalized_cwd.len())
-                            } else if normalized_cwd.starts_with(&format!("{normalized_pane_cwd}\\")) {
+                            } else if normalized_cwd
+                                .starts_with(&format!("{normalized_pane_cwd}\\"))
+                            {
                                 Some(normalized_pane_cwd.len())
-                            } else if normalized_pane_cwd.starts_with(&format!("{normalized_cwd}\\")) {
+                            } else if normalized_pane_cwd
+                                .starts_with(&format!("{normalized_cwd}\\"))
+                            {
                                 Some(normalized_cwd.len())
                             } else {
                                 None
@@ -483,8 +488,7 @@ mod tests {
 
     #[test]
     fn detects_attached_client() {
-        let response =
-            r#"{"id":"x","result":{"type":"client_window_title","changed":true,"reason":"cleared"}}"#;
+        let response = r#"{"id":"x","result":{"type":"client_window_title","changed":true,"reason":"cleared"}}"#;
         assert_eq!(parse_herdr_client_attached(response), Some(true));
     }
 
@@ -504,7 +508,9 @@ mod tests {
 
     #[test]
     fn parses_server_status() {
-        assert!(parse_herdr_server_status("status: running\ncompatible: yes"));
+        assert!(parse_herdr_server_status(
+            "status: running\ncompatible: yes"
+        ));
         assert!(!parse_herdr_server_status("status: stopped"));
     }
 
@@ -526,7 +532,10 @@ mod tests {
     #[test]
     fn ignores_workspace_when_cwd_does_not_match() {
         let snapshot = r#"{"snapshot":{"panes":[{"cwd":"D:\\other","workspace_id":"wA"}]}}"#;
-        assert_eq!(parse_herdr_workspace_for_cwd(snapshot, "D:/session_hub"), None);
+        assert_eq!(
+            parse_herdr_workspace_for_cwd(snapshot, "D:/session_hub"),
+            None
+        );
     }
 
     #[test]

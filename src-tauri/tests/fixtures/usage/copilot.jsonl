@@ -1,0 +1,6 @@
+{"type":"session.start","timestamp":"2026-04-10T10:00:00Z","data":{"startTime":"2026-04-10T10:00:00Z","selectedModel":"fixture-model"}}
+{"type":"assistant.message","timestamp":"2026-04-10T10:01:00Z","data":{"outputTokens":80,"reasoningOpaque":"fixture-reasoning"}}
+{"type":"session.model_change","timestamp":"2026-04-10T10:02:00Z","data":{"newModel":"fixture-model-v2"}}
+{"type":"assistant.message","timestamp":"2026-04-11T10:01:00Z","data":{"outputTokens":50}}
+{"type":"session.usage_checkpoint","timestamp":"2026-04-11T10:01:30Z","data":{"totalNanoAiu":25000000000,"totalPremiumRequests":0.25}}
+{"type":"session.shutdown","timestamp":"2026-04-11T10:02:00Z","data":{"modelMetrics":{"fixture-model":{"requests":{"count":1,"cost":0.25},"usage":{"inputTokens":900,"outputTokens":700},"totalNanoAiu":25000000000}}}}

@@ -6,7 +6,7 @@ import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useI18n } from "../i18n/I18nProvider";
 import type { InterventionItem, OverlayStyle, QuotaSnapshot } from "../types";
-import { getProviderAbbr } from "../utils/providerLabel";
+import { getProviderAbbr, getProviderLabel } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
 import { LockIcon, MoveIcon } from "./Icons";
@@ -24,14 +24,6 @@ type QuotaOverlayProps = {
   interventionEnabled: boolean;
   onInterventionCardClick?: (sessionId: string) => void;
   onLockToggle?: () => void;
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  claude: "Claude",
-  copilot: "Copilot",
-  codex: "Codex",
-  opencode: "OpenCode",
-  antigravity: "Antigravity",
 };
 
 const PROVIDER_COLOR: Record<string, string> = {
@@ -260,7 +252,7 @@ export function QuotaOverlay({
                 const primaryUtilization = getPrimaryUtilization(snapshot);
                 const hasData = snapshot.status === "ok" || snapshot.status === "rate_limited";
                 const tooltip = [
-                  PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider,
+                  getProviderLabel(snapshot.provider),
                   ...(snapshot.windows ?? []).map((window) => {
                     const label = localizedWindowLabel(snapshot.provider, window.windowKey, window.label, t);
                     return `${label}: ${Math.round(window.utilization * 100)}%`;
@@ -290,7 +282,7 @@ export function QuotaOverlay({
           ) : (
             <div className="quota-overlay-list">
               {visibleSnapshots.map((snapshot) => {
-                const providerLabel = PROVIDER_LABELS[snapshot.provider] ?? snapshot.provider;
+                const providerLabel = getProviderLabel(snapshot.provider);
                 const windows = snapshot.windows ?? [];
 
                 return (
