@@ -37,6 +37,17 @@ pub(crate) fn index_usage_batch_internal(
         let previous =
             usage_ingestion_state(connection, &session.provider, &session.id, &source_identity)?;
         let Some(fingerprint) = usage_source_fingerprint(&session.provider, &source_path) else {
+            // 已記錄為來源不存在者不重複處理，避免佔用批次額度與重複 bump revision。
+            if previous
+                .as_ref()
+                .is_some_and(|(previous_fingerprint, version, status)| {
+                    previous_fingerprint.is_none()
+                        && *version == parser_version
+                        && status == "error"
+                })
+            {
+                continue;
+            }
             examined += 1;
             update_usage_ingestion_status(
                 connection,
@@ -50,13 +61,12 @@ pub(crate) fn index_usage_batch_internal(
             )?;
             continue;
         };
+        // 來源未變更時，pending/error 重跑也會得到相同結果，一律略過直到檔案變動。
         if previous
             .as_ref()
-            .is_some_and(|(previous_fingerprint, version, status)| {
+            .is_some_and(|(previous_fingerprint, version, _)| {
                 previous_fingerprint.as_deref() == Some(fingerprint.as_str())
                     && *version == parser_version
-                    && status != "pending"
-                    && status != "error"
             })
         {
             continue;
@@ -516,6 +526,74 @@ mod tests {
             )
             .expect("count healthy session events");
         assert_eq!(healthy_event_count, 3);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn resumed_copilot_session_with_repeated_shutdown_is_indexed() {
+        let root = temp_dir();
+        let connection = Connection::open_in_memory().expect("open test db");
+        init_db(&connection).expect("initialize test db");
+        let fixture = include_str!("../../tests/fixtures/usage/copilot.jsonl");
+        let session_dir = root.join("resumed-session");
+        fs::create_dir_all(&session_dir).expect("create session directory");
+        let shutdown = fixture.lines().last().expect("fixture shutdown line");
+        fs::write(
+            session_dir.join("events.jsonl"),
+            format!("{fixture}{shutdown}\n"),
+        )
+        .expect("write resumed source");
+        let session = copilot_session(session_dir, "resumed-session".to_string());
+
+        assert_eq!(
+            index_usage_batch_internal(&connection, &[session]).expect("index resumed session"),
+            1
+        );
+        let summary_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_session_summaries WHERE session_id = 'resumed-session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count shutdown summaries");
+        assert_eq!(summary_count, 2);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn unchanged_failed_sources_do_not_consume_batch_or_bump_revision() {
+        let root = temp_dir();
+        let connection = Connection::open_in_memory().expect("open test db");
+        init_db(&connection).expect("initialize test db");
+        let invalid_dir = root.join("invalid-session");
+        fs::create_dir_all(&invalid_dir).expect("create invalid session directory");
+        fs::write(invalid_dir.join("events.jsonl"), "{invalid json}\n")
+            .expect("write invalid source");
+        let missing = copilot_session(root.join("missing-session"), "missing-session".to_string());
+        let invalid = copilot_session(invalid_dir, "invalid-session".to_string());
+        let sessions = [missing, invalid];
+        let read_revision = || {
+            connection
+                .query_row(
+                    "SELECT revision FROM analytics_revision WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("read revision")
+        };
+
+        index_usage_batch_internal(&connection, &sessions).expect("first scan");
+        let revision_after_first = read_revision();
+        index_usage_batch_internal(&connection, &sessions).expect("repeat scan");
+        assert_eq!(read_revision(), revision_after_first);
+        let error_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_ingestion_state WHERE ingestion_status = 'error'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count error states");
+        assert_eq!(error_count, 2);
         fs::remove_dir_all(root).ok();
     }
 

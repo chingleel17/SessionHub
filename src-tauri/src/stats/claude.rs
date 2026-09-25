@@ -457,6 +457,8 @@ pub(crate) fn build_claude_usage_events(
             .unwrap_or("unknown")
             .to_string();
         let pricing_is_known = [
+            "fable-5",
+            "mythos-5",
             "opus-5",
             "opus-4",
             "opus-3-5",

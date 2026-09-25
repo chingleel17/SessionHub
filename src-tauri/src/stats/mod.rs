@@ -507,7 +507,8 @@ pub(crate) fn extract_copilot_usage(
                     summaries.push(UsageSessionSummaryRecord {
                         provider: "copilot".to_string(),
                         session_id: session_id.to_string(),
-                        source_identity: format!("shutdown:{model}"),
+                        // resume 後同一 session 會有多筆 shutdown，以行號區分避免主鍵衝突。
+                        source_identity: format!("shutdown:{line_index}:{model}"),
                         cwd: None,
                         model: Some(model),
                         active_from: active_from.clone(),

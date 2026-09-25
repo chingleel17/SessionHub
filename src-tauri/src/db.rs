@@ -1401,7 +1401,7 @@ pub(crate) fn update_usage_ingestion_status(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| format!("failed to begin usage state update: {error}"))?;
-    transaction
+    let changed = transaction
         .execute(
             "INSERT INTO usage_ingestion_state (
                 provider, session_id, source_identity, source_fingerprint, parser_version,
@@ -1414,7 +1414,12 @@ pub(crate) fn update_usage_ingestion_status(
                 ingestion_status = excluded.ingestion_status,
                 session_revision = usage_ingestion_state.session_revision + 1,
                 error_message = excluded.error_message,
-                updated_at = CURRENT_TIMESTAMP",
+                updated_at = CURRENT_TIMESTAMP
+            WHERE usage_ingestion_state.source_fingerprint IS NOT excluded.source_fingerprint
+               OR usage_ingestion_state.parser_version IS NOT excluded.parser_version
+               OR usage_ingestion_state.integrity_status IS NOT excluded.integrity_status
+               OR usage_ingestion_state.ingestion_status IS NOT excluded.ingestion_status
+               OR usage_ingestion_state.error_message IS NOT excluded.error_message",
             params![
                 state.provider,
                 state.session_id,
@@ -1427,7 +1432,10 @@ pub(crate) fn update_usage_ingestion_status(
             ],
         )
         .map_err(|error| format!("failed to update usage ingestion state: {error}"))?;
-    bump_analytics_revision(&transaction)?;
+    // 狀態未實際變更時不 bump revision，避免前端無謂重新載入。
+    if changed > 0 {
+        bump_analytics_revision(&transaction)?;
+    }
     transaction
         .commit()
         .map_err(|error| format!("failed to commit usage state update: {error}"))
