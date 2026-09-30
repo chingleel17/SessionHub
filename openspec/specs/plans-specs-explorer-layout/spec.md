@@ -144,6 +144,8 @@
 
 系統 SHALL 在右側面板以 markdown 方式顯示選取文件的完整內容；若選取的是 `tasks.md`，其 checkbox 應可直接互動。
 
+系統 SHALL 為每個 OpenSpec `tasks.md` 的 task 項目只呈現一個自訂互動核取方塊，尺寸與對齊 SHALL 維持一致，不受項目之間的空白行、段落或巢狀清單影響。系統 SHALL 在互動 task 渲染時統一略過 Markdown 解析器產生的原生 checkbox，包含段落內的巢狀 checkbox token；不得僅過濾最外層 token，也不得僅以 CSS 隱藏重複 checkbox。
+
 #### Scenario: 顯示選取文件內容
 
 - **WHEN** 使用者在左側選取葉節點
@@ -155,6 +157,26 @@
 - **WHEN** 使用者在右側面板查看 `tasks.md`
 - **THEN** task list checkbox 可直接點擊切換
 - **AND** 切換後的內容會寫回原始文件
+
+#### Scenario: 含空白行的 task 清單不產生重複核取方塊
+
+- **WHEN** 使用者查看項目間含空白行的 `tasks.md`（Markdown loose list）
+- **THEN** 每個 task 項目僅有一個自訂互動核取方塊
+- **AND** DOM 中不包含 Markdown 解析器額外產生的原生 checkbox input
+- **AND** 已完成與未完成項目的核取方塊尺寸及對齊與無空白行的清單一致，不出現額外放大的灰色核取方塊
+
+#### Scenario: 段落與巢狀任務維持正確互動
+
+- **WHEN** 使用者查看含補充段落或巢狀 task 清單的 `tasks.md`
+- **THEN** 每個 task 項目仍僅有一個自訂互動核取方塊，且不包含額外的原生 checkbox input
+- **AND** 補充文字與巢狀清單內容完整保留
+- **AND** 核取方塊的勾選狀態及 task 索引對應原始文件中的任務順序，點擊後僅更新對應任務
+
+#### Scenario: 非互動 Markdown 保留一般 task 預覽
+
+- **WHEN** 使用者查看非互動 task 文件的 Markdown（例如 `spec.md`）且內容含 task 清單
+- **THEN** 系統保留一般唯讀 task 預覽的原生 disabled checkbox
+- **AND** 不新增自訂 task 切換按鈕，也不因互動 `tasks.md` 的渲染規則移除其 checkbox
 
 #### Scenario: 文件載入中狀態
 

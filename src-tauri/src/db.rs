@@ -794,7 +794,7 @@ pub(crate) fn seed_builtin_model_pricing(connection: &Connection) -> Result<(), 
                     expires_at = excluded.expires_at,
                     error_kind = excluded.error_kind,
                     sort_order = excluded.sort_order
-                 WHERE model_pricing_cache.source <> 'user'",
+                 WHERE model_pricing_cache.source NOT IN ('user', 'openai-official')",
                 params![
                     provider,
                     model,
@@ -966,8 +966,13 @@ pub(crate) fn distinct_unpriced_models(
     let mut statement = connection
         .prepare(
             "SELECT DISTINCT provider, model_provider_id, model
-             FROM usage_events
-             WHERE estimated_usd_micros IS NULL
+             FROM usage_events AS event
+             WHERE (estimated_usd_micros IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM model_pricing_cache AS price
+                 WHERE price.model = LOWER(event.model)
+                    OR price.provider || '/' || price.model = LOWER(event.model)
+                    OR price.model || '-fast' = LOWER(event.model)
+             ) OR LOWER(event.model) LIKE '%-fast')
                AND model IS NOT NULL AND model != '' AND model != 'unknown'
              ORDER BY provider, model_provider_id, model
              LIMIT ?1",

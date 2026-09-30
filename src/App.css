@@ -930,6 +930,9 @@ input[type="checkbox"]:focus-visible {
 }
 
 .pricing-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
   width: min(560px, calc(100vw - 32px));
   overflow: hidden;
   border: 1px solid var(--color-border-subtle);
@@ -945,6 +948,10 @@ input[type="checkbox"]:focus-visible {
 }
 
 .pricing-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -954,11 +961,13 @@ input[type="checkbox"]:focus-visible {
 }
 
 .pricing-dialog footer {
+  flex-shrink: 0;
   justify-content: flex-end;
   border-top: 1px solid var(--color-border-subtle);
 }
 
 .pricing-form {
+  overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;

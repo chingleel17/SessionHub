@@ -41,6 +41,8 @@ function renderMarkdownHtml(content: string, interactiveTasks: boolean): string 
   let taskIndex = 0;
   const renderer = new marked.Renderer();
   if (interactiveTasks) {
+    // 統一略過原生核取方塊，包含鬆散清單中巢狀於段落內的 checkbox token。
+    renderer.checkbox = () => "";
     const defaultListItem = renderer.listitem.bind(renderer);
     renderer.listitem = function(item) {
       if (!item.task) {
@@ -48,10 +50,7 @@ function renderMarkdownHtml(content: string, interactiveTasks: boolean): string 
       }
 
       const currentTaskIndex = taskIndex++;
-      // marked v18 會把 `[x] ` 拆成獨立的 checkbox token，直接 parse 會多渲染一個原生
-      // disabled 的 <input type="checkbox">，與自訂的 toggle 按鈕重複並撐壞排版
-      const bodyTokens = item.tokens.filter((token) => token.type !== "checkbox");
-      const body = stripParagraphWrapper(this.parser.parse(bodyTokens));
+      const body = stripParagraphWrapper(this.parser.parse(item.tokens));
       const checkedClass = item.checked ? " explorer-task-content--checked" : "";
 
       return [

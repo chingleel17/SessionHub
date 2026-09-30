@@ -539,6 +539,7 @@ pub fn run() {
             get_analytics_session_page,
             get_analytics_revision,
             list_model_pricing,
+            sync_model_pricing,
             save_manual_model_pricing,
             delete_manual_model_pricing,
             set_model_pricing_visibility,

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { useI18n } from "../i18n/I18nProvider";
 import type { ManualModelPricingInput, ModelPricingEntry } from "../types";
 import { formatAnalyticsSupplierLabel } from "../utils/analyticsProviderLabels";
-import { DeleteIcon, EditNotesIcon, EyeIcon, EyeOffIcon } from "./Icons";
+import { CloseIcon, DeleteIcon, EditNotesIcon, EyeIcon, EyeOffIcon } from "./Icons";
 import { Button } from "./ui/Button";
 import { Checkbox } from "./ui/Checkbox";
 import { IconButton } from "./ui/IconButton";
@@ -13,6 +14,8 @@ type Props = {
   entries: ModelPricingEntry[];
   isLoading: boolean;
   isSaving: boolean;
+  isSyncing: boolean;
+  onSync: () => void;
   errorMessage: string | null;
   onSave: (input: ManualModelPricingInput) => Promise<void>;
   onDelete: (provider: string, model: string) => void;
@@ -40,15 +43,38 @@ const EMPTY_DRAFT: Draft = {
 function sourceKey(source: string) {
   if (source === "user") return "pricing.source.user" as const;
   if (source === "builtin-official") return "pricing.source.builtin" as const;
+  if (source === "openai-official") return "pricing.source.official" as const;
   return "pricing.source.openrouter" as const;
 }
 
-export function ModelPricingView({ entries, isLoading, isSaving, errorMessage, onSave, onDelete, onVisibilityChange }: Props) {
+export function ModelPricingView({ entries, isLoading, isSaving, isSyncing, onSync, errorMessage, onSave, onDelete, onVisibilityChange }: Props) {
   const { t, locale } = useI18n();
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
   const [showHidden, setShowHidden] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const isDialogOpen = draft !== null;
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    const previousFocus = document.activeElement;
+    document.querySelector<HTMLInputElement>(".pricing-dialog input")?.focus();
+    return () => { if (previousFocus instanceof HTMLElement) previousFocus.focus(); };
+  }, [isDialogOpen]);
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isSaving) setDraft(null);
+      if (event.key === "Tab") {
+        const controls = document.querySelectorAll<HTMLElement>(".pricing-dialog button:not(:disabled), .pricing-dialog input:not(:disabled), .pricing-dialog [tabindex='0']");
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isDialogOpen, isSaving]);
   const formatter = new Intl.NumberFormat(locale, { maximumFractionDigits: 6 });
   const filtered = entries.filter((entry) => {
     const providerMatches = provider === "all" || entry.provider === provider;
@@ -99,7 +125,10 @@ export function ModelPricingView({ entries, isLoading, isSaving, errorMessage, o
             {t("pricing.showHidden")}
           </Checkbox>
         </div>
-        <Button variant="primary" onClick={() => setDraft(EMPTY_DRAFT)}>{t("pricing.add")}</Button>
+        <div className="pricing-actions">
+          <Button variant="ghost" loading={isSyncing} disabled={isSyncing || isSaving} onClick={onSync}>{t("pricing.sync")}</Button>
+          <Button variant="primary" onClick={() => setDraft(EMPTY_DRAFT)}>{t("pricing.add")}</Button>
+        </div>
       </div>
       <p className="pricing-note">{t("pricing.note")}</p>
       {errorMessage ? <p className="analytics-error-banner" role="alert">{errorMessage}</p> : null}
@@ -143,10 +172,10 @@ export function ModelPricingView({ entries, isLoading, isSaving, errorMessage, o
           {filtered.length === 0 ? <p className="analytics-empty-state">{t("pricing.empty")}</p> : null}
         </div>
       )}
-      {draft ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDraft(null); }}>
+      {draft ? createPortal(
+        <div className="dialog-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setDraft(null); }}>
           <section className="pricing-dialog" role="dialog" aria-modal="true" aria-labelledby="pricing-dialog-title">
-            <header><h3 id="pricing-dialog-title">{t("pricing.dialogTitle")}</h3></header>
+            <header><h3 id="pricing-dialog-title">{t("pricing.dialogTitle")}</h3><IconButton label={t("dialog.cancel")} disabled={isSaving} onClick={() => setDraft(null)}><CloseIcon /></IconButton></header>
             <div className="pricing-form">
               <label><span>{t("pricing.provider")}</span><Select value={draft.provider} onChange={(event) => setDraft({ ...draft, provider: event.currentTarget.value })}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></Select></label>
               <label><span>{t("pricing.model")}</span><input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.currentTarget.value })} /></label>
@@ -155,10 +184,10 @@ export function ModelPricingView({ entries, isLoading, isSaving, errorMessage, o
               <label><span>{t("pricing.cacheRead")}</span><input type="number" min="0" step="any" value={draft.cacheRead} onChange={(event) => setDraft({ ...draft, cacheRead: event.currentTarget.value })} /></label>
               <label><span>{t("pricing.cacheWrite")}</span><input type="number" min="0" step="any" value={draft.cacheWrite} onChange={(event) => setDraft({ ...draft, cacheWrite: event.currentTarget.value })} /></label>
             </div>
-            <footer><Button variant="ghost" onClick={() => setDraft(null)}>{t("dialog.cancel")}</Button><Button variant="primary" loading={isSaving} disabled={!draft.model.trim() || draft.prompt === "" || draft.completion === ""} onClick={() => void submit()}>{t("pricing.save")}</Button></footer>
+            <footer><Button variant="ghost" disabled={isSaving} onClick={() => setDraft(null)}>{t("dialog.cancel")}</Button><Button variant="primary" loading={isSaving} disabled={!draft.model.trim() || draft.prompt === "" || draft.completion === ""} onClick={() => void submit().catch(() => undefined)}>{t("pricing.save")}</Button></footer>
           </section>
         </div>
-      ) : null}
+      , document.body) : null}
     </section>
   );
 }

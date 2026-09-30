@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::db::{read_analytics_revision_internal, DbState};
 use crate::types::{
@@ -57,6 +57,20 @@ pub fn list_model_pricing(db: State<'_, DbState>) -> Result<Vec<ModelPricingEntr
         .lock()
         .map_err(|error| format!("db lock poisoned: {error}"))?;
     crate::stats::list_model_pricing_internal(&connection)
+}
+
+#[tauri::command]
+pub async fn sync_model_pricing(app: tauri::AppHandle) -> Result<Vec<ModelPricingEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = app.state::<DbState>();
+        let connection = db
+            .conn
+            .lock()
+            .map_err(|error| format!("db lock poisoned: {error}"))?;
+        crate::stats::sync_model_pricing_internal(&connection)
+    })
+    .await
+    .map_err(|error| format!("pricing sync task failed: {error}"))?
 }
 
 #[tauri::command]

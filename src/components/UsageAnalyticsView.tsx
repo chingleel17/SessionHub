@@ -64,6 +64,8 @@ export type UsageAnalyticsViewProps = {
   pricingEntries: ModelPricingEntry[];
   pricingLoading: boolean;
   pricingSaving: boolean;
+  pricingSyncing: boolean;
+  onSyncPricing: () => void;
   pricingError: string | null;
   onSavePricing: (input: ManualModelPricingInput) => Promise<void>;
   onDeletePricing: (provider: string, model: string) => void;
@@ -177,6 +179,8 @@ export function UsageAnalyticsView({
   pricingEntries,
   pricingLoading,
   pricingSaving,
+  pricingSyncing,
+  onSyncPricing,
   pricingError,
   onSavePricing,
   onDeletePricing,
@@ -249,6 +253,8 @@ export function UsageAnalyticsView({
           entries={pricingEntries}
           isLoading={pricingLoading}
           isSaving={pricingSaving}
+          isSyncing={pricingSyncing}
+          onSync={onSyncPricing}
           errorMessage={pricingError}
           onSave={onSavePricing}
           onDelete={onDeletePricing}

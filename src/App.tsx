@@ -923,6 +923,17 @@ function App() {
     onSuccess: (entries) => queryClient.setQueryData(["modelPricing"], entries),
     onError: (error) => showToast(resolveErrorMessage(error, t("pricing.error.save"))),
   });
+  const syncModelPricingMutation = useMutation({
+    mutationFn: () => invoke<ModelPricingEntry[]>("sync_model_pricing"),
+    onSuccess: (entries) => {
+      queryClient.setQueryData(["modelPricing"], entries);
+      void queryClient.invalidateQueries({ queryKey: ["analyticsRevision"] });
+      void queryClient.invalidateQueries({ queryKey: ["analyticsReport"] });
+      void queryClient.invalidateQueries({ queryKey: ["analyticsSessionPage"] });
+      showToast(t("pricing.syncSuccess"));
+    },
+    onError: (error) => showToast(resolveErrorMessage(error, t("pricing.error.sync"))),
+  });
   const deleteModelPricingMutation = useMutation({
     mutationFn: ({ provider, model }: { provider: string; model: string }) =>
       invoke<ModelPricingEntry[]>("delete_manual_model_pricing", { provider, model }),
@@ -940,6 +951,7 @@ function App() {
     let unlisten: (() => void) | undefined;
     void listen<number>("analytics-revision-updated", (event) => {
       queryClient.setQueryData(["analyticsRevision"], event.payload);
+      void queryClient.invalidateQueries({ queryKey: ["modelPricing"] });
       void queryClient.invalidateQueries({ queryKey: ["analyticsReport"] });
       void queryClient.invalidateQueries({ queryKey: ["analyticsSessionPage"] });
     }).then((stopListening) => {
@@ -1054,8 +1066,10 @@ function App() {
   );
 
   const analyticsModelOptions = useMemo(
-    () => [...new Set(Object.values(sessionStatsMap).flatMap((stats) => Object.keys(stats?.modelMetrics ?? {})))].sort(),
-    [sessionStatsMap],
+    () => [...new Set((modelPricingQuery.data ?? [])
+      .filter((entry) => !entry.hidden)
+      .map((entry) => entry.model))].sort(),
+    [modelPricingQuery.data],
   );
 
   const sessionStatsLoadingMap = useMemo(
@@ -2293,7 +2307,7 @@ function App() {
               projects={groupedProjects}
               models={analyticsModelOptions}
               isLoading={analyticsReportQuery.isLoading || analyticsSessionPageQuery.isLoading}
-              isRefreshing={analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching}
+              isRefreshing={analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching || syncModelPricingMutation.isPending}
               errorMessage={analyticsReportQuery.error
                 ? resolveErrorMessage(analyticsReportQuery.error, t("analytics.error.loadFailed"))
                 : analyticsSessionPageQuery.error
@@ -2309,8 +2323,10 @@ function App() {
                 setAnalyticsPageSize(pageSize);
                 setAnalyticsPageByScope((previous) => ({ ...previous, [analyticsScopeKey]: 1 }));
               }}
-              onRefresh={() => {
-                void sessionsQuery.refetch().then(() => analyticsReportQuery.refetch());
+              onRefresh={async () => {
+                await sessionsQuery.refetch();
+                await syncModelPricingMutation.mutateAsync();
+                await analyticsReportQuery.refetch();
               }}
               onUseUtcFallback={handleUseUtcFallback}
               onOpenSession={handleOpenAnalyticsSession}
@@ -2324,6 +2340,8 @@ function App() {
               resetCreditBusy={resetCreditBusy}
               pricingEntries={modelPricingQuery.data ?? []}
               pricingLoading={modelPricingQuery.isLoading}
+              pricingSyncing={syncModelPricingMutation.isPending}
+              onSyncPricing={() => syncModelPricingMutation.mutate()}
               pricingSaving={saveModelPricingMutation.isPending}
               pricingError={modelPricingQuery.error
                 ? resolveErrorMessage(modelPricingQuery.error, t("pricing.error.load"))
@@ -2477,7 +2495,7 @@ function App() {
                 projects: groupedProjects,
                 models: analyticsModelOptions,
                 isLoading: analyticsReportQuery.isLoading || analyticsSessionPageQuery.isLoading,
-                isRefreshing: analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching,
+                isRefreshing: analyticsReportQuery.isFetching || analyticsSessionPageQuery.isFetching || syncModelPricingMutation.isPending,
                 errorMessage: analyticsReportQuery.error
                   ? resolveErrorMessage(analyticsReportQuery.error, t("analytics.error.loadFailed"))
                   : analyticsSessionPageQuery.error
@@ -2485,8 +2503,10 @@ function App() {
                     : null,
                 onQueryChange: updateActiveAnalyticsQuery,
                 onRetry: () => void analyticsReportQuery.refetch(),
-                onRefresh: () => {
-                  void sessionsQuery.refetch().then(() => analyticsReportQuery.refetch());
+                onRefresh: async () => {
+                  await sessionsQuery.refetch();
+                  await syncModelPricingMutation.mutateAsync();
+                  await analyticsReportQuery.refetch();
                 },
                 onUseUtcFallback: handleUseUtcFallback,
                 onPageChange: (page) => setAnalyticsPageByScope((previous) => ({
@@ -2508,6 +2528,8 @@ function App() {
                 resetCreditBusy,
                 pricingEntries: modelPricingQuery.data ?? [],
                 pricingLoading: modelPricingQuery.isLoading,
+                pricingSyncing: syncModelPricingMutation.isPending,
+                onSyncPricing: () => syncModelPricingMutation.mutate(),
                 pricingSaving: saveModelPricingMutation.isPending,
                 pricingError: modelPricingQuery.error
                   ? resolveErrorMessage(modelPricingQuery.error, t("pricing.error.load"))
