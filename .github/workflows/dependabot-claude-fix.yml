@@ -1,0 +1,83 @@
+name: Dependabot Claude Fix
+
+# CI 在 Dependabot PR 失敗時，交給 Claude 嘗試修復；無法自行決策時標記 needs-human 並通知維護者。
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: dependabot-claude-fix-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    name: Claude fix failed Dependabot PR
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: windows-latest
+
+    steps:
+      - name: Resolve pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          number=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number')
+          labels=$(gh pr view "$number" --repo "$REPO" --json labels --jq '[.labels[].name]|join(",")')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          # 已標記 needs-human 代表 Claude 先前放棄，不再重複嘗試
+          case ",$labels," in *,needs-human,*) echo "skip=true" >> "$GITHUB_OUTPUT";; esac
+
+      - name: Checkout PR branch
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+
+      - name: Setup Rust (stable)
+        if: steps.pr.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Bun
+        if: steps.pr.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Run Claude
+        if: steps.pr.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "dependabot[bot]"
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --max-turns 30
+            --allowedTools "Edit,Read,Write,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(cargo:*),Bash(bun:*)"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ steps.pr.outputs.number }}
+            BRANCH: ${{ github.event.workflow_run.head_branch }}
+            FAILED RUN ID: ${{ github.event.workflow_run.id }}
+
+            這是 Dependabot 的相依套件更新 PR，CI 失敗了。請依下列步驟處理，並遵循專案根目錄的 AGENTS.md：
+            1. 用 `gh run view <FAILED RUN ID> --log-failed` 讀取失敗原因。
+            2. 只做讓 CI 通過所需的最小修改（例如配合新版 API 調整程式碼、同步 bun.lock / Cargo.lock），不要順便重構。
+            3. 在本機執行 CI 相同的檢查確認通過：`bun run lint`、`bun run build`、`cargo test`（於 src-tauri）。
+            4. 通過後 commit 並 push 回 BRANCH（commit 訊息使用繁體中文，不得使用 --no-verify）。
+            5. 若遇到下列情況，請勿硬修：需要產品或架構層面的決策、升級會造成行為改變或破壞性變更、嘗試兩輪仍無法通過。
+               此時改為：在 PR 留言說明原因與建議選項並 @chingleel17，加上 `needs-human` 標籤，然後結束。
+            不要自行合併 PR，也不要修改 Dependabot 以外的分支。
