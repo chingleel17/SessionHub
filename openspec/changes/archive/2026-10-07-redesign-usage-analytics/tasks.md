@@ -62,5 +62,5 @@
 
 - [x] 8.1 執行相關前端測試（依現有 tests runner）、`bun run lint`、`bun run build` 與 src-tauri 工作目錄的 `cargo test`；修正失敗並記錄命令與結果，不以缺少 package test script 代替測試確認。
 - [x] 8.2 以 100,000 事件／10,000 sessions fixture 量測 30 日查詢 20 次暖快取 p95，目標 500ms 內；記錄 Windows 硬體、build 模式、查詢計畫與補算時互動情況，超標時修正後重測。驗收記錄：Windows x64、Intel Core i7-14700F（20 核心／28 執行緒、64 GiB）、release、SQLite in-memory fixture；暖查詢 p95 371.54 ms，50-session 背景補算期間 p95 368.29 ms；query plan 使用 idx_usage_events_provider_time 與 sessions_cache 主鍵索引。
-- [ ] 8.3 完成 Windows Tauri 深淺主題、窄視窗、鍵盤、螢幕閱讀文字替代、全域／專案／Dashboard 對帳驗收；保存結果及必要截圖證據。
+- [x] 8.3 完成 Windows Tauri 深淺主題、窄視窗、鍵盤、螢幕閱讀文字替代、全域／專案／Dashboard 對帳驗收；保存結果及必要截圖證據。
 - [x] 8.4 驗證舊 DB 升級、補算中關閉重啟及回復舊版忽略新增表；確認原始 session 與 metadata 未變更，並執行 `openspec validate redesign-usage-analytics --strict`。
