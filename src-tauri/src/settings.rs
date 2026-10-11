@@ -461,10 +461,13 @@ impl AppSettings {
             analytics_panel_collapsed: false,
             enable_quota_monitoring: true,
             quota_enabled_providers,
+<<<<<<< HEAD
             codex_reset_credit_reminder_enabled: false,
             codex_reset_credit_reminder_time: "09:00".to_string(),
             codex_reset_credit_reminder_days_before: 0,
             codex_reset_credit_auto_use_enabled: false,
+=======
+>>>>>>> f21a184 (feat(overlay): 新增處理中狀態燈、herdr 狀態合併與 macOS 相容)
             allow_create_project_config_dir: false,
             agents_source_root: String::new(),
             tray_quota_mode: crate::types::TrayQuotaMode::default(),
@@ -601,6 +604,7 @@ pub(crate) fn load_settings_file_internal() -> Result<AppSettings, String> {
     let mut settings = parse_settings_content(&content)?;
     settings.terminal_launcher =
         Some(resolve_terminal_launcher(settings.terminal_launcher.as_deref()).to_string());
+    prune_unavailable_providers(&mut settings);
     Ok(settings)
 }
 
