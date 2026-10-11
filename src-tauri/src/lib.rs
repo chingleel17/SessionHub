@@ -79,6 +79,12 @@ pub(crate) fn emit_intervention_list_changed(app: &tauri::AppHandle, items: &[In
     emit_to_dynamic_webviews(app, "intervention-list-changed", items);
 }
 
+/// 廣播「處理中」session 數量變動，供 overlay 狀態燈（黃燈）使用。
+pub(crate) fn emit_active_session_count_changed(app: &tauri::AppHandle, count: usize) {
+    let _ = app.emit("active-session-count-changed", count);
+    emit_to_dynamic_webviews(app, "active-session-count-changed", count);
+}
+
 /// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。
 fn has_saved_window_state(app: &tauri::AppHandle, label: &str) -> bool {
     let Ok(app_data_dir) = app.path().app_data_dir() else {
@@ -140,6 +146,8 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     .always_on_top(true)
     .skip_taskbar(true)
     .focused(false)
+    // macOS 上未取得焦點的視窗預設會吞掉第一次點擊，導致 overlay 無法直接拖移
+    .accept_first_mouse(true)
     .resizable(false)
     .visible(false)
     .inner_size(320.0, 360.0);
@@ -595,7 +603,9 @@ pub fn run() {
             set_mcp_server_enabled,
             check_codex_project_trust,
             test_mcp_http_server,
-            get_intervention_list
+            get_intervention_list,
+            get_active_session_count,
+            get_overlay_activity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

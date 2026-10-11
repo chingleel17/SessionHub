@@ -5,7 +5,13 @@ import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useI18n } from "../i18n/I18nProvider";
-import type { InterventionItem, OverlayStyle, QuotaSnapshot } from "../types";
+import type {
+  InterventionItem,
+  OverlayIndicatorSide,
+  OverlayInterventionStyle,
+  OverlayStyle,
+  QuotaSnapshot,
+} from "../types";
 import { getProviderAbbr, getProviderLabel } from "../utils/providerLabel";
 import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
@@ -22,6 +28,10 @@ type QuotaOverlayProps = {
   styleMode: OverlayStyle;
   interventionItems: InterventionItem[];
   interventionEnabled: boolean;
+  interventionStyle?: OverlayInterventionStyle;
+  indicatorSide?: OverlayIndicatorSide;
+  /** 處理中（active）的 session 數，狀態燈樣式用 */
+  activeSessionCount?: number;
   onInterventionCardClick?: (sessionId: string) => void;
   onLockToggle?: () => void;
 };
@@ -70,7 +80,11 @@ function getVisibleRows(
   enabledProviders: string[],
   selectedProviders: string[],
 ): QuotaSnapshot[] {
-  const activeProviders = selectedProviders.length > 0 ? selectedProviders : enabledProviders;
+  // 只顯示「用量監控已啟用」的平台；自訂顯示清單也不得超出監控範圍
+  const activeProviders =
+    selectedProviders.length > 0
+      ? selectedProviders.filter((provider) => enabledProviders.includes(provider))
+      : enabledProviders;
   return snapshots
     .filter((snapshot) => activeProviders.includes(snapshot.provider) && snapshot.status !== "unsupported")
     .sort((left, right) => compareProviders(left.provider, right.provider));
@@ -120,6 +134,9 @@ export function QuotaOverlay({
   styleMode,
   interventionItems,
   interventionEnabled,
+  interventionStyle = "cards",
+  indicatorSide = "left",
+  activeSessionCount = 0,
   onInterventionCardClick,
   onLockToggle,
 }: QuotaOverlayProps) {
@@ -127,7 +144,17 @@ export function QuotaOverlay({
   const visibleSnapshots = getVisibleRows(snapshots, enabledProviders, selectedProviders);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const interventionRef = useRef<HTMLDivElement | null>(null);
-  const showIntervention = interventionEnabled && interventionItems.length > 0;
+  const showIndicator = interventionEnabled && interventionStyle === "indicator";
+  const showIntervention = interventionEnabled && interventionStyle === "cards" && interventionItems.length > 0;
+  // 紅：有 session 等待使用者處理；黃：有 session 處理中；灰：閒置
+  const indicatorState: "waiting" | "active" | "idle" =
+    interventionItems.length > 0 ? "waiting" : activeSessionCount > 0 ? "active" : "idle";
+  const indicatorTitle =
+    indicatorState === "waiting"
+      ? t("quota.overlay.indicator.waiting", { count: interventionItems.length })
+      : indicatorState === "active"
+        ? t("quota.overlay.indicator.active", { count: activeSessionCount })
+        : t("quota.overlay.indicator.idle");
   // 往上延伸旗標：DOM order 反轉（提醒區排到 chip 上方），由尺寸同步 effect 依可用工作區計算
   const [extendUp, setExtendUp] = useState(false);
 
@@ -203,7 +230,7 @@ export function QuotaOverlay({
       observer.disconnect();
       mutationObserver.disconnect();
     };
-  }, [styleMode, locked, visibleSnapshots.length, showIntervention, interventionItems.length]);
+  }, [styleMode, locked, visibleSnapshots.length, showIntervention, showIndicator, interventionItems.length]);
 
   useEffect(() => {
     const refreshTransparentWebview = async () => {
@@ -227,7 +254,7 @@ export function QuotaOverlay({
       style={{ "--quota-overlay-opacity": Math.min(Math.max(opacity, 0.3), 1) } as CSSProperties}
     >
       <section
-        className={`quota-overlay-root quota-overlay-root--${theme}${locked ? "" : " quota-overlay-editing"}${isCompact ? " quota-overlay-root--compact" : ""}`}
+        className={`quota-overlay-root quota-overlay-root--${theme}${locked ? "" : " quota-overlay-editing"}${isCompact ? " quota-overlay-root--compact" : ""}${showIndicator ? ` quota-overlay-root--with-indicator quota-overlay-root--indicator-${indicatorSide}` : ""}`}
         data-tauri-drag-region={!locked ? true : undefined}
         onMouseDown={(event) => {
           if (locked || event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
@@ -243,6 +270,20 @@ export function QuotaOverlay({
               <LockIcon size={15} />
             </IconButton>
           </div>
+        ) : null}
+
+        {showIndicator ? (
+          <span
+            className={`quota-overlay-indicator quota-overlay-indicator--${indicatorState}`}
+            role="status"
+            aria-label={indicatorTitle}
+            title={indicatorTitle}
+            onClick={() => {
+              if (indicatorState === "waiting" && interventionItems[0]) {
+                onInterventionCardClick?.(interventionItems[0].sessionId);
+              }
+            }}
+          />
         ) : null}
 
         {isCompact ? (

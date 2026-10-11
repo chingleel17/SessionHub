@@ -2436,6 +2436,54 @@ html.embedded-quota-view .quota-overlay-no-drag {
   border-radius: 999px;
 }
 
+/* ── 等待介入狀態燈：紅＝待使用者處理、黃＝處理中、灰＝閒置 ── */
+.quota-overlay-root--with-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.quota-overlay-root--with-indicator.quota-overlay-root--indicator-right .quota-overlay-indicator {
+  order: 2;
+}
+
+.quota-overlay-root--with-indicator > .quota-overlay-list,
+.quota-overlay-root--with-indicator > .quota-overlay-compact-list {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.quota-overlay-indicator {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #8b949e;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+
+.quota-overlay-indicator--active {
+  background: #e3b341;
+  box-shadow: 0 0 6px rgba(227, 179, 65, 0.7);
+}
+
+.quota-overlay-indicator--waiting {
+  background: #f85149;
+  box-shadow: 0 0 8px rgba(248, 81, 73, 0.85);
+  animation: quota-overlay-indicator-pulse 1.4s ease-in-out infinite;
+  cursor: pointer;
+}
+
+@keyframes quota-overlay-indicator-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.25);
+  }
+}
+
 .quota-overlay-root--light {
   border-color: color-mix(in srgb, var(--color-border-subtle) 90%, transparent);
   background: rgba(255, 255, 255, var(--quota-overlay-opacity));

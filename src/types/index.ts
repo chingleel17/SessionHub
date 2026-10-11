@@ -78,11 +78,16 @@ export type AppSettings = {
     quotaOverlayProviders?: string[];
     quotaOverlayTheme?: OverlayTheme;
     quotaOverlayStyle?: OverlayStyle;
+    quotaOverlayInterventionEnabled?: boolean;
+    quotaOverlayInterventionStyle?: OverlayInterventionStyle;
+    quotaOverlayIndicatorSide?: OverlayIndicatorSide;
 };
 
 export type TrayQuotaMode = "icon_only" | "percentage" | "bar" | "hidden";
 export type OverlayTheme = "dark" | "light";
 export type OverlayStyle = "full" | "compact";
+export type OverlayInterventionStyle = "cards" | "indicator";
+export type OverlayIndicatorSide = "left" | "right";
 
 export type AgentsScope =
     | { kind: "global" }

@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -82,33 +81,73 @@ struct ClaudeCredentials {
     subscription_type: Option<String>,
 }
 
+/// macOS 上 Claude Code 把 OAuth 憑證存在 Keychain（service: "Claude Code-credentials"），
+/// 不會產生 ~/.claude/.credentials.json。以系統內建 `security` 指令唯讀取得。
+#[cfg(target_os = "macos")]
+fn read_keychain_credentials() -> Option<String> {
+    let output = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let content = String::from_utf8(output.stdout).ok()?;
+    let content = content.trim();
+    (!content.is_empty()).then(|| content.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_keychain_credentials() -> Option<String> {
+    None
+}
+
 fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, String> {
+    // Keychain 項目只對應預設設定目錄（~/.claude）；自訂根目錄（CLAUDE_CONFIG_DIR）不查 Keychain。
+    let default_root = crate::settings::user_profile_env()
+        .ok()
+        .map(|profile| std::path::PathBuf::from(profile).join(".claude"));
     let root = if claude_root.trim().is_empty() {
-        let user_profile =
-            env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())?;
-        std::path::PathBuf::from(user_profile).join(".claude")
+        default_root
+            .clone()
+            .ok_or_else(|| "USERPROFILE environment variable is not set".to_string())?
     } else {
-        std::path::PathBuf::from(claude_root)
+        std::path::PathBuf::from(claude_root.trim())
     };
+    let use_default_root = default_root.as_ref() == Some(&root);
 
     // Try both .credentials.json and credentials.json
     let candidate_paths = [
         root.join(".credentials.json"),
         root.join("credentials.json"),
     ];
-    let creds_path = candidate_paths.iter().find(|p| p.exists()).ok_or_else(|| {
-        format!(
-            "credentials file not found — checked: {}",
-            candidate_paths
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })?;
-
-    let content = std::fs::read_to_string(creds_path)
-        .map_err(|e| format!("failed to read {}: {e}", creds_path.display()))?;
+    let (content, source) = match candidate_paths.iter().find(|p| p.exists()) {
+        Some(path) => {
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            (content, path.display().to_string())
+        }
+        None => match use_default_root.then(read_keychain_credentials).flatten() {
+            Some(content) => (content, "macOS Keychain".to_string()),
+            None => {
+                return Err(format!(
+                    "credentials file not found — checked: {}{}",
+                    candidate_paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if cfg!(target_os = "macos") {
+                        " and macOS Keychain (Claude Code-credentials)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        },
+    };
     let json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("failed to parse credentials JSON: {e}"))?;
 
@@ -146,7 +185,7 @@ fn read_claude_credentials(claude_root: &str) -> Result<ClaudeCredentials, Strin
             .unwrap_or_default();
         return Err(format!(
             "No OAuth token found in {} (top-level keys: {})",
-            creds_path.display(),
+            source,
             keys.join(", ")
         ));
     }
@@ -171,11 +210,15 @@ fn parse_auth_status_plan(body: &serde_json::Value) -> Option<String> {
 }
 
 fn claude_cli_executable() -> PathBuf {
-    if let Some(profile) = env::var_os("USERPROFILE") {
+    if let Ok(profile) = crate::settings::user_profile_env() {
         let native_cli = PathBuf::from(profile)
             .join(".local")
             .join("bin")
-            .join("claude.exe");
+            .join(if cfg!(target_os = "windows") {
+                "claude.exe"
+            } else {
+                "claude"
+            });
         if native_cli.is_file() {
             return native_cli;
         }
@@ -675,6 +718,9 @@ mod tests {
             quota_overlay_providers: Vec::new(),
             quota_overlay_theme: crate::types::OverlayTheme::default(),
             quota_overlay_style: crate::types::OverlayStyle::default(),
+            quota_overlay_intervention_enabled: true,
+            quota_overlay_intervention_style: crate::types::OverlayInterventionStyle::default(),
+            quota_overlay_indicator_side: crate::types::OverlayIndicatorSide::default(),
         };
 
         let adapter = ClaudeAdapter;

@@ -387,6 +387,75 @@ pub(crate) fn parse_herdr_workspace_for_cwd(stdout: &str, cwd: &str) -> Option<S
         .or_else(|| parse_workspace_pairs_for_cwd(stdout, cwd))
 }
 
+/// herdr 偵測到的 agent 狀態（來自畫面／終端標題偵測，與 hook 事件無關）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HerdrAgentStatus {
+    Idle,
+    Working,
+    /// 被授權提示或選擇表單擋住，等待使用者處理
+    Blocked,
+    Done,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HerdrAgentState {
+    /// agent 自身的 session id（Claude 即 hook 的 session_id）
+    pub(crate) session_id: String,
+    pub(crate) status: HerdrAgentStatus,
+    pub(crate) cwd: Option<String>,
+}
+
+/// 解析 `herdr agent list` 的 JSON；沒有 session id 的 agent 無法與本程式的 session 對應，略過。
+pub(crate) fn parse_herdr_agent_list(stdout: &str) -> Vec<HerdrAgentState> {
+    let Ok(value) = serde_json::from_str::<Value>(stdout) else {
+        return Vec::new();
+    };
+    let Some(agents) = value
+        .pointer("/result/agents")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    agents
+        .iter()
+        .filter_map(|agent| {
+            let session_id = agent
+                .pointer("/agent_session/value")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())?
+                .to_string();
+            let status = match agent.get("agent_status").and_then(Value::as_str) {
+                Some("idle") => HerdrAgentStatus::Idle,
+                Some("working") => HerdrAgentStatus::Working,
+                Some("blocked") => HerdrAgentStatus::Blocked,
+                Some("done") => HerdrAgentStatus::Done,
+                _ => HerdrAgentStatus::Unknown,
+            };
+            let cwd = agent
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Some(HerdrAgentState {
+                session_id,
+                status,
+                cwd,
+            })
+        })
+        .collect()
+}
+
+/// 查詢 herdr 目前所有 agent 的狀態；herdr 未安裝、server 未執行或查詢失敗時回傳空清單，
+/// 呼叫端會退回 hook 事件推導的狀態。
+pub(crate) fn herdr_agent_states() -> Vec<HerdrAgentState> {
+    match run_herdr(&["agent", "list"]) {
+        Ok(output) if output.status.success() => {
+            parse_herdr_agent_list(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn herdr_workspace_for_cwd(cwd: &str) -> Result<Option<String>, String> {
     let output = run_herdr(&["api", "snapshot"])?;
     if !output.status.success() {
@@ -455,6 +524,23 @@ pub(crate) fn herdr_tab_focus(tab_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_agent_list_statuses_and_session_ids() {
+        let json = r#"{"id":"x","result":{"agents":[
+            {"agent":"claude","agent_session":{"value":"s-1"},"agent_status":"working","cwd":"/a/b"},
+            {"agent":"claude","agent_session":{"value":"s-2"},"agent_status":"blocked"},
+            {"agent":"claude","agent_session":{"value":"s-3"},"agent_status":"idle"},
+            {"agent":"claude","agent_status":"working"}
+        ],"type":"agent_list"}}"#;
+        let states = parse_herdr_agent_list(json);
+        assert_eq!(states.len(), 3, "agent without session id is skipped");
+        assert_eq!(states[0].status, HerdrAgentStatus::Working);
+        assert_eq!(states[0].cwd.as_deref(), Some("/a/b"));
+        assert_eq!(states[1].status, HerdrAgentStatus::Blocked);
+        assert_eq!(states[2].status, HerdrAgentStatus::Idle);
+        assert!(parse_herdr_agent_list("not json").is_empty());
+    }
 
     #[test]
     fn parses_tab_create_ids() {

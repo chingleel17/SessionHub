@@ -3625,6 +3625,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "image",
+ "libc",
  "notify",
  "rusqlite",
  "serde",
