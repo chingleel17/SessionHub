@@ -26,88 +26,143 @@ pub(crate) fn render_opencode_integration(bridge_path: &std::path::Path) -> Resu
     )
     .map_err(|error| format!("failed to serialize OpenCode bridge directory: {error}"))?;
 
-    Ok(format!(
-        concat!(
-            "{metadata_prefix}{metadata}\n",
-            "import {{ appendFile, mkdir }} from \"node:fs/promises\";\n",
-            "import type {{ Plugin }} from \"@opencode-ai/plugin\";\n",
-            "import type {{ Event }} from \"@opencode-ai/sdk\";\n\n",
-            "const BRIDGE_PATH = {bridge_path};\n",
-            "const BRIDGE_DIR = {bridge_dir};\n\n",
-            "async function appendRecord(record: object) {{\n",
-            "  await mkdir(BRIDGE_DIR, {{ recursive: true }});\n",
-            "  await appendFile(BRIDGE_PATH, `${{JSON.stringify(record)}}\\n`, \"utf8\");\n",
-            "}}\n\n",
-            "export const SessionHubBridge: Plugin = async () => {{\n",
-            "  return {{\n",
-            "    event: async ({{ event }}: {{ event: Event }}) => {{\n",
-            "      if (event.type === \"session.updated\" || event.type === \"session.created\") {{\n",
-            "        const session = event.properties.info;\n",
-            "        await appendRecord({{\n",
-            "          version: {version},\n",
-            "          provider: \"{provider}\",\n",
-            "          eventType: event.type,\n",
-            "          timestamp: new Date(session.time.updated).toISOString(),\n",
-            "          sessionId: session.id,\n",
-            "          cwd: session.directory,\n",
-            "          sourcePath: null,\n",
-            "          title: session.title ?? null,\n",
-            "          error: null,\n",
-            "        }});\n",
-            "      }} else if (event.type === \"session.error\") {{\n",
-            "        const props = event.properties;\n",
-            "        await appendRecord({{\n",
-            "          version: {version},\n",
-            "          provider: \"{provider}\",\n",
-            "          eventType: event.type,\n",
-            "          timestamp: new Date().toISOString(),\n",
-            "          sessionId: (props as any).sessionID ?? null,\n",
-            "          cwd: null,\n",
-            "          sourcePath: null,\n",
-            "          title: null,\n",
-            "          error: ((props as any).error as any)?.message ?? String((props as any).error) ?? null,\n",
-            "        }});\n",
-            "      }} else if (event.type === \"permission.updated\" || event.type === \"permission.asked\" || (event.type as string) === \"permission.v2.asked\") {{\n",
-            "        const props = event.properties as any;\n",
-            "        const permissionType = props.title ?? props.permission ?? props.type ?? props.action ?? \"permission\";\n",
-            "        const requestId = props.id ?? props.requestID ?? props.permissionID ?? null;\n",
-            "        await appendRecord({{\n",
-            "          version: {version},\n",
-            "          provider: \"{provider}\",\n",
-            "          eventType: event.type,\n",
-            "          timestamp: new Date(props.time?.created ?? Date.now()).toISOString(),\n",
-            "          sessionId: props.sessionID ?? null,\n",
-            "          cwd: null,\n",
-            "          sourcePath: null,\n",
-            "          title: requestId ? `${{permissionType}} [${{requestId}}]` : permissionType,\n",
-            "          error: null,\n",
-            "        }});\n",
-            "      }} else if (event.type === \"permission.replied\" || (event.type as string) === \"permission.v2.replied\") {{\n",
-            "        const props = event.properties as any;\n",
-            "        await appendRecord({{\n",
-            "          version: {version},\n",
-            "          provider: \"{provider}\",\n",
-            "          eventType: event.type,\n",
-            "          timestamp: new Date().toISOString(),\n",
-            "          sessionId: props.sessionID ?? null,\n",
-            "          cwd: null,\n",
-            "          sourcePath: null,\n",
-            "          title: props.requestID ?? props.permissionID ?? null,\n",
-            "          error: null,\n",
-            "        }});\n",
-            "      }}\n",
-            "    }},\n",
-            "  }};\n",
-            "}};\n"
-        ),
-        metadata_prefix = OPENCODE_PLUGIN_METADATA_PREFIX,
-        metadata = metadata,
-        bridge_path = bridge_path_literal,
-        bridge_dir = bridge_parent_literal,
-        version = PROVIDER_INTEGRATION_VERSION,
-        provider = OPENCODE_PROVIDER
-    ))
+    Ok(OPENCODE_PLUGIN_TEMPLATE
+        .replace("__METADATA_PREFIX__", OPENCODE_PLUGIN_METADATA_PREFIX)
+        .replace("__METADATA__", &metadata)
+        .replace("__BRIDGE_PATH__", &bridge_path_literal)
+        .replace("__BRIDGE_DIR__", &bridge_parent_literal)
+        .replace("__VERSION__", &PROVIDER_INTEGRATION_VERSION.to_string())
+        .replace("__PROVIDER__", OPENCODE_PROVIDER))
 }
+
+/// OpenCode plugin 範本。2.x 讀取 default export 的 `id` + `setup`，
+/// 1.x 讀取 `server()`；兩者互不影響，因此同一份檔案可相容兩個版本。
+const OPENCODE_PLUGIN_TEMPLATE: &str = r#"__METADATA_PREFIX____METADATA__
+import { appendFile, mkdir } from "node:fs/promises";
+
+const BRIDGE_PATH = __BRIDGE_PATH__;
+const BRIDGE_DIR = __BRIDGE_DIR__;
+
+async function appendRecord(record: object) {
+  await mkdir(BRIDGE_DIR, { recursive: true });
+  await appendFile(BRIDGE_PATH, `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function buildRecord(eventType: string, timestamp: string, fields: Record<string, unknown>) {
+  return {
+    version: __VERSION__,
+    provider: "__PROVIDER__",
+    eventType,
+    timestamp,
+    sessionId: null,
+    cwd: null,
+    sourcePath: null,
+    title: null,
+    error: null,
+    ...fields,
+  };
+}
+
+// OpenCode 2.x：事件為 { type, created, location, data }
+async function handleV2Event(event: any) {
+  const data = event?.data ?? {};
+  const timestamp = new Date(event?.created ?? Date.now()).toISOString();
+
+  switch (event?.type) {
+    case "session.created":
+      await appendRecord(buildRecord("session.created", timestamp, {
+        sessionId: data.sessionID ?? null,
+        cwd: data.location?.directory ?? event.location?.directory ?? null,
+        title: data.title ?? null,
+      }));
+      break;
+    case "session.renamed":
+      await appendRecord(buildRecord("session.updated", timestamp, {
+        sessionId: data.sessionID ?? null,
+        cwd: event.location?.directory ?? null,
+        title: data.title ?? null,
+      }));
+      break;
+    case "session.execution.failed":
+      await appendRecord(buildRecord("session.error", timestamp, {
+        sessionId: data.sessionID ?? null,
+        error: data.error?.message ?? null,
+      }));
+      break;
+    case "permission.asked": {
+      const permissionType = data.action ?? "permission";
+      await appendRecord(buildRecord("permission.asked", timestamp, {
+        sessionId: data.sessionID ?? null,
+        title: data.id ? `${permissionType} [${data.id}]` : permissionType,
+      }));
+      break;
+    }
+    case "permission.replied":
+      await appendRecord(buildRecord("permission.replied", timestamp, {
+        sessionId: data.sessionID ?? null,
+        title: data.requestID ?? null,
+      }));
+      break;
+  }
+}
+
+// OpenCode 1.x：事件為 { type, properties }
+async function handleV1Event(event: any) {
+  const props = event?.properties ?? {};
+
+  if (event.type === "session.updated" || event.type === "session.created") {
+    const session = props.info;
+    await appendRecord(buildRecord(event.type, new Date(session.time.updated).toISOString(), {
+      sessionId: session.id,
+      cwd: session.directory,
+      title: session.title ?? null,
+    }));
+  } else if (event.type === "session.error") {
+    await appendRecord(buildRecord(event.type, new Date().toISOString(), {
+      sessionId: props.sessionID ?? null,
+      error: props.error?.message ?? String(props.error ?? "") ?? null,
+    }));
+  } else if (event.type === "permission.updated" || event.type === "permission.asked") {
+    const permissionType = props.title ?? props.permission ?? props.type ?? props.action ?? "permission";
+    const requestId = props.id ?? props.requestID ?? props.permissionID ?? null;
+    await appendRecord(buildRecord(event.type, new Date(props.time?.created ?? Date.now()).toISOString(), {
+      sessionId: props.sessionID ?? null,
+      title: requestId ? `${permissionType} [${requestId}]` : permissionType,
+    }));
+  } else if (event.type === "permission.replied") {
+    await appendRecord(buildRecord(event.type, new Date().toISOString(), {
+      sessionId: props.sessionID ?? null,
+      title: props.requestID ?? props.permissionID ?? null,
+    }));
+  }
+}
+
+export default {
+  id: "sessionhub-provider-event-bridge",
+  setup(ctx: any) {
+    const controller = new AbortController();
+
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        try {
+          await handleV2Event(event);
+        } catch {
+          // 橋接檔寫入失敗不應中斷事件訂閱
+        }
+      }
+    })().catch(() => {});
+
+    return () => controller.abort();
+  },
+  async server() {
+    return {
+      event: async ({ event }: { event: any }) => {
+        await handleV1Event(event);
+      },
+    };
+  },
+};
+"#;
 
 fn parse_opencode_integration_metadata(
     content: &str,

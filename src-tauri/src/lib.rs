@@ -3097,16 +3097,16 @@ mod tests {
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains(OPENCODE_PLUGIN_METADATA_PREFIX));
         assert!(content.contains("\"session.updated\""));
+        assert!(content.contains("\"session.renamed\""));
+        assert!(content.contains("\"session.execution.failed\""));
         assert!(content.contains("\"permission.updated\""));
         assert!(content.contains("\"permission.asked\""));
         assert!(content.contains("\"permission.replied\""));
-        assert!(content.contains("\"permission.v2.asked\""));
-        assert!(content.contains("\"permission.v2.replied\""));
-        assert!(content.contains(
-            "props.title ?? props.permission ?? props.type ?? props.action ?? \"permission\""
-        ));
-        assert!(content.contains("props.id ?? props.requestID ?? props.permissionID ?? null"));
-        assert!(!content.contains("props.resources"));
+        assert!(content.contains("id: \"sessionhub-provider-event-bridge\""));
+        assert!(content.contains("setup(ctx: any)"));
+        assert!(content.contains("ctx.event.subscribe"));
+        assert!(content.contains("async server()"));
+        assert!(!content.contains("@opencode-ai/plugin"));
         assert!(content.contains("appendFile"));
 
         fs::remove_dir_all(&user_profile).expect("cleanup user profile");
