@@ -42,6 +42,44 @@ jobs:
           releaseBody: |
             完整變更內容請見 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)。
 
-            下載下方的 `.msi` 或 `-setup.exe` 安裝檔即可安裝。
+            Windows 下載 `.msi` 或 `-setup.exe`；macOS（Apple Silicon）下載 `.dmg`。
+            macOS 版為 ad-hoc 簽章，首次開啟請在 App 上按右鍵選「打開」。
           releaseDraft: true
           prerelease: false
+
+  release-macos:
+    name: Build & Upload (macOS)
+    needs: release
+    # .icon（多外觀圖示）需要 Xcode 26 的 actool
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # 不使用 tauri-action：dmg 必須在注入多外觀圖示之後才建立，
+      # 流程見 scripts/macos-package.sh。
+      - name: Build, inject icon and create dmg
+        run: scripts/macos-package.sh
+
+      - name: Upload dmg to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            src-tauri/target/release/bundle/dmg/*.dmg \
+            --clobber --repo "${{ github.repository }}"

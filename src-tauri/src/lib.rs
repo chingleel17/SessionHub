@@ -71,18 +71,21 @@ pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &A
 pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
     let _ = app.emit("quota-snapshots-updated", ());
     emit_to_dynamic_webviews(app, "quota-snapshots-updated", ());
+    commands::activity_snapshot::request_snapshot_write(app);
 }
 
 /// 同時廣播並定向通知 overlay 與 tray panel，讓動態建立的 webview 不會錯過介入提醒清單變動。
 pub(crate) fn emit_intervention_list_changed(app: &tauri::AppHandle, items: &[InterventionItem]) {
     let _ = app.emit("intervention-list-changed", items);
     emit_to_dynamic_webviews(app, "intervention-list-changed", items);
+    commands::activity_snapshot::request_snapshot_write(app);
 }
 
 /// 廣播「處理中」session 數量變動，供 overlay 狀態燈（黃燈）使用。
 pub(crate) fn emit_active_session_count_changed(app: &tauri::AppHandle, count: usize) {
     let _ = app.emit("active-session-count-changed", count);
     emit_to_dynamic_webviews(app, "active-session-count-changed", count);
+    commands::activity_snapshot::request_snapshot_write(app);
 }
 
 /// 檢查 `tauri-plugin-window-state` 是否已為指定視窗 label 存過位置狀態。
@@ -485,6 +488,7 @@ pub fn run() {
 
             app_setup::setup_quota_monitoring(app, &settings)?;
             app_setup::spawn_quota_poller_thread(app.handle().clone());
+            commands::activity_snapshot::spawn_snapshot_heartbeat_thread(app.handle().clone());
             app_setup::build_tray_icon(app)?;
 
             // 啟動時依設定初始化 tray icon 與 overlay
@@ -605,7 +609,8 @@ pub fn run() {
             test_mcp_http_server,
             get_intervention_list,
             get_active_session_count,
-            get_overlay_activity
+            get_overlay_activity,
+            get_activity_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

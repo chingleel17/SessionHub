@@ -1,3 +1,4 @@
+pub mod activity_snapshot;
 pub mod agents_config;
 pub mod analytics;
 pub mod mcp_config;
@@ -10,6 +11,7 @@ pub mod sessions;
 pub mod settings;
 pub mod tools;
 
+pub(crate) use activity_snapshot::*;
 pub(crate) use agents_config::*;
 pub(crate) use analytics::*;
 pub(crate) use mcp_config::*;

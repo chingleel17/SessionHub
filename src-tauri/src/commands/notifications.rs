@@ -151,11 +151,8 @@ pub(crate) fn merge_activity(
 /// herdr 查詢會啟動子程序，放到 blocking 執行緒以免卡住主執行緒。
 #[tauri::command]
 pub(crate) async fn get_overlay_activity(app: tauri::AppHandle) -> Result<OverlayActivity, String> {
-    use tauri::Manager;
     tauri::async_runtime::spawn_blocking(move || {
-        let registry = app.state::<InterventionRegistry>();
-        let herdr_states = crate::sessions::herdr::herdr_agent_states();
-        merge_activity(registry.snapshot(), registry.active_ids(), &herdr_states)
+        crate::commands::activity_snapshot::collect_overlay_activity(&app)
     })
     .await
     .map_err(|error| error.to_string())
