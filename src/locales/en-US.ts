@@ -417,6 +417,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "agents.prefs.loading": "Loading preferences",
   "agents.prefs.targetsHint": "Column toggles control sync targets for this scope.",
   "agents.skills.compatNote": ".agents is natively compatible with codex / opencode / copilot (no sync needed); only Claude Code needs syncing to .claude. File visibility and CLI results are shown separately.",
+  "agents.skills.scanIncomplete": "Incomplete scan:",
   "agents.skills.openDirTitle": "Click to open {path} in Explorer",
   "agents.skills.openDirUnavailable": "Directory does not exist",
   "agents.rootLink.notLinked.title": "~/.agents is not yet linked to the custom source location",

@@ -53,6 +53,8 @@ export type AgentsScopeDataBundle = {
   agentsMdData?: AgentsMdScanResult;
   skillsData?: SkillsScanResult;
   commandsData?: CommandsScanResult;
+  skillsError?: string;
+  commandsError?: string;
   prefs: ProjectAgentsPrefs;
   isAgentsMdLoading: boolean;
   isSkillsLoading: boolean;
@@ -68,6 +70,8 @@ export type AgentsScopeDataBundle = {
   onCreateAgentsRootLink?: () => Promise<void>;
   mcpProviders: McpProviderConfig[];
   mcpLoading: boolean;
+  mcpFetching: boolean;
+  mcpError?: string;
   onRefreshMcp: () => Promise<void>;
   onUpsertMcpServer: (
     provider: string,
@@ -150,9 +154,18 @@ function buildPreviewHtml(content: string): string {
 }
 
 function matchesSearch(entry: MatrixEntry, query: string): boolean {
-  if (!query) return true;
-  const haystack = `${entry.name} ${entry.description ?? ""}`.toLowerCase();
+    if (!query) return true;
+  const haystack = `${matrixLabel(entry)} ${entry.description ?? ""}`.toLowerCase();
   return haystack.includes(query);
+}
+
+function matrixKey(entry: MatrixEntry): string {
+  return JSON.stringify(["projectRelativeDir" in entry ? entry.projectRelativeDir : null, entry.name.toLowerCase()]);
+}
+
+function matrixLabel(entry: MatrixEntry): string {
+  return "projectRelativeDir" in entry && entry.projectRelativeDir
+    ? `${entry.projectRelativeDir} · ${entry.name}` : entry.name;
 }
 
 type ChipState = "loaded" | "needsSync" | "notInstalled";
@@ -164,7 +177,7 @@ type GroupedMatrixEntry = MatrixEntry & {
 function groupMatrixEntries(entries: MatrixEntry[]): GroupedMatrixEntry[] {
   const grouped = new Map<string, GroupedMatrixEntry>();
   for (const entry of entries) {
-    const key = entry.name.toLowerCase();
+    const key = matrixKey(entry);
     const current = grouped.get(key);
     if (current) {
       current.providerEntries.push(entry);
@@ -178,7 +191,7 @@ function groupMatrixEntries(entries: MatrixEntry[]): GroupedMatrixEntry[] {
       grouped.set(key, { ...entry, providerEntries: [entry], locations: [...entry.locations], targets: [...entry.targets] });
     }
   }
-  return [...grouped.values()].sort((left, right) => left.name.localeCompare(right.name));
+  return [...grouped.values()].sort((left, right) => matrixLabel(left).localeCompare(matrixLabel(right)));
 }
 
 function syncStatusForProvider(entry: GroupedMatrixEntry, provider: string): SyncStatus | undefined {
@@ -444,6 +457,7 @@ export function AgentsConfigView(props: Props) {
     const isLoading = tab === "skills" ? data.isSkillsLoading : data.isCommandsLoading;
     const onRefresh = tab === "skills" ? data.onRefreshSkills : data.onRefreshCommands;
     const allEntries = groupMatrixEntries(resolveMatrixEntries(tab, data));
+    const hasData = tab === "skills" ? Boolean(data.skillsData) : Boolean(data.commandsData);
     const query = searchQuery.trim().toLowerCase();
     const entries = allEntries.filter((entry) => matchesSearch(entry, query));
 
@@ -451,7 +465,7 @@ export function AgentsConfigView(props: Props) {
       const previewPath = tab === "skills" ? (entry as SkillEntry).skillMdPath : (entry as CommandsScanResult["commands"][number]).sourcePath;
       setSelectedNode({
         id: `agents-preview:${previewPath}`,
-        label: entry.name,
+        label: matrixLabel(entry),
         filePath: previewPath,
         filePathType: "absolute",
       });
@@ -472,12 +486,13 @@ export function AgentsConfigView(props: Props) {
           {t("agents.action.sync")}
         </button>
         {syncLegend}
-        <button type="button" className="ghost-button agents-icon-button" onClick={() => void onRefresh()} title={t("app.actions.refresh")}>
+        <button type="button" className="ghost-button agents-icon-button" disabled={isLoading} onClick={() => void onRefresh()} title={t("app.actions.refresh")}>
           <RefreshIcon size={15} />
         </button>
       </div>
     );
     const diagnostics = tab === "skills" ? data.skillsData?.diagnostics ?? [] : data.commandsData?.diagnostics ?? [];
+    const error = tab === "skills" ? data.skillsError : data.commandsError;
 
     return (
       <div className="agents-list-group">
@@ -485,11 +500,12 @@ export function AgentsConfigView(props: Props) {
           <span>{t(tab === "skills" ? "agents.skills.compatNote" : "agents.commands.compatNote")}</span>
           {actionButtons}
         </div>
-        {diagnostics.map((diagnostic) => (
-          <div key={`${diagnostic.providerId}:${diagnostic.kind}:${diagnostic.scope}`} className="mcp-provider-error">
-            {diagnostic.message}
+        {[...new Set(diagnostics.map((diagnostic) => diagnostic.message))].map((message) => (
+          <div key={message} className="agents-resource-diagnostic" role="status">
+            <strong>{t("agents.skills.scanIncomplete")}</strong> {message}
           </div>
         ))}
+        {error ? <div className="mcp-provider-error" role="alert">{error}</div> : null}
 
         {tab === "skills" && data.agentsRootLinkStatus && data.agentsRootLinkStatus.status !== "linked" ? (
           <div className={`agents-root-link-banner agents-root-link-banner--${data.agentsRootLinkStatus.status}`}>
@@ -521,16 +537,16 @@ export function AgentsConfigView(props: Props) {
           </div>
         ) : null}
 
-        {isLoading ? (
+        {isLoading && !hasData ? (
           <div className="explorer-content-loading agents-loading-state" role="status" aria-live="polite">
             <span className="ui-button-spinner" aria-hidden="true" />
             {t("plansSpecs.loading")}
           </div>
         ) : null}
         {!isLoading && allEntries.length === 0 ? <div className="explorer-content-empty">{t(`agents.empty.${tab}` as never)}</div> : null}
-        {!isLoading && allEntries.length > 0 && entries.length === 0 ? <div className="explorer-content-empty">{t("agents.list.noSearchResults")}</div> : null}
+        {hasData && allEntries.length > 0 && entries.length === 0 ? <div className="explorer-content-empty">{t("agents.list.noSearchResults")}</div> : null}
 
-        {!isLoading && entries.length > 0 ? (
+        {entries.length > 0 ? (
           <ul className="agents-vscode-list">
             {entries.map((entry) => {
               const providers = [...(tab === "skills"
@@ -556,9 +572,9 @@ export function AgentsConfigView(props: Props) {
                 };
               });
               return (
-                <li key={entry.name}>
+                <li key={matrixKey(entry)}>
                   <button type="button" className="agents-vscode-list-item" onClick={() => openPreview(entry)}>
-                    <span className="agents-vscode-list-name">{entry.name}</span>
+                    <span className="agents-vscode-list-name">{matrixLabel(entry)}</span>
                     {entry.description ? (
                       <span className="agents-vscode-list-description" title={entry.description}>{entry.description}</span>
                     ) : null}
@@ -633,6 +649,8 @@ export function AgentsConfigView(props: Props) {
         label: scopeGroupLabel(data.scope),
         providers: data.mcpProviders,
         isLoading: data.mcpLoading,
+        isFetching: data.mcpFetching,
+        error: data.mcpError,
         onRefresh: data.onRefreshMcp,
         onUpsert: data.onUpsertMcpServer,
         onDelete: data.onDeleteMcpServer,
@@ -853,11 +871,11 @@ function SyncModalGroup({
   const buildRequest = (dryRun: boolean): SyncRequest => {
     const items: SyncItem[] = [];
     for (const entry of entries) {
-      if (!selectedNames.includes(entry.name)) continue;
+      if (!selectedNames.includes(matrixKey(entry))) continue;
       for (const target of resolveTargetStatuses(entry)) {
         if (!(prefs.enabledTargets ?? []).includes(target.targetId)) continue;
         const targetInfo = targetInfos.find((item) => item.targetId === target.targetId);
-        if (!targetInfo?.rootExists) continue;
+        if (tab === "skills" ? !target.targetRootExists : !targetInfo?.rootExists) continue;
 
         if (tab === "skills") {
           items.push({
@@ -937,7 +955,7 @@ function SyncModalGroup({
                       <button
                         type="button"
                         className="agents-target-header-name"
-                        disabled={!target.rootExists}
+                         disabled={tab === "skills" ? !entries.some((entry) => resolveTargetStatuses(entry).some((status) => status.targetId === target.targetId && status.targetRootExists)) : !target.rootExists}
                         onClick={() => onOpenExternal(target.root)}
                       >
                         {target.targetId}
@@ -946,7 +964,7 @@ function SyncModalGroup({
                         <input
                           type="checkbox"
                           checked={(prefs.enabledTargets ?? []).includes(target.targetId)}
-                          disabled={!target.rootExists}
+                           disabled={tab === "skills" ? !entries.some((entry) => resolveTargetStatuses(entry).some((status) => status.targetId === target.targetId && status.targetRootExists)) : !target.rootExists}
                           onChange={(event) => void toggleTarget(target.targetId, event.currentTarget.checked)}
                         />
                       </label>
@@ -957,18 +975,18 @@ function SyncModalGroup({
             </thead>
             <tbody>
               {entries.map((entry) => (
-                <tr key={entry.name}>
+                <tr key={matrixKey(entry)}>
                   <td>
                     <div className="agents-matrix-item-cell">
                       <input
                         type="checkbox"
-                        checked={selectedNames.includes(entry.name)}
+                        checked={selectedNames.includes(matrixKey(entry))}
                         onChange={(event) => {
                           const checked = event.currentTarget.checked;
-                          setSelectedNames((current) => (checked ? [...current, entry.name] : current.filter((name) => name !== entry.name)));
+                          setSelectedNames((current) => (checked ? [...current, matrixKey(entry)] : current.filter((name) => name !== matrixKey(entry))));
                         }}
                       />
-                      <span>{entry.name}</span>
+                      <span>{matrixLabel(entry)}</span>
                     </div>
                   </td>
                   {targetInfos.map((targetInfo) => {
@@ -976,7 +994,7 @@ function SyncModalGroup({
                     const statusValue = status?.status ?? "target-missing";
                     const pillClass = `agents-status-pill agents-status-pill--${getStatusTone(statusValue)}`;
                     return (
-                      <td key={`${entry.name}:${targetInfo.targetId}`}>
+                      <td key={`${matrixKey(entry)}:${targetInfo.targetId}`}>
                         <span className={pillClass}>
                           {status?.targetNewer ? `${t("agents.status.targetNewer")} ` : ""}{t(`agents.status.${statusValue}` as never)}
                         </span>
@@ -1035,7 +1053,7 @@ function SyncModalGroup({
               type="button"
               className="primary-button"
               disabled={selectedItemsFromReport.length === 0}
-              onClick={() => void handleApply({ items: selectedItemsFromReport, dryRun: false, force: false, mode: tab === "skills" ? syncMode : "copy" })}
+              onClick={() => void handleApply({ items: selectedItemsFromReport, dryRun: false, force: false, mode: tab === "skills" ? syncMode : "copy", projectCwd: data.scope.kind === "project" ? data.scope.projectCwd : null })}
             >
               {t("agents.action.applySync")}
             </button>

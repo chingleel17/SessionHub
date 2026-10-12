@@ -113,6 +113,8 @@ type Props = {
   agentsMdData?: AgentsMdScanResult;
   skillsData?: SkillsScanResult;
   commandsData?: CommandsScanResult;
+  skillsError?: string;
+  commandsError?: string;
   projectAgentsPrefs: ProjectAgentsPrefs;
   plansSpecsLoading: boolean;
   plansSpecsRefreshing: boolean;
@@ -136,6 +138,8 @@ type Props = {
   onUpdateProjectAgentsPrefs: (prefs: ProjectAgentsPrefs) => Promise<void>;
   mcpProviders: McpProviderConfig[];
   mcpLoading: boolean;
+  mcpFetching: boolean;
+  mcpError?: string;
   onRefreshMcp: () => Promise<void>;
   onUpsertMcpServer: (
     provider: string,
@@ -255,6 +259,8 @@ export function ProjectView({
   agentsMdData,
   skillsData,
   commandsData,
+  skillsError,
+  commandsError,
   projectAgentsPrefs,
   plansSpecsLoading,
   plansSpecsRefreshing,
@@ -278,6 +284,8 @@ export function ProjectView({
   onUpdateProjectAgentsPrefs,
   mcpProviders,
   mcpLoading,
+  mcpFetching,
+  mcpError,
   onRefreshMcp,
   onUpsertMcpServer,
   onDeleteMcpServer,
@@ -926,6 +934,8 @@ export function ProjectView({
           agentsMdData={agentsMdData}
           skillsData={skillsData}
           commandsData={commandsData}
+          skillsError={skillsError}
+          commandsError={commandsError}
           prefs={projectAgentsPrefs}
           isAgentsMdLoading={agentsMdLoading}
           isSkillsLoading={skillsLoading}
@@ -943,6 +953,8 @@ export function ProjectView({
           onUpdatePrefs={onUpdateProjectAgentsPrefs}
           mcpProviders={mcpProviders}
           mcpLoading={mcpLoading}
+          mcpFetching={mcpFetching}
+          mcpError={mcpError}
           onRefreshMcp={onRefreshMcp}
           onUpsertMcpServer={onUpsertMcpServer}
           onDeleteMcpServer={onDeleteMcpServer}

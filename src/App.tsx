@@ -38,7 +38,6 @@ import type {
   SessionSearchTarget,
   SessionTodo,
   SkillsScanResult,
-  ResourceKind,
   SisyphusData,
   SyncActionResult,
   SyncReport,
@@ -51,6 +50,7 @@ import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
 import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
+import { RESOURCE_QUERY_OPTIONS, resourceCanLoad, resourceKeyId, resourceQueryKey, refreshResource, updateResourceAfterWrite, writtenSyncKinds } from "./utils/agentsResourceCache";
 import {
   createDashboardAnalyticsQuery,
   createDefaultAnalyticsQuery,
@@ -313,6 +313,8 @@ function App() {
     canRememberChoice: boolean;
     onResolve: (result: { items: SyncRequest["items"]; rememberChoice: boolean; rememberedChoice: "source-wins" | "target-wins" | null }) => void;
   } | null>(null);
+  const dirtyAgentsResourcesRef = useRef(new Set<string>());
+  const activeAgentsResourcesRef = useRef(new Set<string>());
 
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "active" | "error">(
     "connecting",
@@ -644,9 +646,6 @@ function App() {
       showToast(t("toast.sessionArchived"));
       forceFullRef.current = true;
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      await queryClient.invalidateQueries({ queryKey: ["agents-skills"] });
-      await queryClient.invalidateQueries({ queryKey: ["agents-commands"] });
-      await queryClient.invalidateQueries({ queryKey: ["mcp-configs"] });
     },
   });
 
@@ -1128,11 +1127,9 @@ function App() {
   const projectAgentsMcpActive = projectAgentsTab === "mcp";
 
   const projectAgentsPrefsQuery = useQuery({
-    queryKey: ["agents-prefs", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive && (projectAgentsTab === "agents-md" || projectAgentsTab === "skills" || projectAgentsTab === "commands" || projectAgentsTab === "mcp"),
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: ["agents-prefs", normalizePath(activeProject?.pathLabel ?? "")],
+    enabled: projectAgentsSubTabActive && resourceCanLoad(queryClient, ["agents-prefs", normalizePath(activeProject?.pathLabel ?? "")]),
+    ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: activeProject?.pathLabel }),
   });
 
@@ -1145,69 +1142,29 @@ function App() {
     queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
   });
 
-  const projectAgentsSkillsSignatureQuery = useQuery({
-    queryKey: ["agents-signature", "project", activeProject?.pathLabel ?? "", "skill", settingsQuery.data?.enabledProviders ?? []],
-    enabled: projectAgentsSubTabActive && projectAgentsSkillsActive,
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    queryFn: () => invoke<string>("get_resource_scan_signature", {
-      scope: { kind: "project", projectCwd: activeProject?.pathLabel },
-      kind: "skill" as ResourceKind,
-      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
-    }),
-  });
-
-  const projectAgentsCommandsSignatureQuery = useQuery({
-    queryKey: ["agents-signature", "project", activeProject?.pathLabel ?? "", "command", settingsQuery.data?.enabledProviders ?? []],
-    enabled: projectAgentsSubTabActive && projectAgentsCommandsActive,
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    queryFn: () => invoke<string>("get_resource_scan_signature", {
-      scope: { kind: "project", projectCwd: activeProject?.pathLabel },
-      kind: "command" as ResourceKind,
-      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
-    }),
-  });
-
-  const globalAgentsSkillsSignatureQuery = useQuery({
-    queryKey: ["agents-signature", "global", "skill", settingsQuery.data?.enabledProviders ?? []],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "skills") || (projectAgentsSubTabActive && projectAgentsSkillsActive),
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    queryFn: () => invoke<string>("get_resource_scan_signature", {
-      scope: { kind: "global" },
-      kind: "skill" as ResourceKind,
-      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
-    }),
-  });
-
-  const globalAgentsCommandsSignatureQuery = useQuery({
-    queryKey: ["agents-signature", "global", "command", settingsQuery.data?.enabledProviders ?? []],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "commands") || (projectAgentsSubTabActive && projectAgentsCommandsActive),
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    queryFn: () => invoke<string>("get_resource_scan_signature", {
-      scope: { kind: "global" },
-      kind: "command" as ResourceKind,
-      enabledProviders: settingsQuery.data?.enabledProviders ?? [],
-    }),
-  });
+  const projectScope = activeProject?.pathLabel ?? "";
+  const projectReady = Boolean(settingsQuery.data && projectAgentsPrefsQuery.data && projectAgentsPrefsQuery.isSuccess);
+  const projectSkillsKey = resourceQueryKey("skills", projectScope, settingsQuery.data ?? settingsForm, projectAgentsPrefsQuery.data);
+  const projectCommandsKey = resourceQueryKey("commands", projectScope, settingsQuery.data ?? settingsForm);
+  const projectMcpKey = resourceQueryKey("mcp", projectScope, settingsQuery.data ?? settingsForm);
+  const globalSkillsKey = resourceQueryKey("skills", "global", settingsQuery.data ?? settingsForm);
+  const globalCommandsKey = resourceQueryKey("commands", "global", settingsQuery.data ?? settingsForm);
+  const globalMcpKey = resourceQueryKey("mcp", "global", settingsQuery.data ?? settingsForm);
+  const globalSkillsActive = (activeView === "agents-global" && globalAgentsTab === "skills") || (projectAgentsSubTabActive && projectAgentsSkillsActive);
+  const globalCommandsActive = (activeView === "agents-global" && globalAgentsTab === "commands") || (projectAgentsSubTabActive && projectAgentsCommandsActive);
+  const globalMcpActive = (activeView === "agents-global" && globalAgentsTab === "mcp") || (projectAgentsSubTabActive && projectAgentsMcpActive);
 
   const projectAgentsSkillsQuery = useQuery({
-     queryKey: ["agents-skills", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? [], projectAgentsSkillsSignatureQuery.data ?? ""],
-    enabled: projectAgentsSubTabActive && projectAgentsSkillsActive,
-     staleTime: 30 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: projectSkillsKey,
+    enabled: projectReady && projectAgentsSubTabActive && projectAgentsSkillsActive && resourceCanLoad(queryClient, projectSkillsKey),
+    ...RESOURCE_QUERY_OPTIONS,
       queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
    });
 
   const projectAgentsCommandsQuery = useQuery({
-     queryKey: ["agents-commands", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? [], projectAgentsCommandsSignatureQuery.data ?? ""],
-    enabled: projectAgentsSubTabActive && projectAgentsCommandsActive,
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: projectCommandsKey,
+    enabled: projectReady && projectAgentsSubTabActive && projectAgentsCommandsActive && resourceCanLoad(queryClient, projectCommandsKey),
+    ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
@@ -1221,39 +1178,34 @@ function App() {
   });
 
   const globalAgentsSkillsQuery = useQuery({
-     queryKey: ["agents-skills", "global", settingsQuery.data?.enabledProviders ?? [], globalAgentsSkillsSignatureQuery.data ?? ""],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "skills") || (projectAgentsSubTabActive && projectAgentsSkillsActive),
-     staleTime: 30 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: globalSkillsKey,
+    enabled: Boolean(settingsQuery.data) && globalSkillsActive && resourceCanLoad(queryClient, globalSkillsKey),
+    ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
   const globalAgentsCommandsQuery = useQuery({
-     queryKey: ["agents-commands", "global", settingsQuery.data?.enabledProviders ?? [], globalAgentsCommandsSignatureQuery.data ?? ""],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "commands") || (projectAgentsSubTabActive && projectAgentsCommandsActive),
-     staleTime: 30 * 60_000,
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: globalCommandsKey,
+    enabled: Boolean(settingsQuery.data) && globalCommandsActive && resourceCanLoad(queryClient, globalCommandsKey),
+    ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<CommandsScanResult>("scan_agents_commands", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
 
   const agentsSourceRootConfigured = Boolean((settingsForm.agentsSourceRoot ?? "").trim());
 
   const agentsRootLinkQuery = useQuery({
-    queryKey: ["agents-root-link"],
-    enabled: (activeView === "agents-global" || projectAgentsSubTabActive) && agentsSourceRootConfigured,
-    staleTime: 60_000,
-    gcTime: 5 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""],
+    enabled: Boolean(settingsQuery.data) && globalSkillsActive && agentsSourceRootConfigured && resourceCanLoad(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""]),
+    ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<AgentsRootLinkStatus>("check_agents_root_link"),
   });
 
   const linkAgentsRootMutation = useMutation({
     mutationFn: () => invoke<AgentsRootLinkStatus>("link_agents_root"),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["agents-root-link"] });
-      void queryClient.invalidateQueries({ queryKey: ["agents-skills", "global"] });
+    onSuccess: async (status) => {
+      queryClient.setQueryData(["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""], status);
+      await updateWrittenResource("skills", "global", globalSkillsKey);
+      if (queryClient.getQueryState(globalCommandsKey)) dirtyAgentsResourcesRef.current.add(resourceKeyId(globalCommandsKey));
     },
     onError: (error) => {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
@@ -1261,34 +1213,79 @@ function App() {
   });
 
   const globalMcpConfigsQuery = useQuery({
-     queryKey: ["mcp-configs", "global", settingsQuery.data?.enabledProviders ?? []],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "mcp") || (projectAgentsSubTabActive && projectAgentsMcpActive),
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: globalMcpKey,
+    enabled: Boolean(settingsQuery.data) && globalMcpActive && resourceCanLoad(queryClient, globalMcpKey),
+    ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "global" } }),
   });
 
   const projectMcpConfigsQuery = useQuery({
-     queryKey: ["mcp-configs", activeProject?.pathLabel ?? "", settingsQuery.data?.enabledProviders ?? []],
-    enabled: projectAgentsSubTabActive && projectAgentsMcpActive,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: projectMcpKey,
+    enabled: projectReady && projectAgentsSubTabActive && projectAgentsMcpActive && resourceCanLoad(queryClient, projectMcpKey),
+    ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<McpProviderConfig[]>("list_mcp_configs", { scope: { kind: "project", projectCwd: activeProject?.pathLabel } }),
   });
 
   const codexProjectTrustQuery = useQuery({
-    queryKey: ["codex-project-trust", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive && projectAgentsMcpActive,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-    placeholderData: (previous) => previous,
+    queryKey: ["codex-project-trust", normalizePath(projectScope), settingsQuery.data?.codexRoot ?? ""],
+    enabled: Boolean(settingsQuery.data) && projectAgentsSubTabActive && projectAgentsMcpActive && resourceCanLoad(queryClient, ["codex-project-trust", normalizePath(projectScope), settingsQuery.data?.codexRoot ?? ""]),
+    ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<boolean>("check_codex_project_trust", { projectCwd: activeProject?.pathLabel }),
   });
 
-  const invalidateMcpConfigs = async (scopeKeyForQuery: string) => {
-    await queryClient.invalidateQueries({ queryKey: ["mcp-configs", scopeKeyForQuery] });
+  activeAgentsResourcesRef.current = new Set([
+    ...(projectAgentsSubTabActive && projectAgentsSkillsActive ? [resourceKeyId(projectSkillsKey), resourceKeyId(globalSkillsKey)] : []),
+    ...(projectAgentsSubTabActive && projectAgentsCommandsActive ? [resourceKeyId(projectCommandsKey), resourceKeyId(globalCommandsKey)] : []),
+    ...(projectAgentsSubTabActive && projectAgentsMcpActive ? [resourceKeyId(projectMcpKey), resourceKeyId(globalMcpKey)] : []),
+    ...(globalSkillsActive ? [resourceKeyId(globalSkillsKey)] : []),
+    ...(globalCommandsActive ? [resourceKeyId(globalCommandsKey)] : []),
+    ...(globalMcpActive ? [resourceKeyId(globalMcpKey)] : []),
+  ]);
+
+  const scanResource = (kind: "skills" | "commands" | "mcp", scope: string) => {
+    const agentsScope = scope === "global" ? { kind: "global" as const } : { kind: "project" as const, projectCwd: scope };
+    if (kind === "mcp") return invoke<McpProviderConfig[]>("list_mcp_configs", { scope: agentsScope });
+    if (kind === "skills") return invoke<SkillsScanResult>("scan_agents_skills", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
+    return invoke<CommandsScanResult>("scan_agents_commands", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
+  };
+
+  const refreshAgentsResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[], afterWrite = false) => {
+    try {
+      await refreshResource<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, () => scanResource(kind, scope), afterWrite);
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    }
+  };
+
+  const updateWrittenResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[]) => {
+    try {
+      await updateResourceAfterWrite<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, activeAgentsResourcesRef.current,
+        dirtyAgentsResourcesRef.current, () => scanResource(kind, scope));
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    }
+  };
+
+  useEffect(() => {
+    const candidates = [
+      ["skills", projectScope, projectSkillsKey, projectAgentsSubTabActive && projectAgentsSkillsActive],
+      ["commands", projectScope, projectCommandsKey, projectAgentsSubTabActive && projectAgentsCommandsActive],
+      ["mcp", projectScope, projectMcpKey, projectAgentsSubTabActive && projectAgentsMcpActive],
+      ["skills", "global", globalSkillsKey, globalSkillsActive],
+      ["commands", "global", globalCommandsKey, globalCommandsActive],
+      ["mcp", "global", globalMcpKey, globalMcpActive],
+    ] as const;
+    for (const [kind, scope, key, active] of candidates) {
+      const id = resourceKeyId(key);
+      if (!active || !dirtyAgentsResourcesRef.current.has(id) || queryClient.getQueryState(key)?.fetchStatus === "fetching") continue;
+      dirtyAgentsResourcesRef.current.delete(id);
+      void refreshAgentsResource(kind, scope, key, true);
+    }
+  });
+
+  const mcpMutationContext = (scope: { kind: "global" } | { kind: "project"; projectCwd: string }) => {
+    const scopeKey = scope.kind === "global" ? "global" : scope.projectCwd;
+    return { scopeKey, key: resourceQueryKey("mcp", scopeKey, settingsQuery.data ?? settingsForm) };
   };
 
   const upsertMcpServerMutation = useMutation({
@@ -1298,10 +1295,11 @@ function App() {
       name: string;
       originalName?: string | null;
       configJson: string;
-    }) => invoke("upsert_mcp_server", params),
-    onSuccess: (_data, variables) => {
-      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    }) => {
+      const context = mcpMutationContext(params.scope);
+      return invoke("upsert_mcp_server", params).then(() => context);
     },
+    onSuccess: ({ scopeKey, key }) => updateWrittenResource("mcp", scopeKey, key),
     onError: (error) => {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     },
@@ -1312,10 +1310,11 @@ function App() {
       scope: { kind: "global" } | { kind: "project"; projectCwd: string };
       provider: string;
       name: string;
-    }) => invoke("delete_mcp_server", params),
-    onSuccess: (_data, variables) => {
-      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    }) => {
+      const context = mcpMutationContext(params.scope);
+      return invoke("delete_mcp_server", params).then(() => context);
     },
+    onSuccess: ({ scopeKey, key }) => updateWrittenResource("mcp", scopeKey, key),
     onError: (error) => {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     },
@@ -1327,10 +1326,11 @@ function App() {
       provider: string;
       name: string;
       enabled: boolean;
-    }) => invoke("set_mcp_server_enabled", params),
-    onSuccess: (_data, variables) => {
-      void invalidateMcpConfigs(variables.scope.kind === "global" ? "global" : variables.scope.projectCwd);
+    }) => {
+      const context = mcpMutationContext(params.scope);
+      return invoke("set_mcp_server_enabled", params).then(() => context);
     },
+    onSuccess: ({ scopeKey, key }) => updateWrittenResource("mcp", scopeKey, key),
     onError: (error) => {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     },
@@ -1542,13 +1542,32 @@ function App() {
     setLastRealtimeSyncAt(getRealtimeSyncLabel());
   };
 
-  const refreshAgentsQueries = async (scopeKey: string) => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["agents-md", scopeKey] }),
-      queryClient.invalidateQueries({ queryKey: ["agents-skills", scopeKey] }),
-      queryClient.invalidateQueries({ queryKey: ["agents-commands", scopeKey] }),
-      queryClient.invalidateQueries({ queryKey: ["mcp-configs", scopeKey] }),
-    ]);
+  const handleRefreshResource = async (kind: "skills" | "commands" | "mcp", scope: string) => {
+    let prefs = projectAgentsPrefsQuery.data;
+    if (scope !== "global" && (kind === "skills" || kind === "commands")) {
+      try {
+        prefs = await queryClient.fetchQuery({
+          queryKey: ["agents-prefs", normalizePath(scope)],
+          queryFn: () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: scope }),
+          staleTime: 0, gcTime: Infinity, retry: false,
+        });
+      } catch (error) {
+        showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+        return;
+      }
+    }
+    const key = resourceQueryKey(kind, scope, settingsQuery.data ?? settingsForm, prefs);
+    await refreshAgentsResource(kind, scope, key);
+    if (scope === "global" && kind === "skills" && agentsSourceRootConfigured) {
+      try {
+        await refreshResource(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""], () => invoke<AgentsRootLinkStatus>("check_agents_root_link"));
+      } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
+    }
+    if (scope !== "global" && kind === "mcp") {
+      try {
+        await refreshResource(queryClient, ["codex-project-trust", normalizePath(scope), settingsQuery.data?.codexRoot ?? ""], () => invoke<boolean>("check_codex_project_trust", { projectCwd: scope }));
+      } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
+    }
   };
 
   const handleWriteProjectAgentsFile = async (filePath: string, content: string): Promise<void> => {
@@ -1572,11 +1591,26 @@ function App() {
 
   const handleRefreshProjectAgents = async (): Promise<void> => {
     if (!activeProject?.pathLabel) return;
-    await refreshAgentsQueries(activeProject.pathLabel);
+    const scope = activeProject.pathLabel;
+    try {
+      await Promise.all([
+        refreshResource(queryClient, ["agents-md", scope], () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: scope })),
+        refreshResource(queryClient, ["agents-prefs", normalizePath(scope)], () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: scope })),
+      ]);
+    } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
   };
 
   const handleRefreshGlobalAgents = async (): Promise<void> => {
-    await refreshAgentsQueries("global");
+    try {
+      await refreshResource(queryClient, ["agents-md", "global"], () => invoke<AgentsMdScanResult>("scan_global_agents_md"));
+    } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
+  };
+
+  const updateSyncedResources = async (request: SyncRequest, report: SyncReport, keys: { skills: readonly unknown[]; commands: readonly unknown[] }) => {
+    const scope = request.projectCwd ?? "global";
+    for (const kind of writtenSyncKinds(request, report)) {
+      await updateWrittenResource(kind, scope, keys[kind]);
+    }
   };
 
   const handlePreviewAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
@@ -1584,6 +1618,11 @@ function App() {
   };
 
   const handleApplyAgentsSync = async (request: SyncRequest): Promise<SyncReport> => {
+    const syncScope = request.projectCwd ?? "global";
+    const syncKeys = {
+      skills: resourceQueryKey("skills", syncScope, settingsQuery.data ?? settingsForm, projectAgentsPrefsQuery.data),
+      commands: resourceQueryKey("commands", syncScope, settingsQuery.data ?? settingsForm),
+    };
     const report = await invoke<SyncReport>("sync_agents_items", { request });
     const conflicts = report.actions.filter((action) => action.action === "conflict");
     if (conflicts.length > 0) {
@@ -1605,7 +1644,7 @@ function App() {
               if (saveResult.createdProjectConfigDir) {
                 showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
               }
-              await queryClient.invalidateQueries({ queryKey: ["agents-prefs", request.projectCwd] });
+              queryClient.setQueryData(["agents-prefs", normalizePath(request.projectCwd)], nextPrefs);
             }
 
             const nextReport = await invoke<SyncReport>("sync_agents_items", {
@@ -1616,7 +1655,7 @@ function App() {
               },
             });
             showToast(formatAgentsReportToast(nextReport, t("agents.report.toast")));
-            await refreshAgentsQueries(request.projectCwd ?? "global");
+            await updateSyncedResources({ ...request, items }, nextReport, syncKeys);
           })().catch((error) => {
             showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
           });
@@ -1626,20 +1665,21 @@ function App() {
     }
 
     showToast(formatAgentsReportToast(report, t("agents.report.toast")));
-    await refreshAgentsQueries(request.projectCwd ?? "global");
+    await updateSyncedResources(request, report, syncKeys);
     return report;
   };
 
   const handleUpdateProjectAgentsPrefs = async (prefs: ProjectAgentsPrefs): Promise<void> => {
     if (!activeProject?.pathLabel) return;
+    const scope = activeProject.pathLabel;
     const saveResult = await invoke<SaveProjectAgentsPrefsResult>("save_project_agents_prefs", {
-      projectCwd: activeProject.pathLabel,
+      projectCwd: scope,
       prefs,
     });
     if (saveResult.createdProjectConfigDir) {
       showToast(formatProjectConfigCreatedToast(t("agents.report.projectConfigCreated"), saveResult.storedPath));
     }
-    await queryClient.invalidateQueries({ queryKey: ["agents-prefs", activeProject.pathLabel] });
+    queryClient.setQueryData(["agents-prefs", normalizePath(scope)], prefs);
   };
 
   const handleResumeSession = async (session: SessionInfo) => {
@@ -2152,14 +2192,16 @@ function App() {
     agentsMdData: globalAgentsMdQuery.data,
     skillsData: globalAgentsSkillsQuery.data,
     commandsData: globalAgentsCommandsQuery.data,
+    skillsError: globalAgentsSkillsQuery.error ? resolveErrorMessage(globalAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined,
+    commandsError: globalAgentsCommandsQuery.error ? resolveErrorMessage(globalAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined,
     prefs: globalAgentsPrefs,
     isAgentsMdLoading: globalAgentsMdQuery.isFetching,
     isSkillsLoading: globalAgentsSkillsQuery.isFetching,
     isCommandsLoading: globalAgentsCommandsQuery.isFetching,
     isPrefsLoading: false,
     onRefreshAgentsMd: handleRefreshGlobalAgents,
-    onRefreshSkills: handleRefreshGlobalAgents,
-    onRefreshCommands: handleRefreshGlobalAgents,
+    onRefreshSkills: () => handleRefreshResource("skills", "global"),
+    onRefreshCommands: () => handleRefreshResource("commands", "global"),
     onPreviewSync: handlePreviewAgentsSync,
     onApplySync: handleApplyAgentsSync,
     onUpdatePrefs: async (prefs) => {
@@ -2171,7 +2213,9 @@ function App() {
     },
     mcpProviders: globalMcpConfigsQuery.data ?? [],
     mcpLoading: globalMcpConfigsQuery.isLoading,
-    onRefreshMcp: async () => { await globalMcpConfigsQuery.refetch(); },
+    mcpFetching: globalMcpConfigsQuery.isFetching,
+    mcpError: globalMcpConfigsQuery.error ? resolveErrorMessage(globalMcpConfigsQuery.error, t("toast.toolOpenFailed")) : undefined,
+    onRefreshMcp: () => handleRefreshResource("mcp", "global"),
     onActiveTabChange: setGlobalAgentsTab,
     onUpsertMcpServer: (provider, name, originalName, configJson) =>
       upsertMcpServerMutation.mutateAsync({ scope: { kind: "global" }, provider, name, originalName, configJson }),
@@ -2409,7 +2453,9 @@ function App() {
               openspecData={openspecQuery.data}
               agentsMdData={projectAgentsMdQuery.data}
               skillsData={projectAgentsSkillsQuery.data}
-              commandsData={projectAgentsCommandsQuery.data}
+               commandsData={projectAgentsCommandsQuery.data}
+               skillsError={projectAgentsSkillsQuery.error ? resolveErrorMessage(projectAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined}
+               commandsError={projectAgentsCommandsQuery.error ? resolveErrorMessage(projectAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined}
               projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
               plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
@@ -2423,8 +2469,8 @@ function App() {
               onWriteAgentsFile={handleWriteProjectAgentsFile}
               onRefreshPlansSpecs={handleRefreshPlansSpecs}
               onRefreshAgentsMd={handleRefreshProjectAgents}
-              onRefreshAgentsSkills={handleRefreshProjectAgents}
-              onRefreshAgentsCommands={handleRefreshProjectAgents}
+               onRefreshAgentsSkills={() => handleRefreshResource("skills", activeProject.pathLabel)}
+               onRefreshAgentsCommands={() => handleRefreshResource("commands", activeProject.pathLabel)}
               plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
               onOpenAgentsExternal={(path) => {
                 openPath(path).catch((error) => {
@@ -2440,8 +2486,10 @@ function App() {
               onApplyAgentsSync={handleApplyAgentsSync}
               onUpdateProjectAgentsPrefs={handleUpdateProjectAgentsPrefs}
               mcpProviders={projectMcpConfigsQuery.data ?? []}
-              mcpLoading={projectMcpConfigsQuery.isLoading}
-              onRefreshMcp={async () => { await projectMcpConfigsQuery.refetch(); }}
+               mcpLoading={projectMcpConfigsQuery.isLoading}
+               mcpFetching={projectMcpConfigsQuery.isFetching}
+               mcpError={projectMcpConfigsQuery.error ? resolveErrorMessage(projectMcpConfigsQuery.error, t("toast.toolOpenFailed")) : undefined}
+               onRefreshMcp={() => handleRefreshResource("mcp", activeProject.pathLabel)}
               onUpsertMcpServer={(provider, name, originalName, configJson) =>
                 upsertMcpServerMutation.mutateAsync({
                   scope: { kind: "project", projectCwd: activeProject.pathLabel },

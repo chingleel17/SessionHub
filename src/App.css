@@ -6694,6 +6694,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-size: 12px;
 }
 
+.agents-resource-diagnostic {
+  color: var(--color-text-secondary);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  overflow-wrap: anywhere;
+}
+
 .agents-skills-compat-note--withActions {
   display: flex;
   align-items: center;
