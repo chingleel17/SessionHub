@@ -2,7 +2,7 @@
 //!
 //! 為了可攜性與 KISS，Percentage 模式的數字採用內建 3x5 點陣手繪，不引入外部字型檔。
 
-use image::{load_from_memory, Rgba, RgbaImage};
+use image::{imageops::FilterType, load_from_memory, Rgba, RgbaImage};
 use tauri::{AppHandle, Manager};
 
 use crate::types::{AppSettings, QuotaCache, QuotaSnapshot, TrayQuotaMode};
@@ -12,6 +12,20 @@ pub(crate) const TRAY_ICON_ID: &str = "main-tray";
 
 /// 底圖：32x32 的 SessionHub icon（與 lib.rs 系統匣初始圖示同源）
 const BASE_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
+
+/// macOS template 底圖來源：高解析度原圖，執行期縮小並轉成單色 alpha mask
+const TEMPLATE_SOURCE_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
+
+/// template 畫布邊長（px）。繪製座標以 32px 為基準，乘上 `TEMPLATE_SIZE / 32`
+const TEMPLATE_SIZE: u32 = 64;
+
+/// macOS 以 template image 呈現選單列圖示，顏色交由系統依外觀與桌布亮度決定
+pub(crate) const USE_TEMPLATE_ICON: bool = cfg!(target_os = "macos");
+
+/// template 繪製用：不透明黑
+const TEMPLATE_INK: Rgba<u8> = Rgba([0, 0, 0, 255]);
+/// template 繪製用：全透明（挖空）
+const TEMPLATE_CLEAR: Rgba<u8> = Rgba([0, 0, 0, 0]);
 
 /// 綠：用量 < 50%
 const COLOR_OK: Rgba<u8> = Rgba([46, 204, 113, 255]);
@@ -28,6 +42,17 @@ fn quota_color(pct: f64) -> Rgba<u8> {
         COLOR_WARN
     } else {
         COLOR_OK
+    }
+}
+
+/// 用量三段等級：0 = <50%、1 = 50–80%、2 = >=80%（與 `quota_color` 門檻一致）
+fn quota_level(pct: f64) -> u8 {
+    if pct >= 0.8 {
+        2
+    } else if pct >= 0.5 {
+        1
+    } else {
+        0
     }
 }
 
@@ -157,11 +182,151 @@ fn draw_text_bottom(img: &mut RgbaImage, text: &str, scale: u32, color: Rgba<u8>
     }
 }
 
+/// 直接覆寫像素（不做 alpha 混合），template 繪製只會用到 `TEMPLATE_INK` 與 `TEMPLATE_CLEAR`
+fn set_rect(img: &mut RgbaImage, x0: u32, y0: u32, w: u32, h: u32, color: Rgba<u8>) {
+    for y in y0..(y0 + h).min(img.height()) {
+        for x in x0..(x0 + w).min(img.width()) {
+            img.put_pixel(x, y, color);
+        }
+    }
+}
+
+/// 直接覆寫圓形區域；`lower_half_only` 為 true 時只覆寫圓心以下（含圓心列）
+fn set_circle(
+    img: &mut RgbaImage,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: Rgba<u8>,
+    lower_half_only: bool,
+) {
+    let start = if lower_half_only { 0 } else { -radius };
+    for dy in start..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let (x, y) = (cx + dx, cy + dy);
+            if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() {
+                img.put_pixel(x as u32, y as u32, color);
+            }
+        }
+    }
+}
+
+/// 產生 macOS template 底圖：品牌圖示縮小後轉成純黑 + alpha 的單色 mask。
+///
+/// 原圖為深色底、白色字母；深色區域轉為不透明、白色字母挖空，
+/// 使系統著色後字母以透明鏤空呈現。
+fn template_base_icon() -> RgbaImage {
+    let Ok(source) = load_from_memory(TEMPLATE_SOURCE_BYTES) else {
+        return RgbaImage::from_pixel(TEMPLATE_SIZE, TEMPLATE_SIZE, TEMPLATE_CLEAR);
+    };
+    let mut img = image::imageops::resize(
+        &source.to_rgba8(),
+        TEMPLATE_SIZE,
+        TEMPLATE_SIZE,
+        FilterType::Lanczos3,
+    );
+    for pixel in img.pixels_mut() {
+        let [r, g, b, a] = pixel.0;
+        let luma = (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64) / 255.0;
+        // 亮度 <0.35 視為實心、>0.65 視為挖空，中間線性過渡以保留抗鋸齒邊緣
+        let ink = ((0.65 - luma) / 0.30).clamp(0.0, 1.0);
+        let alpha = (ink * a as f64).round() as u8;
+        *pixel = Rgba([0, 0, 0, alpha]);
+    }
+    img
+}
+
+/// macOS template 繪製：輸出只含黑色與透明。
+///
+/// - `IconOnly`：右下角圓環，內部以空心／半實／實心表示三段用量
+/// - `Bar`：品牌圖示下方一條單色進度條
+/// - `Percentage`：僅繪製置中的數字（小尺寸下與圖示疊合難以辨識）
+fn render_template_icon(pct: f64, mode: TrayQuotaMode) -> RgbaImage {
+    let clamped = pct.clamp(0.0, 1.0);
+    let scale = TEMPLATE_SIZE / 32;
+    let s = scale as i32;
+    let (w, h) = (TEMPLATE_SIZE, TEMPLATE_SIZE);
+
+    match mode {
+        TrayQuotaMode::Hidden => template_base_icon(),
+        TrayQuotaMode::IconOnly => {
+            let mut img = template_base_icon();
+            let (cx, cy) = (w as i32 - 8 * s, h as i32 - 8 * s);
+            set_circle(&mut img, cx, cy, 7 * s, TEMPLATE_CLEAR, false);
+            set_circle(&mut img, cx, cy, 5 * s, TEMPLATE_INK, false);
+            set_circle(&mut img, cx, cy, 3 * s, TEMPLATE_CLEAR, false);
+            match quota_level(clamped) {
+                0 => {}
+                1 => set_circle(&mut img, cx, cy, 3 * s, TEMPLATE_INK, true),
+                _ => set_circle(&mut img, cx, cy, 3 * s, TEMPLATE_INK, false),
+            }
+            img
+        }
+        TrayQuotaMode::Bar => {
+            let mut img = template_base_icon();
+            // 清出底部帶狀區域，避免進度條與實心底圖黏在一起
+            set_rect(&mut img, 0, h - 9 * scale, w, 9 * scale, TEMPLATE_CLEAR);
+            let (x0, y0) = (2 * scale, h - 7 * scale);
+            let (outer_w, outer_h, border) = (w - 4 * scale, 6 * scale, scale);
+            set_rect(&mut img, x0, y0, outer_w, outer_h, TEMPLATE_INK);
+            let (inner_w, inner_h) = (outer_w - 2 * border, outer_h - 2 * border);
+            set_rect(&mut img, x0 + border, y0 + border, inner_w, inner_h, TEMPLATE_CLEAR);
+            let fill_w = (inner_w as f64 * clamped).round() as u32;
+            set_rect(&mut img, x0 + border, y0 + border, fill_w, inner_h, TEMPLATE_INK);
+            img
+        }
+        TrayQuotaMode::Percentage => {
+            let mut img = RgbaImage::from_pixel(w, h, TEMPLATE_CLEAR);
+            let pct_int = (clamped * 100.0).round() as u32;
+            let text = if pct_int >= 100 {
+                "99".to_string()
+            } else {
+                format!("{pct_int}")
+            };
+            let glyph_scale = 3 * scale;
+            let count = text.chars().count() as u32;
+            let total_w = count * 3 * glyph_scale + (count - 1) * glyph_scale;
+            let x0 = w.saturating_sub(total_w) / 2;
+            let y0 = h.saturating_sub(5 * glyph_scale) / 2;
+            for (i, ch) in text.chars().enumerate() {
+                let x = x0 + i as u32 * 4 * glyph_scale;
+                draw_glyph(&mut img, ch, x, y0, glyph_scale, TEMPLATE_INK);
+            }
+            img
+        }
+    }
+}
+
+/// 將 RGBA buffer 編碼為 PNG
+fn encode_png(img: RgbaImage) -> Option<Vec<u8>> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .ok()?;
+    Some(out.into_inner())
+}
+
+/// 目前平台的系統匣底圖 PNG（macOS 為單色 template、其他平台為彩色原圖）
+pub(crate) fn tray_base_png() -> Vec<u8> {
+    if USE_TEMPLATE_ICON {
+        if let Some(bytes) = encode_png(template_base_icon()) {
+            return bytes;
+        }
+    }
+    BASE_ICON_BYTES.to_vec()
+}
+
 /// 依 quota 用量與模式繪製系統匣圖示，回傳 PNG 位元組。
 ///
 /// - `pct`：主要 provider 的用量比例（0.0–1.0）
 /// - `mode`：顯示模式
 pub(crate) fn render_tray_icon_png(pct: f64, mode: TrayQuotaMode) -> Vec<u8> {
+    if USE_TEMPLATE_ICON {
+        return encode_png(render_template_icon(pct, mode)).unwrap_or_else(tray_base_png);
+    }
     let clamped = pct.clamp(0.0, 1.0);
     let mut img = base_icon();
     let color = quota_color(clamped);
@@ -199,15 +364,7 @@ pub(crate) fn render_tray_icon_png(pct: f64, mode: TrayQuotaMode) -> Vec<u8> {
         }
     }
 
-    let mut out = std::io::Cursor::new(Vec::new());
-    if image::DynamicImage::ImageRgba8(img)
-        .write_to(&mut out, image::ImageFormat::Png)
-        .is_ok()
-    {
-        out.into_inner()
-    } else {
-        BASE_ICON_BYTES.to_vec()
-    }
+    encode_png(img).unwrap_or_else(|| BASE_ICON_BYTES.to_vec())
 }
 
 /// provider 內部 key → 顯示名稱
@@ -303,13 +460,14 @@ pub(crate) fn update_tray_from_cache(app: &AppHandle, settings: &AppSettings) {
     let pct = compute_primary_pct(&snapshots, settings.tray_quota_primary_provider.as_deref());
 
     let png = if hidden {
-        BASE_ICON_BYTES.to_vec()
+        tray_base_png()
     } else {
         render_tray_icon_png(pct, settings.tray_quota_mode)
     };
 
     if let Ok(image) = tauri::image::Image::from_bytes(&png) {
-        let _ = tray.set_icon(Some(image));
+        // macOS 需與 icon 一併設定 template 狀態，分開呼叫會造成閃爍
+        let _ = tray.set_icon_with_as_template(Some(image), USE_TEMPLATE_ICON);
     }
 
     if hidden {
@@ -415,5 +573,86 @@ mod tests {
         let under = render_tray_icon_png(-0.3, TrayQuotaMode::Bar);
         assert!(!over.is_empty());
         assert!(!under.is_empty());
+    }
+
+    fn assert_template_pixels(img: &RgbaImage) {
+        for p in img.pixels() {
+            assert_eq!(&p.0[0..3], &[0, 0, 0], "template 像素 RGB 必須為黑色");
+        }
+    }
+
+    fn count_opaque(img: &RgbaImage) -> usize {
+        img.pixels().filter(|p| p.0[3] > 0).count()
+    }
+
+    #[test]
+    fn quota_level_thresholds() {
+        assert_eq!(quota_level(0.0), 0);
+        assert_eq!(quota_level(0.49), 0);
+        assert_eq!(quota_level(0.5), 1);
+        assert_eq!(quota_level(0.79), 1);
+        assert_eq!(quota_level(0.8), 2);
+        assert_eq!(quota_level(1.0), 2);
+    }
+
+    #[test]
+    fn template_base_is_black_with_transparent_letter() {
+        let img = template_base_icon();
+        assert_eq!(img.dimensions(), (TEMPLATE_SIZE, TEMPLATE_SIZE));
+        assert_template_pixels(&img);
+        // 中心的字母挖空、字母外的圖示主體為實心
+        let center = img.get_pixel(TEMPLATE_SIZE / 2, TEMPLATE_SIZE / 2).0[3];
+        let body = img.get_pixel(TEMPLATE_SIZE / 2, 6).0[3];
+        assert!(body > 200, "圖示主體應為實心，實際 alpha={body}");
+        assert!(center < 255, "字母區域應被挖空");
+    }
+
+    #[test]
+    fn template_icon_only_uses_three_distinct_fill_levels() {
+        let low = render_template_icon(0.3, TrayQuotaMode::IconOnly);
+        let mid = render_template_icon(0.65, TrayQuotaMode::IconOnly);
+        let high = render_template_icon(0.9, TrayQuotaMode::IconOnly);
+        for img in [&low, &mid, &high] {
+            assert_template_pixels(img);
+        }
+        let (a, b, c) = (count_opaque(&low), count_opaque(&mid), count_opaque(&high));
+        assert!(a < b && b < c, "填充量需隨等級遞增：{a} < {b} < {c}");
+        // 門檻邊界：0.49 與 0.5、0.79 與 0.8 必須落在不同等級
+        assert_eq!(
+            render_template_icon(0.49, TrayQuotaMode::IconOnly),
+            low
+        );
+        assert_ne!(
+            render_template_icon(0.49, TrayQuotaMode::IconOnly),
+            render_template_icon(0.5, TrayQuotaMode::IconOnly)
+        );
+        assert_ne!(
+            render_template_icon(0.79, TrayQuotaMode::IconOnly),
+            render_template_icon(0.8, TrayQuotaMode::IconOnly)
+        );
+    }
+
+    #[test]
+    fn template_bar_and_percentage_are_monochrome() {
+        for pct in [0.0, 0.42, 1.0] {
+            assert_template_pixels(&render_template_icon(pct, TrayQuotaMode::Bar));
+            assert_template_pixels(&render_template_icon(pct, TrayQuotaMode::Percentage));
+        }
+        let empty = count_opaque(&render_template_icon(0.0, TrayQuotaMode::Bar));
+        let full = count_opaque(&render_template_icon(1.0, TrayQuotaMode::Bar));
+        assert!(full > empty, "進度條填滿時不透明像素應較多");
+    }
+
+    #[test]
+    fn non_template_platforms_keep_colored_output() {
+        if USE_TEMPLATE_ICON {
+            return;
+        }
+        let png = render_tray_icon_png(0.9, TrayQuotaMode::IconOnly);
+        let img = load_from_memory(&png).expect("valid png").to_rgba8();
+        assert!(
+            img.pixels().any(|p| p.0 == COLOR_DANGER.0),
+            "非 macOS 平台仍須輸出紅色圓點"
+        );
     }
 }

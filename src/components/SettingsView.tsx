@@ -602,7 +602,7 @@ export function SettingsView({
                           type="checkbox"
                           className="provider-integration-enabled"
                           aria-label={providerLabel}
-                          checked={settingsForm.enabledProviders.includes(integration.provider)}
+                          checked={providerAvailable && settingsForm.enabledProviders.includes(integration.provider)}
                           disabled={!providerAvailable}
                           onClick={(event) => event.stopPropagation()}
                           onChange={(event) => {
@@ -808,7 +808,7 @@ export function SettingsView({
                       >
                         <input
                           type="checkbox"
-                          checked={checked}
+                          checked={providerAvailable && checked}
                           disabled={!providerAvailable}
                           onChange={(event) => {
                             const next = event.currentTarget.checked
@@ -968,6 +968,68 @@ export function SettingsView({
                       <option value="compact">{t("quota.settings.overlayStyle.compact")}</option>
                     </Select>
                   </div>
+
+                  <label className="checkbox-group">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.quotaOverlayInterventionEnabled ?? true}
+                      onChange={(event) =>
+                        onFormChange({ ...settingsForm, quotaOverlayInterventionEnabled: event.currentTarget.checked })
+                      }
+                    />
+                    <span>
+                      {t("quota.settings.overlayIntervention")}
+                      <small className="settings-field-desc">{t("quota.settings.overlayInterventionDesc")}</small>
+                    </span>
+                  </label>
+
+                  {(settingsForm.quotaOverlayInterventionEnabled ?? true) ? (
+                    <>
+                      <div className="settings-field settings-field--stacked">
+                        <label htmlFor="quota-overlay-intervention-style-select">
+                          {t("quota.settings.overlayInterventionStyle")}
+                        </label>
+                        <Select
+                          id="quota-overlay-intervention-style-select"
+                          className="settings-select"
+                          value={settingsForm.quotaOverlayInterventionStyle ?? "cards"}
+                          onChange={(event) =>
+                            onFormChange({
+                              ...settingsForm,
+                              quotaOverlayInterventionStyle: event.currentTarget
+                                .value as AppSettings["quotaOverlayInterventionStyle"],
+                            })
+                          }
+                        >
+                          <option value="cards">{t("quota.settings.overlayInterventionStyle.cards")}</option>
+                          <option value="indicator">{t("quota.settings.overlayInterventionStyle.indicator")}</option>
+                        </Select>
+                      </div>
+
+                      {(settingsForm.quotaOverlayInterventionStyle ?? "cards") === "indicator" ? (
+                        <div className="settings-field settings-field--stacked">
+                          <label htmlFor="quota-overlay-indicator-side-select">
+                            {t("quota.settings.overlayIndicatorSide")}
+                          </label>
+                          <Select
+                            id="quota-overlay-indicator-side-select"
+                            className="settings-select"
+                            value={settingsForm.quotaOverlayIndicatorSide ?? "left"}
+                            onChange={(event) =>
+                              onFormChange({
+                                ...settingsForm,
+                                quotaOverlayIndicatorSide: event.currentTarget
+                                  .value as AppSettings["quotaOverlayIndicatorSide"],
+                              })
+                            }
+                          >
+                            <option value="left">{t("quota.settings.overlayIndicatorSide.left")}</option>
+                            <option value="right">{t("quota.settings.overlayIndicatorSide.right")}</option>
+                          </Select>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
 
                   <div className="settings-field settings-field--stacked">
                     <label>{t("quota.settings.overlayProviders")}</label>

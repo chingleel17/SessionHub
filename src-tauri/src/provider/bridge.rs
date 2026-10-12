@@ -369,20 +369,23 @@ fn sync_intervention_registry(
         return;
     };
     let registry = app.state::<InterventionRegistry>();
-    let changed = if status == "waiting" {
-        let project_name = derive_project_name(cwd, Some(session_id), provider);
-        registry.upsert(
-            session_id,
-            project_name,
-            tool_label,
-            current_timestamp_iso(),
-        )
-    } else {
-        registry.remove(session_id)
+    let (changed, active_changed) = match status {
+        "waiting" => {
+            let project_name = derive_project_name(cwd, Some(session_id), provider);
+            (
+                registry.upsert(session_id, project_name, tool_label, current_timestamp_iso()),
+                registry.clear_active(session_id),
+            )
+        }
+        "active" => (registry.remove(session_id), registry.mark_active(session_id)),
+        _ => (registry.remove(session_id), registry.clear_active(session_id)),
     };
     // 僅在清單確有變動時廣播，避免每個 tool.pre 對已離開 waiting 的 session 重複 emit
     if let Some(items) = changed {
         crate::emit_intervention_list_changed(app, &items);
+    }
+    if active_changed {
+        crate::emit_active_session_count_changed(app, registry.active_count());
     }
 }
 

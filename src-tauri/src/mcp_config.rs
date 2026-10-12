@@ -112,8 +112,7 @@ pub(crate) fn mcp_config_path(provider: &str, scope: &McpScope) -> Result<PathBu
             let settings = load_mcp_settings()?;
             match provider {
                 CLAUDE_PROVIDER => {
-                    let user_profile = std::env::var("USERPROFILE")
-                        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+                    let user_profile = crate::settings::user_profile_env()?;
                     Ok(PathBuf::from(user_profile).join(".claude.json"))
                 }
                 CODEX_PROVIDER => {

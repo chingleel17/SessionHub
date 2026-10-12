@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quota-overlay",
+  "description": "Capability for the quota overlay window (drag, resize and reposition)",
+  "windows": ["quota-overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position"
+  ]
+}

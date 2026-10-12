@@ -22,7 +22,7 @@ use crate::types::*;
 use crate::watcher::watch_project_files_internal;
 
 fn which_exists(cmd: &str) -> bool {
-    let mut c = std::process::Command::new("where");
+    let mut c = std::process::Command::new(crate::settings::PATH_LOOKUP_COMMAND);
     c.arg(cmd)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

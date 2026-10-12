@@ -211,8 +211,9 @@ pub(crate) fn spawn_quota_poller_thread(app_handle: tauri::AppHandle) {
 
 /// 建立系統匣圖示、選單與事件綁定。
 pub(crate) fn build_tray_icon(app: &tauri::App) -> tauri::Result<()> {
-    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok();
-    let mut tray_builder = tauri::tray::TrayIconBuilder::with_id(crate::tray_icon::TRAY_ICON_ID);
+    let tray_icon = tauri::image::Image::from_bytes(&crate::tray_icon::tray_base_png()).ok();
+    let mut tray_builder = tauri::tray::TrayIconBuilder::with_id(crate::tray_icon::TRAY_ICON_ID)
+        .icon_as_template(crate::tray_icon::USE_TEMPLATE_ICON);
     if let Some(icon) = tray_icon {
         tray_builder = tray_builder.icon(icon);
     }

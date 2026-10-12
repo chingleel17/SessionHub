@@ -22,12 +22,13 @@ export function EmbeddedQuotaOverlayApp() {
     staleTime: 60_000,
     refetchInterval: 15_000,
   });
-  const interventionListQuery = useQuery({
-    queryKey: ["embedded_intervention_list", "quota_overlay"],
-    queryFn: () => invoke<InterventionItem[]>("get_intervention_list"),
-    staleTime: 60_000,
-    // Tauri listener 註冊期間可能漏掉狀態切換事件；定期向記憶體 registry 對帳以清除舊提醒。
-    refetchInterval: 5_000,
+  // 等待處理清單與處理中數量由後端合併 hook 事件與 herdr 偵測狀態後回傳（herdr 認得的 session 以它為準）。
+  // 事件只用來觸發立即重新對帳；herdr 狀態沒有事件可訂閱，因此也定期輪詢。
+  const activityQuery = useQuery({
+    queryKey: ["embedded_overlay_activity", "quota_overlay"],
+    queryFn: () => invoke<{ items: InterventionItem[]; activeCount: number }>("get_overlay_activity"),
+    staleTime: 1_000,
+    refetchInterval: 3_000,
   });
 
   useEffect(() => {
@@ -56,16 +57,15 @@ export function EmbeddedQuotaOverlayApp() {
           );
         }
       });
-      const unlistenInterventionList = await listen<InterventionItem[]>(
-        "intervention-list-changed",
-        (event) => {
-          if (mounted) {
-            queryClient.setQueryData(["embedded_intervention_list", "quota_overlay"], event.payload);
-          }
-        },
-      );
+      const refetchActivity = () => {
+        if (mounted) {
+          void queryClient.invalidateQueries({ queryKey: ["embedded_overlay_activity", "quota_overlay"] });
+        }
+      };
+      const unlistenInterventionList = await listen("intervention-list-changed", refetchActivity);
+      const unlistenActiveCount = await listen("active-session-count-changed", refetchActivity);
       if (mounted) {
-        await queryClient.refetchQueries({ queryKey: ["embedded_intervention_list", "quota_overlay"] });
+        await queryClient.refetchQueries({ queryKey: ["embedded_overlay_activity", "quota_overlay"] });
       }
 
       return () => {
@@ -73,6 +73,7 @@ export function EmbeddedQuotaOverlayApp() {
         unlistenSettings();
         unlistenLock();
         unlistenInterventionList();
+        unlistenActiveCount();
       };
     };
 
@@ -99,8 +100,11 @@ export function EmbeddedQuotaOverlayApp() {
       locked={settings?.quotaOverlayLocked ?? true}
       theme={settings?.quotaOverlayTheme ?? "dark"}
       styleMode={settings?.quotaOverlayStyle ?? "compact"}
-      interventionItems={interventionListQuery.data ?? []}
-      interventionEnabled={settings?.enableInterventionNotification ?? true}
+      interventionItems={activityQuery.data?.items ?? []}
+      interventionEnabled={settings?.quotaOverlayInterventionEnabled ?? true}
+      interventionStyle={settings?.quotaOverlayInterventionStyle ?? "cards"}
+      indicatorSide={settings?.quotaOverlayIndicatorSide ?? "left"}
+      activeSessionCount={activityQuery.data?.activeCount ?? 0}
       onInterventionCardClick={(sessionId) => {
         void emit("intervention-focus-session", sessionId);
       }}

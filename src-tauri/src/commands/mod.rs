@@ -1,3 +1,4 @@
+pub mod activity_snapshot;
 pub mod agents_config;
 pub mod analytics;
 pub mod mcp_config;
@@ -10,6 +11,7 @@ pub mod sessions;
 pub mod settings;
 pub mod tools;
 
+pub(crate) use activity_snapshot::*;
 pub(crate) use agents_config::*;
 pub(crate) use analytics::*;
 pub(crate) use mcp_config::*;
@@ -91,6 +93,9 @@ pub(super) fn restart_provider_watchers_after_integration_change(
         quota_overlay_providers: Vec::new(),
         quota_overlay_theme: crate::types::OverlayTheme::default(),
         quota_overlay_style: crate::types::OverlayStyle::default(),
+        quota_overlay_intervention_enabled: true,
+        quota_overlay_intervention_style: crate::types::OverlayInterventionStyle::default(),
+        quota_overlay_indicator_side: crate::types::OverlayIndicatorSide::default(),
     });
 
     let copilot_root = copilot_root_override.unwrap_or(settings.copilot_root.as_str());

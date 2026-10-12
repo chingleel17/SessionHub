@@ -87,8 +87,7 @@ fn read_codex_credentials(codex_root: &str) -> Result<CodexCredentials, String> 
     } else if let Ok(codex_home) = env::var("CODEX_HOME") {
         std::path::PathBuf::from(codex_home.trim()).join("auth.json")
     } else {
-        let user_profile =
-            env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())?;
+        let user_profile = crate::settings::user_profile_env()?;
         std::path::PathBuf::from(user_profile)
             .join(".codex")
             .join("auth.json")
@@ -131,6 +130,48 @@ fn read_codex_credentials(codex_root: &str) -> Result<CodexCredentials, String> 
     }
 
     Err("no access_token found in auth.json".to_string())
+}
+
+/// OpenCode 以 OpenAI（ChatGPT）OAuth 登入時，憑證存在 `<opencode_root>/auth.json` 的 `openai` 項目，
+/// 與 Codex 使用同一套 ChatGPT token，可作為 Codex 用量的備援來源（唯讀，不做 token 更新）。
+fn read_opencode_openai_credentials(opencode_root: &str) -> Result<CodexCredentials, String> {
+    let root = if opencode_root.trim().is_empty() {
+        crate::settings::default_opencode_root()?
+    } else {
+        std::path::PathBuf::from(opencode_root.trim())
+    };
+    let auth_path = root.join("auth.json");
+    let content = std::fs::read_to_string(&auth_path)
+        .map_err(|e| format!("failed to read {}: {e}", auth_path.display()))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse {}: {e}", auth_path.display()))?;
+    let openai = json
+        .get("openai")
+        .filter(|entry| entry.get("type").and_then(|v| v.as_str()) == Some("oauth"))
+        .ok_or_else(|| format!("no OpenAI OAuth entry in {}", auth_path.display()))?;
+    let access_token = openai
+        .get("access")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| "OpenCode OpenAI entry has no access token".to_string())?
+        .to_string();
+    if let Some(expires_ms) = openai.get("expires").and_then(|v| v.as_i64()) {
+        if chrono::Utc::now().timestamp_millis() >= expires_ms {
+            return Err("OpenCode 的 OpenAI token 已過期，請在 OpenCode 中使用一次以自動更新".to_string());
+        }
+    }
+    Ok(CodexCredentials {
+        access_token,
+        account_id: openai
+            .get("accountId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    })
+}
+
+/// OpenCode 是否已用 OpenAI OAuth 授權（用於決定 Codex 用量監控的預設值）。
+pub(crate) fn opencode_has_openai_oauth(opencode_root: &str) -> bool {
+    read_opencode_openai_credentials(opencode_root).is_ok()
 }
 
 fn resolve_window_seconds(obj: &serde_json::Value, now_timestamp: i64) -> Option<i64> {
@@ -354,7 +395,14 @@ impl QuotaAdapter for CodexAdapter {
     fn fetch_snapshot(&self, settings: &AppSettings) -> QuotaSnapshot {
         let creds = match read_codex_credentials(&settings.codex_root) {
             Ok(c) => c,
-            Err(e) => return no_auth_snapshot(format!("無法讀取 Codex 憑證: {e}")),
+            Err(codex_error) => match read_opencode_openai_credentials(&settings.opencode_root) {
+                Ok(c) => c,
+                Err(opencode_error) => {
+                    return no_auth_snapshot(format!(
+                        "無法讀取 Codex 憑證: {codex_error}（OpenCode OpenAI 授權備援：{opencode_error}）"
+                    ))
+                }
+            },
         };
 
         let mut request = http::get("https://chatgpt.com/backend-api/wham/usage", None)
@@ -685,11 +733,38 @@ mod tests {
             quota_overlay_providers: Vec::new(),
             quota_overlay_theme: crate::types::OverlayTheme::default(),
             quota_overlay_style: crate::types::OverlayStyle::default(),
+            quota_overlay_intervention_enabled: true,
+            quota_overlay_intervention_style: crate::types::OverlayInterventionStyle::default(),
+            quota_overlay_indicator_side: crate::types::OverlayIndicatorSide::default(),
         };
 
         let adapter = CodexAdapter;
         let snapshot = adapter.fetch_snapshot(&settings);
         assert_eq!(snapshot.status, "no_auth");
         assert_eq!(snapshot.provider, "codex");
+    }
+
+    #[test]
+    fn opencode_openai_oauth_is_used_as_codex_fallback() {
+        let dir = std::env::temp_dir().join(format!("sessionhub-oc-auth-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let future_ms = chrono::Utc::now().timestamp_millis() + 3_600_000;
+        std::fs::write(
+            dir.join("auth.json"),
+            json!({"openai": {"type": "oauth", "access": "tok", "refresh": "r", "expires": future_ms, "accountId": "acc"}})
+                .to_string(),
+        )
+        .unwrap();
+        let creds = read_opencode_openai_credentials(dir.to_str().unwrap()).unwrap();
+        assert_eq!(creds.access_token, "tok");
+        assert_eq!(creds.account_id.as_deref(), Some("acc"));
+
+        std::fs::write(
+            dir.join("auth.json"),
+            json!({"openai": {"type": "oauth", "access": "tok", "expires": 1}}).to_string(),
+        )
+        .unwrap();
+        assert!(read_opencode_openai_credentials(dir.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

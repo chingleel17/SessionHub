@@ -90,6 +90,25 @@ bun run tauri build
 
 輸出位於 `src-tauri/target/release/bundle/`。
 
+### macOS 建置（實驗性）
+
+macOS 圖示風格與原生 widget 需要完整的 Xcode（僅 Command Line Tools 不足）：
+
+```bash
+# 確認 actool 可用；若失敗，Xcode 未被選為目前的開發者目錄
+xcrun --find actool
+
+# 方式一：切換系統預設（需 sudo）
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+# 方式二：只對本次建置生效
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer bun run tauri build
+```
+
+- 一鍵打包用 `scripts/macos-package.sh`（加 `--install` 覆蓋安裝到 /Applications），內部會呼叫 `scripts/macos-inject-icon.sh`：把 `src-tauri/icons/macos/AppIcon.icon` 編譯為 `Assets.car`、寫入 `CFBundleIconName` 並重簽（預設 ad-hoc，可用 `CODESIGN_IDENTITY` 指定身分）。
+- 選單列圖示在 macOS 上為 template image（單色），由系統依淺色／深色外觀著色；用量等級以填充程度而非顏色呈現。
+- Dock 圖示的圖示風格（深色、clear／tinted）**只在打包後的 `.app` 生效**，`bun run tauri dev` 的未簽章 binary 不會套用。
+- 活動快照 `activity-snapshot.json` 優先寫入 App Group 容器（`~/Library/Group Containers/group.com.ching.sessionhub/`）；容器不存在時退回 App 資料目錄。
+
 ## 快速開始
 
 1. 開啟「設定」，啟用要管理的 provider 並確認資料根目錄。

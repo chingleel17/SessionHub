@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +27,13 @@ pub(crate) struct InterventionItem {
 #[derive(Default)]
 pub(crate) struct InterventionRegistry {
     items: Mutex<HashMap<String, InterventionItem>>,
+    /// 處理中（`active`）的 session 與最後一次收到活動事件的時間，供 overlay 狀態燈使用。
+    active: Mutex<HashMap<String, Instant>>,
 }
+
+/// 處理中狀態的存活時間：超過此時間沒有任何事件視為已結束（例如被中斷而未送出 stop 事件），
+/// 避免狀態燈永遠停在黃燈。
+const ACTIVE_TTL: Duration = Duration::from_secs(15 * 60);
 
 impl InterventionRegistry {
     /// 將 session 加入或更新為 waiting 狀態，回傳目前完整清單快照。
@@ -67,6 +74,44 @@ impl InterventionRegistry {
         }
     }
 
+    /// 標記 session 為處理中（或刷新時間）；僅在「新加入」時回傳 true，避免每個事件都廣播。
+    pub(crate) fn mark_active(&self, session_id: &str) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let was_live = active
+            .get(session_id)
+            .is_some_and(|seen| now.duration_since(*seen) < ACTIVE_TTL);
+        active.insert(session_id.to_string(), now);
+        !was_live
+    }
+
+    /// 移除處理中標記；確有移除時回傳 true。
+    pub(crate) fn clear_active(&self, session_id: &str) -> bool {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        active.remove(session_id).is_some()
+    }
+
+    /// 目前處理中的 session id（排除超過存活時間者）。
+    pub(crate) fn active_ids(&self) -> Vec<String> {
+        let active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        active
+            .iter()
+            .filter(|(_, seen)| now.duration_since(**seen) < ACTIVE_TTL)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// 目前處理中的 session 數（排除超過存活時間者）。
+    pub(crate) fn active_count(&self) -> usize {
+        let active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        active
+            .values()
+            .filter(|seen| now.duration_since(**seen) < ACTIVE_TTL)
+            .count()
+    }
+
     /// 取得目前完整清單快照，供初次查詢 command 使用。
     pub(crate) fn snapshot(&self) -> Vec<InterventionItem> {
         let items = self.items.lock().unwrap_or_else(|e| e.into_inner());
@@ -83,6 +128,18 @@ impl InterventionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_tracking_counts_and_clears_sessions() {
+        let registry = InterventionRegistry::default();
+        assert!(registry.mark_active("s1"));
+        assert!(!registry.mark_active("s1"), "refresh must not report change");
+        assert!(registry.mark_active("s2"));
+        assert_eq!(registry.active_count(), 2);
+        assert!(registry.clear_active("s1"));
+        assert!(!registry.clear_active("s1"));
+        assert_eq!(registry.active_count(), 1);
+    }
 
     #[test]
     fn upsert_adds_new_item_and_returns_snapshot() {

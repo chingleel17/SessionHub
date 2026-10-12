@@ -85,6 +85,28 @@ pub(crate) enum OverlayStyle {
     Compact,
 }
 
+/// overlay 上「等待介入」的呈現方式：卡片列表，或邊緣的紅黃綠狀態燈
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayInterventionStyle {
+    #[default]
+    Cards,
+    Indicator,
+}
+
+/// 狀態燈樣式時，燈號放在 overlay 的哪一側
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OverlayIndicatorSide {
+    #[default]
+    Left,
+    Right,
+}
+
+pub(crate) fn default_overlay_intervention_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppSettings {
@@ -157,6 +179,13 @@ pub(crate) struct AppSettings {
     pub(crate) quota_overlay_theme: OverlayTheme,
     #[serde(default)]
     pub(crate) quota_overlay_style: OverlayStyle,
+    /// overlay 是否顯示等待介入提示（與系統通知開關 `enable_intervention_notification` 分開）
+    #[serde(default = "default_overlay_intervention_enabled")]
+    pub(crate) quota_overlay_intervention_enabled: bool,
+    #[serde(default)]
+    pub(crate) quota_overlay_intervention_style: OverlayInterventionStyle,
+    #[serde(default)]
+    pub(crate) quota_overlay_indicator_side: OverlayIndicatorSide,
 }
 
 pub(crate) fn default_analytics_refresh_interval() -> u32 {

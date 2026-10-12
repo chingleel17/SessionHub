@@ -19,8 +19,14 @@ pub(crate) fn resolve_terminal_launcher(value: Option<&str>) -> &'static str {
     }
 }
 
+/// 在 PATH 上查找執行檔的系統指令（Windows: where；其他平台: which）。
+#[cfg(target_os = "windows")]
+pub(crate) const PATH_LOOKUP_COMMAND: &str = "where";
+#[cfg(not(target_os = "windows"))]
+pub(crate) const PATH_LOOKUP_COMMAND: &str = "which";
+
 pub(crate) fn command_exists_on_path(command: &str) -> bool {
-    let mut process = Command::new("where");
+    let mut process = Command::new(PATH_LOOKUP_COMMAND);
     process
         .arg(command)
         .stdout(std::process::Stdio::null())
@@ -34,7 +40,7 @@ pub(crate) fn command_exists_on_path(command: &str) -> bool {
 }
 
 fn command_path_on_path(command: &str) -> Option<PathBuf> {
-    let mut process = Command::new("where");
+    let mut process = Command::new(PATH_LOOKUP_COMMAND);
     process.arg(command);
     #[cfg(target_os = "windows")]
     process.creation_flags(CREATE_NO_WINDOW);
@@ -83,7 +89,7 @@ pub(crate) fn resolve_herdr_executable() -> Option<PathBuf> {
     command_path_on_path("herdr").or_else(|| {
         herdr_standard_install_paths(
             env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            env::var_os("USERPROFILE").map(PathBuf::from),
+            user_profile_env().ok().map(PathBuf::from),
         )
         .into_iter()
         .find(|path| path.is_file())
@@ -91,15 +97,13 @@ pub(crate) fn resolve_herdr_executable() -> Option<PathBuf> {
 }
 
 pub(crate) fn default_copilot_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile).join(".copilot"))
 }
 
 pub(crate) fn default_opencode_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile)
         .join(".local")
@@ -108,15 +112,13 @@ pub(crate) fn default_opencode_root() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn default_codex_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile).join(".codex"))
 }
 
 pub(crate) fn default_claude_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile).join(".claude"))
 }
@@ -129,8 +131,7 @@ pub(crate) fn resolve_claude_root(root_dir: Option<&str>) -> Result<PathBuf, Str
 }
 
 pub(crate) fn default_antigravity_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile).join(".gemini"))
 }
@@ -143,8 +144,7 @@ pub(crate) fn resolve_antigravity_root(root_dir: Option<&str>) -> Result<PathBuf
 }
 
 pub(crate) fn default_agents_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
     Ok(PathBuf::from(user_profile).join(".agents"))
 }
 
@@ -185,10 +185,21 @@ pub(crate) fn resolve_effective_hook_scripts_root(
 }
 
 pub(crate) fn default_opencode_config_root() -> Result<PathBuf, String> {
-    let user_profile = env::var("USERPROFILE")
-        .map_err(|_| "USERPROFILE environment variable is not set".to_string())?;
+    let user_profile = user_profile_env()?;
 
     Ok(PathBuf::from(user_profile).join(".config").join("opencode"))
+}
+
+/// 使用者家目錄：Windows 用 USERPROFILE；其他平台（開發用）退回 HOME。
+pub(crate) fn user_profile_env() -> Result<String, String> {
+    if let Ok(value) = env::var("USERPROFILE") {
+        return Ok(value);
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Ok(value) = env::var("HOME") {
+        return Ok(value);
+    }
+    Err("USERPROFILE environment variable is not set".to_string())
 }
 
 pub(crate) fn default_app_data_dir() -> Result<PathBuf, String> {
@@ -196,10 +207,27 @@ pub(crate) fn default_app_data_dir() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(override_dir).join("SessionHub"));
     }
 
-    let app_data =
-        env::var("APPDATA").map_err(|_| "APPDATA environment variable is not set".to_string())?;
+    if let Ok(app_data) = env::var("APPDATA") {
+        return Ok(PathBuf::from(app_data).join("SessionHub"));
+    }
 
-    Ok(PathBuf::from(app_data).join("SessionHub"))
+    // 非 Windows（開發用）：退回 ~/Library/Application Support 或 XDG 路徑
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = env::var("HOME") {
+        return Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("SessionHub"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Ok(home) = env::var("HOME") {
+        return Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("SessionHub"));
+    }
+
+    Err("APPDATA environment variable is not set".to_string())
 }
 
 pub(crate) fn resolve_copilot_root(root_dir: Option<&str>) -> Result<PathBuf, String> {
@@ -261,7 +289,7 @@ pub(crate) fn legacy_session_cache_path() -> Result<PathBuf, String> {
 
 pub(crate) fn detect_terminal_path() -> Result<Option<String>, String> {
     for terminal_name in ["pwsh", "powershell"] {
-        let mut cmd = Command::new("where");
+        let mut cmd = Command::new(PATH_LOOKUP_COMMAND);
         cmd.arg(terminal_name);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -289,7 +317,7 @@ pub(crate) fn detect_terminal_path() -> Result<Option<String>, String> {
 /// 依序嘗試正式版與 Insiders 版，讓只安裝 Insiders 的環境也能偵測到。
 pub(crate) fn detect_vscode_path() -> Result<Option<String>, String> {
     for candidate in ["code", "code-insiders"] {
-        let mut cmd = Command::new("where");
+        let mut cmd = Command::new(PATH_LOOKUP_COMMAND);
         cmd.arg(candidate);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -333,10 +361,76 @@ pub(crate) fn resolve_vscode_command() -> Option<String> {
     detect_vscode_path().ok().flatten()
 }
 
+/// 目錄內是否有「SessionHub 以外」的內容。SessionHub 啟動時會在 ~/.codex、~/.copilot
+/// 建立 `hooks` 目錄，單憑目錄存在無法判斷使用者是否真的安裝了該平台。
+fn dir_has_user_content(path: &std::path::Path) -> bool {
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name() != std::ffi::OsStr::new("hooks"))
+        })
+        .unwrap_or(false)
+}
+
+/// 依本機實際存在的平台目錄，回傳 (啟用的平台, 用量監控的平台)。
+/// 偵測不到任何平台時回傳全部，維持原本的預設行為。
+pub(crate) fn detect_default_providers() -> (Vec<String>, Vec<String>) {
+    let mut enabled = Vec::new();
+    let mut quota = Vec::new();
+    let mut push = |provider: &str, installed: bool, quota_ok: bool| {
+        if installed {
+            enabled.push(provider.to_string());
+        }
+        if installed || quota_ok {
+            quota.push(provider.to_string());
+        }
+    };
+
+    let opencode_root = default_opencode_root().ok();
+    let opencode_installed = opencode_root.as_ref().is_some_and(|p| p.is_dir());
+    let opencode_has_openai = opencode_root
+        .as_ref()
+        .is_some_and(|p| crate::quota::codex::opencode_has_openai_oauth(&p.to_string_lossy()));
+
+    push(
+        "claude",
+        default_claude_root().is_ok_and(|p| p.is_dir()),
+        false,
+    );
+    push(
+        "copilot",
+        default_copilot_root().is_ok_and(|p| dir_has_user_content(&p)),
+        false,
+    );
+    push("opencode", opencode_installed, false);
+    // Codex 用量可由 OpenCode 的 OpenAI 授權取得，即使未安裝 Codex CLI
+    push(
+        "codex",
+        default_codex_root().is_ok_and(|p| dir_has_user_content(&p)),
+        opencode_has_openai,
+    );
+    push(
+        "antigravity",
+        default_antigravity_root().is_ok_and(|p| p.is_dir()),
+        false,
+    );
+
+    if enabled.is_empty() {
+        enabled = default_enabled_providers_all();
+    }
+    if quota.is_empty() {
+        quota = default_enabled_providers_all();
+    }
+    (enabled, quota)
+}
+
 impl AppSettings {
     pub(crate) fn default() -> Result<Self, String> {
         let terminal_path = detect_terminal_path()?;
         let external_editor_path = detect_vscode_path()?;
+
+        let (enabled_providers, quota_enabled_providers) = detect_default_providers();
 
         Ok(Self {
             copilot_root: default_copilot_root()?.to_string_lossy().to_string(),
@@ -354,7 +448,7 @@ impl AppSettings {
             external_editor_path,
             show_archived: false,
             pinned_projects: Vec::new(),
-            enabled_providers: default_enabled_providers(),
+            enabled_providers,
             provider_integrations: Vec::new(),
             default_launcher: None,
             enable_intervention_notification: true,
@@ -363,7 +457,7 @@ impl AppSettings {
             analytics_refresh_interval: 30,
             analytics_panel_collapsed: false,
             enable_quota_monitoring: true,
-            quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            quota_enabled_providers,
             allow_create_project_config_dir: false,
             agents_source_root: String::new(),
             tray_quota_mode: crate::types::TrayQuotaMode::default(),
@@ -375,6 +469,9 @@ impl AppSettings {
             quota_overlay_providers: Vec::new(),
             quota_overlay_theme: crate::types::OverlayTheme::default(),
             quota_overlay_style: crate::types::OverlayStyle::default(),
+            quota_overlay_intervention_enabled: true,
+            quota_overlay_intervention_style: crate::types::OverlayInterventionStyle::default(),
+            quota_overlay_indicator_side: crate::types::OverlayIndicatorSide::default(),
         })
     }
 }
@@ -382,6 +479,16 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hooks_only_directory_does_not_count_as_installed_provider() {
+        let dir = std::env::temp_dir().join(format!("sessionhub-hooks-only-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("hooks")).unwrap();
+        assert!(!dir_has_user_content(&dir));
+        std::fs::write(dir.join("auth.json"), "{}").unwrap();
+        assert!(dir_has_user_content(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn unknown_terminal_launcher_falls_back_to_shell() {
@@ -480,7 +587,39 @@ pub(crate) fn load_settings_internal() -> Result<AppSettings, String> {
         .map_err(|error| format!("failed to parse settings file: {error}"))?;
     settings.terminal_launcher =
         Some(resolve_terminal_launcher(settings.terminal_launcher.as_deref()).to_string());
+    prune_unavailable_providers(&mut settings);
     Ok(settings)
+}
+
+/// 平台根目錄不存在（未安裝）時，從「啟用平台」與「用量監控平台」移除，
+/// 避免舊設定把未安裝的平台留在 overlay / dashboard / 背景刷新中。
+/// Codex 用量可由 OpenCode 的 OpenAI 授權取得，因此該情況下保留 codex 的用量監控。
+fn prune_unavailable_providers(settings: &mut AppSettings) {
+    let exists = |root: &str| root.trim().is_empty() || std::path::Path::new(root.trim()).is_dir();
+    let opencode_has_openai =
+        crate::quota::codex::opencode_has_openai_oauth(&settings.opencode_root);
+    let root_available = |provider: &str| match provider {
+        "copilot" => exists(&settings.copilot_root),
+        "opencode" => exists(&settings.opencode_root),
+        "codex" => exists(&settings.codex_root),
+        "claude" => exists(&settings.claude_root),
+        "antigravity" => exists(&settings.antigravity_root),
+        _ => true,
+    };
+    let enabled: Vec<String> = settings
+        .enabled_providers
+        .iter()
+        .filter(|p| root_available(p))
+        .cloned()
+        .collect();
+    let quota: Vec<String> = settings
+        .quota_enabled_providers
+        .iter()
+        .filter(|p| root_available(p) || (p.as_str() == "codex" && opencode_has_openai))
+        .cloned()
+        .collect();
+    settings.enabled_providers = enabled;
+    settings.quota_enabled_providers = quota;
 }
 
 pub(crate) fn save_settings_internal(settings: &AppSettings) -> Result<(), String> {

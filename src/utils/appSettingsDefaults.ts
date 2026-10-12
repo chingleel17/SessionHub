@@ -37,6 +37,9 @@ export const DEFAULT_APP_SETTINGS: Required<Omit<AppSettings, RequiredKeys>> = {
   quotaOverlayProviders: [],
   quotaOverlayTheme: "dark",
   quotaOverlayStyle: "compact",
+  quotaOverlayInterventionEnabled: true,
+  quotaOverlayInterventionStyle: "cards",
+  quotaOverlayIndicatorSide: "left",
 };
 
 export function mergeAppSettings(
