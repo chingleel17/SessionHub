@@ -100,15 +100,25 @@ pub(crate) struct TargetInfo {
 pub(crate) struct TargetStatus {
     pub(crate) target_id: String,
     pub(crate) target_root: String,
+    #[serde(default)]
+    pub(crate) target_root_exists: Option<bool>,
     pub(crate) status: SyncStatus,
     pub(crate) target_newer: bool,
     pub(crate) reason: Option<String>,
+}
+
+impl TargetStatus {
+    fn with_root_exists(mut self, exists: bool) -> Self {
+        self.target_root_exists = Some(exists);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SkillEntry {
     pub(crate) name: String,
+    pub(crate) project_relative_dir: Option<String>,
     pub(crate) source_dir: String,
     pub(crate) skill_md_path: String,
     pub(crate) file_count: u64,
@@ -421,6 +431,10 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
             let metrics = content_metrics_for_file(&fingerprint_file(&skill_md_path));
             Ok(SkillEntry {
                 name,
+                project_relative_dir: match scope {
+                    AgentsScope::Project { .. } => Some(String::new()),
+                    AgentsScope::Global => None,
+                },
                 source_dir: normalize_display_path(&skill_dir),
                 skill_md_path: normalize_display_path(&skill_md_path),
                 file_count: source_fp.file_count,
@@ -448,6 +462,14 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
 pub(crate) fn scan_agents_skills_with_providers(
     scope: &AgentsScope,
     enabled_providers: &[String],
+) -> Result<SkillsScanResult, String> {
+    scan_agents_skills_with_providers_limited(scope, enabled_providers, MAX_SCANNED_DIRS)
+}
+
+fn scan_agents_skills_with_providers_limited(
+    scope: &AgentsScope,
+    enabled_providers: &[String],
+    budget: u64,
 ) -> Result<SkillsScanResult, String> {
     let (enabled_providers, unknown_providers) = normalize_enabled_providers(enabled_providers);
     let settings = load_agents_settings()?;
@@ -497,19 +519,28 @@ pub(crate) fn scan_agents_skills_with_providers(
             message: "unknown provider ignored".to_string(),
         })
         .collect::<Vec<_>>();
-    for provider in &enabled_providers {
-        let provider_roots = roots
-            .iter()
-            .filter(|(id, _)| id == provider)
-            .collect::<Vec<_>>();
-        let mut discovered = BTreeMap::<String, Vec<PathBuf>>::new();
-        for (_, root) in provider_roots {
-            let mut found = BTreeMap::new();
-            collect_skill_dirs(root, &mut found);
-            for (name, path) in found {
-                discovered.entry(name).or_default().push(path);
+    let contexts = match project_cwd {
+        Some(root) => {
+            let prefs = load_project_agents_prefs_internal(&root.to_string_lossy())?;
+            let (contexts, errors) =
+                collect_project_skill_contexts(root, &prefs.ignored_paths, budget)?;
+            for message in errors {
+                for provider in &enabled_providers {
+                    diagnostics.push(DiscoveryDiagnostic {
+                        provider_id: provider.clone(),
+                        kind: ResourceKind::Skill,
+                        scope: DiscoveryScope::Project,
+                        message: message.clone(),
+                    });
+                }
             }
+            contexts
         }
+        None => vec![(String::new(), PathBuf::new())],
+    };
+    // 同一上下文的共用入口只遍歷一次，provider 的入口順序仍由 skill_roots 決定。
+    let mut root_cache = BTreeMap::<String, (BTreeMap<String, PathBuf>, Vec<String>)>::new();
+    for provider in &enabled_providers {
         let cli_resources = if provider == OPENCODE_PROVIDER {
             match discover_cli(
                 provider,
@@ -529,57 +560,152 @@ pub(crate) fn scan_agents_skills_with_providers(
         } else {
             Vec::new()
         };
-        for (name, locations) in discovered {
-            let primary = locations.first().cloned().unwrap_or_default();
-            let source_dir = if canonical_root.join(&name).join(SKILL_FILE_NAME).is_file() {
-                canonical_root.join(&name)
+        for (relative_dir, context) in &contexts {
+            let context_roots = if project_cwd.is_some() {
+                discovery_skill_roots(
+                    DiscoveryScope::Project,
+                    Some(context),
+                    &settings,
+                    &[provider.clone()],
+                )?
             } else {
-                primary.clone()
+                roots
+                    .iter()
+                    .filter(|(id, _)| id == provider)
+                    .cloned()
+                    .collect()
             };
-            let source_fp = fingerprint_directory(&source_dir, None, &[])?;
-            let location_items = locations
-                .iter()
-                .map(|path| ResourceLocation {
-                    provider_id: provider.clone(),
-                    scope: match scope {
-                        AgentsScope::Project { .. } => DiscoveryScope::Project,
-                        AgentsScope::Global => DiscoveryScope::Global,
-                    },
-                    root: normalize_display_path(path.parent().unwrap_or(path)),
-                    path: normalize_display_path(path),
-                })
-                .collect::<Vec<_>>();
-            let cli = cli_resources
-                .iter()
-                .find(|item| item.name.eq_ignore_ascii_case(&name));
-            let statuses = target_roots
-                .iter()
-                .map(|(target_id, target_root)| {
-                    compare_directory_target(
-                        target_id,
-                        target_root,
-                        &source_dir,
-                        &target_root.join(&name),
-                        &source_fp,
-                        &[],
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let skill_md_path = source_dir.join(SKILL_FILE_NAME);
-            skills.push(SkillEntry {
-                name: name.clone(),
-                source_dir: normalize_display_path(&source_dir),
-                skill_md_path: normalize_display_path(&skill_md_path),
-                file_count: source_fp.file_count,
-                targets: statuses,
-                description: read_frontmatter_description(&skill_md_path),
-                provider_id: Some(provider.clone()),
-                locations: location_items,
-                effective_path: cli.and_then(|item| item.effective_path.clone()),
-                cli_state: cli.map(|_| ResourceState::Available),
-                cli_source: cli.map(|_| DiscoverySource::Cli),
-                metrics: content_metrics_for_file(&fingerprint_file(&skill_md_path)),
-            });
+            let mut discovered = BTreeMap::<String, Vec<PathBuf>>::new();
+            for (_, root) in context_roots {
+                let key = normalize_display_path(&root).to_lowercase();
+                if !root_cache.contains_key(&key) {
+                    let mut found = BTreeMap::new();
+                    let errors = collect_skill_dirs_with_diagnostics(&root, &mut found);
+                    root_cache.insert(key.clone(), (found, errors));
+                }
+                if let Some((found, errors)) = root_cache.get(&key) {
+                    for message in errors {
+                        diagnostics.push(DiscoveryDiagnostic {
+                            provider_id: provider.clone(),
+                            kind: ResourceKind::Skill,
+                            scope: if project_cwd.is_some() {
+                                DiscoveryScope::Project
+                            } else {
+                                DiscoveryScope::Global
+                            },
+                            message: message.clone(),
+                        });
+                    }
+                    for (name, path) in found {
+                        discovered
+                            .entry(name.clone())
+                            .or_default()
+                            .push(path.clone());
+                    }
+                }
+            }
+            for (name, locations) in discovered {
+                let primary = locations.first().cloned().unwrap_or_default();
+                let context_canonical_root = if project_cwd.is_some() {
+                    context.join(".agents").join("skills")
+                } else {
+                    canonical_root.clone()
+                };
+                let source_dir = if context_canonical_root
+                    .join(&name)
+                    .join(SKILL_FILE_NAME)
+                    .is_file()
+                {
+                    context_canonical_root.join(&name)
+                } else {
+                    primary.clone()
+                };
+                let source_fp = match fingerprint_directory(&source_dir, None, &[]) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        diagnostics.push(DiscoveryDiagnostic {
+                            provider_id: provider.clone(),
+                            kind: ResourceKind::Skill,
+                            scope: if project_cwd.is_some() {
+                                DiscoveryScope::Project
+                            } else {
+                                DiscoveryScope::Global
+                            },
+                            message: format!("{}: {error}", source_dir.display()),
+                        });
+                        continue;
+                    }
+                };
+                let location_items = locations
+                    .iter()
+                    .map(|path| ResourceLocation {
+                        provider_id: provider.clone(),
+                        scope: match scope {
+                            AgentsScope::Project { .. } => DiscoveryScope::Project,
+                            AgentsScope::Global => DiscoveryScope::Global,
+                        },
+                        root: normalize_display_path(path.parent().unwrap_or(path)),
+                        path: normalize_display_path(path),
+                    })
+                    .collect::<Vec<_>>();
+                let cli = cli_resources
+                    .iter()
+                    .find(|item| item.name.eq_ignore_ascii_case(&name));
+                let statuses = target_roots
+                    .iter()
+                    .map(|(target_id, target_root)| {
+                        let target_root = if project_cwd.is_some() {
+                            context.join(
+                                target_root
+                                    .strip_prefix(project_cwd.unwrap_or(context))
+                                    .unwrap_or(target_root),
+                            )
+                        } else {
+                            target_root.clone()
+                        };
+                        compare_directory_target(
+                            target_id,
+                            &target_root,
+                            &source_dir,
+                            &target_root.join(&name),
+                            &source_fp,
+                            &[],
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let statuses = match statuses {
+                    Ok(statuses) => statuses,
+                    Err(error) => {
+                        diagnostics.push(DiscoveryDiagnostic {
+                            provider_id: provider.clone(),
+                            kind: ResourceKind::Skill,
+                            scope: if project_cwd.is_some() {
+                                DiscoveryScope::Project
+                            } else {
+                                DiscoveryScope::Global
+                            },
+                            message: error,
+                        });
+                        continue;
+                    }
+                };
+                let skill_md_path = source_dir.join(SKILL_FILE_NAME);
+                skills.push(SkillEntry {
+                    name: name.clone(),
+                    project_relative_dir: project_cwd.map(|_| relative_dir.clone()),
+                    source_dir: normalize_display_path(&source_dir),
+                    skill_md_path: normalize_display_path(&skill_md_path),
+                    file_count: source_fp.file_count,
+                    targets: statuses,
+                    description: read_frontmatter_description(&skill_md_path),
+                    provider_id: Some(provider.clone()),
+                    locations: location_items,
+                    effective_path: cli.and_then(|item| item.effective_path.clone()),
+                    cli_state: cli.map(|_| ResourceState::Available),
+                    cli_source: cli.map(|_| DiscoverySource::Cli),
+                    metrics: content_metrics_for_file(&fingerprint_file(&skill_md_path)),
+                });
+            }
         }
         let discovered_names = skills
             .iter()
@@ -592,6 +718,7 @@ pub(crate) fn scan_agents_skills_with_providers(
         }) {
             skills.push(SkillEntry {
                 name: cli.name.clone(),
+                project_relative_dir: None,
                 source_dir: cli.effective_path.clone().unwrap_or_default(),
                 skill_md_path: cli.effective_path.clone().unwrap_or_default(),
                 file_count: 0,
@@ -1079,6 +1206,7 @@ pub(crate) fn scan_agents_commands_internal(
                     TargetStatus {
                         target_id: target_id.clone(),
                         target_root: normalize_display_path(target_root),
+                        target_root_exists: None,
                         status,
                         target_newer,
                         reason: None,
@@ -1260,6 +1388,7 @@ pub(crate) fn scan_agents_commands_with_providers(
                         TargetStatus {
                             target_id: target_id.clone(),
                             target_root: normalize_display_path(target_root),
+                            target_root_exists: None,
                             status,
                             target_newer,
                             reason: None,
@@ -1294,6 +1423,7 @@ pub(crate) fn scan_agents_commands_with_providers(
                     .map(|(target_id, target_root)| TargetStatus {
                         target_id: target_id.clone(),
                         target_root: normalize_display_path(target_root),
+                        target_root_exists: None,
                         status: SyncStatus::SourceMissing,
                         target_newer: false,
                         reason: None,
@@ -1635,9 +1765,101 @@ fn content_metrics_for_file(fingerprint: &FileFingerprint) -> Option<FileContent
         .map(|content| estimate_mixed_text(&content))
 }
 
+#[cfg(test)]
 fn collect_skill_dirs(root: &Path, discovered: &mut BTreeMap<String, PathBuf>) {
+    let _ = collect_skill_dirs_with_diagnostics(root, discovered);
+}
+
+fn collect_project_skill_contexts(
+    root: &Path,
+    ignored_paths: &[String],
+    budget: u64,
+) -> Result<(Vec<(String, PathBuf)>, Vec<String>), String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve project root {}: {error}", root.display()))?;
+    let mut contexts = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut walker = WalkDir::new(&root)
+        .follow_links(false)
+        .sort_by_file_name()
+        .into_iter();
+    while let Some(next) = walker.next() {
+        let entry = match next {
+            Ok(entry) => entry,
+            Err(error) => {
+                diagnostics.push(format!(
+                    "{}: {error}",
+                    error.path().unwrap_or(&root).display()
+                ));
+                continue;
+            }
+        };
+        if !entry.file_type().is_dir() || entry.path_is_symlink() {
+            continue;
+        }
+        if should_skip_walk_entry(&entry, &root, ignored_paths) {
+            walker.skip_current_dir();
+            continue;
+        }
+        if entry.depth() > 0
+            && [
+                ".agents",
+                ".claude",
+                ".codex",
+                ".opencode",
+                ".github",
+                ".gemini",
+            ]
+            .iter()
+            .any(|name| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(name)
+            })
+        {
+            walker.skip_current_dir();
+            continue;
+        }
+        if contexts.len() as u64 >= budget {
+            diagnostics.push(format!(
+                "掃描結果不完整：超過 {budget} 個目錄，上限位置 {}",
+                entry.path().display()
+            ));
+            break;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        contexts.push((relative, entry.path().to_path_buf()));
+    }
+    Ok((contexts, diagnostics))
+}
+
+fn collect_skill_dirs_with_diagnostics(
+    root: &Path,
+    discovered: &mut BTreeMap<String, PathBuf>,
+) -> Vec<String> {
+    #[cfg(test)]
+    SKILL_ROOT_TRAVERSALS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut diagnostics = Vec::new();
+    match fs::symlink_metadata(root) {
+        Ok(_) if !root.is_dir() => {
+            diagnostics.push(format!("{}: 技能入口無法讀取或連結損壞", root.display()));
+            return diagnostics;
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            diagnostics.push(format!("{}: {error}", root.display()));
+            return diagnostics;
+        }
+        _ => {}
+    }
     if !root.is_dir() {
-        return;
+        return diagnostics;
     }
 
     // skill 目錄可能是符號連結（例如集中存放後 link 到 .agents/skills），
@@ -1646,7 +1868,17 @@ fn collect_skill_dirs(root: &Path, discovered: &mut BTreeMap<String, PathBuf>) {
         .follow_links(true)
         .sort_by_file_name()
         .into_iter();
-    for entry in walker.filter_map(Result::ok) {
+    for result in walker {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) => {
+                diagnostics.push(format!(
+                    "{}: {error}",
+                    error.path().unwrap_or(root).display()
+                ));
+                continue;
+            }
+        };
         if !entry.file_type().is_dir() {
             continue;
         }
@@ -1665,7 +1897,12 @@ fn collect_skill_dirs(root: &Path, discovered: &mut BTreeMap<String, PathBuf>) {
         }
         discovered.entry(name).or_insert_with(|| dir.to_path_buf());
     }
+    diagnostics
 }
+
+#[cfg(test)]
+static SKILL_ROOT_TRAVERSALS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 fn classify_file_status(source: &FileFingerprint, target: &FileFingerprint) -> (SyncStatus, bool) {
     if source.exists && target.exists {
@@ -1702,7 +1939,8 @@ fn compare_directory_target(
                 &target_root_display,
                 source_dir,
                 target_dir,
-            ));
+            )
+            .with_root_exists(target_root.exists()));
         }
     }
 
@@ -1710,6 +1948,7 @@ fn compare_directory_target(
         return Ok(TargetStatus {
             target_id: target_id.to_string(),
             target_root: target_root_display,
+            target_root_exists: Some(target_root.exists()),
             status: SyncStatus::TargetMissing,
             target_newer: false,
             reason: None,
@@ -1720,6 +1959,7 @@ fn compare_directory_target(
         return Ok(TargetStatus {
             target_id: target_id.to_string(),
             target_root: target_root_display,
+            target_root_exists: Some(target_root.exists()),
             status: SyncStatus::SourceMissing,
             target_newer: false,
             reason: None,
@@ -1737,6 +1977,7 @@ fn compare_directory_target(
     Ok(TargetStatus {
         target_id: target_id.to_string(),
         target_root: target_root_display,
+        target_root_exists: Some(target_root.exists()),
         status,
         target_newer,
         reason: None,
@@ -1755,6 +1996,7 @@ fn inspect_directory_symlink(
             return TargetStatus {
                 target_id: target_id.to_string(),
                 target_root: target_root.to_string(),
+                target_root_exists: None,
                 status: SyncStatus::Error,
                 target_newer: false,
                 reason: Some(format!("failed to inspect symlink: {error}")),
@@ -1768,6 +2010,7 @@ fn inspect_directory_symlink(
         (Ok(source), Ok(target)) if source == target => TargetStatus {
             target_id: target_id.to_string(),
             target_root: target_root.to_string(),
+            target_root_exists: None,
             status: SyncStatus::Linked,
             target_newer: false,
             reason: None,
@@ -1775,6 +2018,7 @@ fn inspect_directory_symlink(
         (Ok(_), Ok(_)) => TargetStatus {
             target_id: target_id.to_string(),
             target_root: target_root.to_string(),
+            target_root_exists: None,
             status: SyncStatus::Error,
             target_newer: false,
             reason: Some("symlink points to a different source".to_string()),
@@ -1782,6 +2026,7 @@ fn inspect_directory_symlink(
         _ => TargetStatus {
             target_id: target_id.to_string(),
             target_root: target_root.to_string(),
+            target_root_exists: None,
             status: SyncStatus::LinkBroken,
             target_newer: false,
             reason: Some("symlink target is missing".to_string()),
@@ -2240,7 +2485,11 @@ fn should_skip_walk_entry(entry: &DirEntry, root: &Path, ignored_paths: &[String
     if entry
         .file_name()
         .to_str()
-        .map(|value| FIXED_IGNORED_DIRS.contains(&value))
+        .map(|value| {
+            FIXED_IGNORED_DIRS
+                .iter()
+                .any(|ignored| value.eq_ignore_ascii_case(ignored))
+        })
         .unwrap_or(false)
     {
         return true;

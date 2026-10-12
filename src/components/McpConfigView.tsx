@@ -17,6 +17,8 @@ export type McpScopeGroup = {
   label: string;
   providers: McpProviderConfig[];
   isLoading: boolean;
+  isFetching: boolean;
+  error?: string;
   onRefresh: () => Promise<void>;
   onUpsert: (
     provider: string,
@@ -438,12 +440,14 @@ function McpHeaderActions({
   onOpenExternal,
   onRevealPath,
   onRefresh,
+  isFetching,
   onAdd,
 }: {
   configPath: string | undefined;
   onOpenExternal: (path: string) => void;
   onRevealPath: (path: string) => void;
   onRefresh: () => void;
+  isFetching: boolean;
   onAdd: () => void;
 }) {
   const { t } = useI18n();
@@ -465,7 +469,7 @@ function McpHeaderActions({
       >
         <FolderIcon size={15} />
       </IconButton>
-      <IconButton label={t("app.actions.refresh")} className="agents-icon-button" onClick={onRefresh}>
+      <IconButton label={t("app.actions.refresh")} className="agents-icon-button" disabled={isFetching} onClick={onRefresh}>
         <RefreshIcon size={15} />
       </IconButton>
       <Button variant="primary" onClick={onAdd}>
@@ -518,6 +522,7 @@ function McpGroupCollapsible({
           onOpenExternal={onOpenExternal}
           onRevealPath={onRevealPath}
           onRefresh={() => void group.onRefresh()}
+          isFetching={group.isFetching}
           onAdd={() => {
             if (!expanded) toggle();
             setAddSignal((n) => n + 1);
@@ -789,6 +794,7 @@ function McpProviderPanel({
             onOpenExternal={onOpenExternal}
             onRevealPath={onRevealPath}
             onRefresh={() => void group.onRefresh()}
+            isFetching={group.isFetching}
             onAdd={() => setEditor(emptyEditor())}
           />
         </div>
@@ -804,6 +810,7 @@ function McpProviderPanel({
       {currentConfig?.error ? (
         <div className="mcp-provider-error">{currentConfig.error}</div>
       ) : null}
+      {group.error ? <div className="mcp-provider-error" role="alert">{group.error}</div> : null}
       {currentConfig?.diagnostics.map((diagnostic) => (
         <div key={`${diagnostic.providerId}:${diagnostic.kind}:${diagnostic.scope}`} className="mcp-provider-notice">
           {diagnostic.message}

@@ -149,12 +149,14 @@ export type TargetInfo = {
 export type TargetStatus = {
     targetId: string;
     targetRoot: string;
+    targetRootExists?: boolean | null;
     status: SyncStatus;
     targetNewer: boolean;
 };
 
 export type SkillEntry = {
     name: string;
+    projectRelativeDir: string | null;
     sourceDir: string;
     skillMdPath: string;
     fileCount: number;

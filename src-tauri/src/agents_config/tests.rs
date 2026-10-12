@@ -38,6 +38,39 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
     let root = unique_test_dir("provider-aware-union");
     write_file(&root.join(".codex/skills/shared/SKILL.md"), "codex");
     write_file(&root.join(".agents/skills/shared/SKILL.md"), "agents");
+    write_file(
+        &root.join("packages/api/.agents/skills/review/SKILL.md"),
+        "api",
+    );
+    write_file(
+        &root.join("packages/web/.agents/skills/review/SKILL.md"),
+        "web",
+    );
+    write_file(
+        &root.join("packages/api/.agents/skills/team/demo/SKILL.md"),
+        "nested",
+    );
+    write_file(
+        &root.join("a/b/c/d/e/f/g/h/i/.agents/skills/deep/SKILL.md"),
+        "deep",
+    );
+    write_file(
+        &root.join("node_modules/hidden/.agents/skills/hidden/SKILL.md"),
+        "hidden",
+    );
+    write_file(
+        &root.join("packages/ignored/.agents/skills/ignored/SKILL.md"),
+        "ignored",
+    );
+    write_file(
+        &root.join(".sessionhub/agents.json"),
+        r#"{"ignoredPaths":["packages/ignored"],"enabledTargets":["claude"]}"#,
+    );
+    write_file(
+        &root.join("packages/api/.claude/skills/installed/SKILL.md"),
+        "installed",
+    );
+    fs::create_dir_all(root.join("packages/api/.claude/skills")).expect("target root");
     write_file(&root.join(".github/skills/copilot/SKILL.md"), "copilot");
     write_file(
         &root.join(".gemini/commands/review.toml"),
@@ -69,14 +102,19 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
     let scope = AgentsScope::Project {
         project_cwd: normalize_display_path(&root),
     };
+    let before = SKILL_ROOT_TRAVERSALS.load(std::sync::atomic::Ordering::SeqCst);
     let result = scan_agents_skills_with_providers(
         &scope,
-        &[CODEX_PROVIDER.to_string(), COPILOT_PROVIDER.to_string()],
+        &[
+            CODEX_PROVIDER.to_string(),
+            COPILOT_PROVIDER.to_string(),
+            CLAUDE_PROVIDER.to_string(),
+        ],
     )
     .expect("skills");
     assert_eq!(
         result.enabled_providers,
-        vec![CODEX_PROVIDER, COPILOT_PROVIDER]
+        vec![CODEX_PROVIDER, COPILOT_PROVIDER, CLAUDE_PROVIDER]
     );
     assert!(result
         .skills
@@ -87,10 +125,124 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
         .skills
         .iter()
         .any(|skill| skill.provider_id.as_deref() == Some(COPILOT_PROVIDER)));
-    assert!(!result
+    assert!(result
         .skills
         .iter()
         .any(|skill| skill.provider_id.as_deref() == Some(CLAUDE_PROVIDER)));
+    let (contexts, _) =
+        collect_project_skill_contexts(&root, &["packages/ignored".to_string()], MAX_SCANNED_DIRS)
+            .expect("contexts");
+    assert_eq!(
+        SKILL_ROOT_TRAVERSALS.load(std::sync::atomic::Ordering::SeqCst) - before,
+        contexts.len() * 4
+    );
+    assert!(!result.skills.iter().any(|skill| skill.name == "hidden"));
+    assert!(!result.skills.iter().any(|skill| skill.name == "ignored"));
+    for context in ["packages/api", "packages/web"] {
+        let entry = result
+            .skills
+            .iter()
+            .find(|skill| {
+                skill.name == "review"
+                    && skill.project_relative_dir.as_deref() == Some(context)
+                    && skill.provider_id.as_deref() == Some(CODEX_PROVIDER)
+            })
+            .expect("sibling skill");
+        assert!(entry.source_dir.replace('\\', "/").contains(context));
+        assert_eq!(
+            entry
+                .targets
+                .iter()
+                .find(|target| target.target_id == CLAUDE_PROVIDER)
+                .expect("Claude status")
+                .target_root_exists,
+            Some(context == "packages/api")
+        );
+    }
+    assert!(result.skills.iter().any(|skill| skill.name == "team/demo"
+        && skill.project_relative_dir.as_deref() == Some("packages/api")));
+    assert!(result.skills.iter().any(|skill| skill.name == "deep"
+        && skill.project_relative_dir.as_deref() == Some("a/b/c/d/e/f/g/h/i")));
+    assert!(result
+        .skills
+        .iter()
+        .any(|skill| skill.name == "shared" && skill.project_relative_dir.as_deref() == Some("")));
+    let api_review = result
+        .skills
+        .iter()
+        .find(|skill| {
+            skill.name == "review"
+                && skill.project_relative_dir.as_deref() == Some("packages/api")
+                && skill.provider_id.as_deref() == Some(CODEX_PROVIDER)
+        })
+        .expect("api review");
+    let target = PathBuf::from(
+        &api_review
+            .targets
+            .iter()
+            .find(|item| item.target_id == CLAUDE_PROVIDER)
+            .expect("claude target")
+            .target_root,
+    )
+    .join(&api_review.name);
+    let dry_run = sync_agents_items_internal(&SyncRequest {
+        items: vec![SyncItem {
+            source: api_review.source_dir.clone(),
+            target: normalize_display_path(&target),
+            item_kind: SyncItemKind::Directory,
+            direction: None,
+            target_id: Some(CLAUDE_PROVIDER.to_string()),
+        }],
+        dry_run: true,
+        force: false,
+        mode: SyncMode::Copy,
+        project_cwd: Some(normalize_display_path(&root)),
+    })
+    .expect("preview sync");
+    assert_eq!(dry_run.actions[0].action, SyncAction::Create);
+    assert!(target.starts_with(root.join("packages/api/.claude/skills")));
+    assert!(!target.exists());
+    let limited =
+        scan_agents_skills_with_providers_limited(&scope, &[CODEX_PROVIDER.to_string()], 2)
+            .expect("partial scan");
+    assert!(limited.skills.iter().any(|skill| skill.name == "shared"));
+    assert!(limited
+        .diagnostics
+        .iter()
+        .any(|item| item.message.contains("上限") && item.message.contains('2')));
+
+    #[cfg(target_os = "windows")]
+    {
+        let external = unique_test_dir("external-skills");
+        write_file(&external.join(".agents/skills/outside/SKILL.md"), "outside");
+        write_file(&external.join("linked/SKILL.md"), "linked");
+        std::os::windows::fs::symlink_dir(&external, root.join("outside-link"))
+            .expect("external project link");
+        std::os::windows::fs::symlink_dir(
+            external.join("linked"),
+            root.join(".agents/skills/linked"),
+        )
+        .expect("skill link");
+        std::os::windows::fs::symlink_dir(
+            external.join("missing"),
+            root.join(".agents/skills/broken"),
+        )
+        .expect("broken skill link");
+        std::os::windows::fs::symlink_dir(
+            root.join(".agents/skills"),
+            root.join(".agents/skills/loop"),
+        )
+        .expect("skill loop");
+        let linked = scan_agents_skills_with_providers(&scope, &[CODEX_PROVIDER.to_string()])
+            .expect("linked scan");
+        assert!(linked.skills.iter().any(|item| item.name == "linked"));
+        assert!(!linked.skills.iter().any(|item| item.name == "outside"));
+        assert!(linked
+            .diagnostics
+            .iter()
+            .any(|item| item.message.contains("broken") || item.message.contains("loop")));
+        let _ = fs::remove_dir_all(&external);
+    }
     let codex_skill = result
         .skills
         .iter()
