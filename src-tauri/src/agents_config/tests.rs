@@ -200,7 +200,15 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
     })
     .expect("preview sync");
     assert_eq!(dry_run.actions[0].action, SyncAction::Create);
-    assert!(target.starts_with(root.join("packages/api/.claude/skills")));
+    // 掃描會正規化路徑，預期目標也需解析 Windows 大小寫與短路徑別名。
+    let expected_target_root = root
+        .join("packages/api/.claude/skills")
+        .canonicalize()
+        .expect("canonical target root");
+    assert_eq!(
+        target,
+        PathBuf::from(normalize_display_path(&expected_target_root)).join("review")
+    );
     assert!(!target.exists());
     let limited =
         scan_agents_skills_with_providers_limited(&scope, &[CODEX_PROVIDER.to_string()], 2)
