@@ -56,10 +56,23 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         uses: oven-sh/setup-bun@v2
 
+      # claude-code-action 內建的安裝腳本（install.sh）不支援 Windows，改用官方 PowerShell 安裝後傳入執行檔路徑
+      - name: Install Claude Code (Windows)
+        id: claude
+        if: steps.pr.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          irm https://claude.ai/install.ps1 | iex
+          $exe = Join-Path $env:USERPROFILE ".local\bin\claude.exe"
+          if (-not (Test-Path $exe)) { throw "找不到 Claude Code 執行檔：$exe" }
+          & $exe --version
+          "path=$exe" >> $env:GITHUB_OUTPUT
+
       - name: Run Claude
         if: steps.pr.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
+          path_to_claude_code_executable: ${{ steps.claude.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "dependabot[bot]"
           additional_permissions: |
