@@ -34,12 +34,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
+          MAX_ATTEMPTS: 2
         run: |
           number=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number')
           labels=$(gh pr view "$number" --repo "$REPO" --json labels --jq '[.labels[].name]|join(",")')
           echo "number=$number" >> "$GITHUB_OUTPUT"
           # 已標記 needs-human 代表 Claude 先前放棄，不再重複嘗試
-          case ",$labels," in *,needs-human,*) echo "skip=true" >> "$GITHUB_OUTPUT";; esac
+          case ",$labels," in *,needs-human,*) echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0;; esac
+
+          # Claude 的 push 會再次觸發 CI，以分支上 claude[bot] 的 commit 數作為硬性上限，避免無限迴圈
+          attempts=$(gh api "repos/$REPO/pulls/$number/commits" --paginate --jq '.[] | select(.commit.author.name == "claude[bot]") | .sha' | wc -l)
+          if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+            gh label create needs-human --repo "$REPO" --color d93f0b --description "需要人工處理" --force
+            gh pr edit "$number" --repo "$REPO" --add-label needs-human
+            gh pr comment "$number" --repo "$REPO" --body "Claude 已嘗試修復 $attempts 次，CI 仍失敗，停止自動修復。@chingleel17 請人工處理。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout PR branch
         if: steps.pr.outputs.skip != 'true'
@@ -47,6 +57,9 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
           fetch-depth: 0
+          # 不保留 GITHUB_TOKEN：action 在 checkout v7 的 includeIf 憑證配置下無法清除它，
+          # 會導致 Claude 以 GITHUB_TOKEN push 而不觸發 CI；改由 action 以 Claude App token 設定 git 認證
+          persist-credentials: false
 
       - name: Setup Rust (stable)
         if: steps.pr.outputs.skip != 'true'
