@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::{DirEntry, WalkDir};
 
+fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    bytes
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 use crate::db::ensure_parent_dir;
 use crate::resource_discovery::{
     command_roots as discovery_command_roots, discover_cli, normalize_enabled_providers,
@@ -923,7 +931,7 @@ pub(crate) fn resource_scan_signature(
             );
         }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex_encode(hasher.finalize()))
 }
 
 /// 檢查 `~/.agents` 是否為指向全域自訂正本位置的 symlink，供設定頁 banner 呈現連結狀態。
@@ -2396,7 +2404,7 @@ fn fingerprint_file(path: &Path) -> FileFingerprint {
     FileFingerprint {
         path: display_path,
         exists: true,
-        hash: Some(format!("{:x}", hasher.finalize())),
+        hash: Some(hex_encode(hasher.finalize())),
         mtime_ms: metadata.modified().ok().and_then(system_time_to_millis),
         size: Some(metadata.len()),
     }
@@ -2470,7 +2478,7 @@ fn fingerprint_directory(
         fingerprint: FileFingerprint {
             path: normalize_display_path(&root),
             exists: true,
-            hash: Some(format!("{:x}", outer_hasher.finalize())),
+            hash: Some(hex_encode(outer_hasher.finalize())),
             mtime_ms: latest_mtime,
             size: Some(total_size),
         },
@@ -2659,7 +2667,7 @@ fn project_agents_prefs_path(project_cwd: &str) -> PathBuf {
 fn appdata_project_agents_prefs_path(project_cwd: &str) -> Result<PathBuf, String> {
     let normalized = project_cwd.to_lowercase();
     let digest = Sha256::digest(normalized.as_bytes());
-    let file_name = format!("{:x}.json", digest);
+    let file_name = format!("{}.json", hex_encode(digest));
     Ok(default_app_data_dir()?
         .join("project-agents")
         .join(file_name))
