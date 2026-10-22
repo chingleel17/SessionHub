@@ -62,6 +62,7 @@ import { useAppSettingsForm, type ProviderIntegrationAction } from "./hooks/useA
 import { AgentsConfigView, type AgentsScopeDataBundle } from "./components/AgentsConfigView";
 import type { McpConnectionTestResult } from "./components/McpConfigView";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { GlobalContextMenu } from "./components/GlobalContextMenu";
 import { BridgeEventMonitorDialog } from "./components/BridgeEventMonitorDialog";
 import { DashboardView } from "./components/DashboardView";
 import { EditDialog } from "./components/EditDialog";
@@ -2186,6 +2187,12 @@ function App() {
     });
   };
 
+  const handleCopyProjectPath = (path: string) => {
+    navigator.clipboard.writeText(path)
+      .then(() => showToast(t("toast.projectPathCopied")))
+      .catch((error) => showToast(resolveErrorMessage(error, t("toast.copyFailed"))));
+  };
+
   // 全域 Agents 資料集合：供全域 Agents 頁（獨立元件）與專案分頁的 globalData prop 共用。
   const globalAgentsData: AgentsScopeDataBundle = {
     scope: { kind: "global" },
@@ -2239,6 +2246,7 @@ function App() {
 
   return (
     <main className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <GlobalContextMenu />
       <Sidebar
         activeView={activeView}
         isSidebarCollapsed={isSidebarCollapsed}
@@ -2255,6 +2263,9 @@ function App() {
          onReorderOpenProjects={reorderOpenProjects}
          onReorderPinnedProjects={reorderPinnedProjects}
          onPinProject={(key) => void pinProjectViaDrag(key)}
+         onTogglePinProject={(key) => void togglePinProject(key)}
+         onOpenProjectFolder={handleOpenPathExternal}
+         onCopyProjectPath={handleCopyProjectPath}
          onCollapseToggle={() => setIsSidebarCollapsed((v) => !v)}
          onRefresh={() => sessionsQuery.refetch()}
          onConfigurePath={() => setActiveView("settings")}
@@ -2472,6 +2483,7 @@ function App() {
                onRefreshAgentsSkills={() => handleRefreshResource("skills", activeProject.pathLabel)}
                onRefreshAgentsCommands={() => handleRefreshResource("commands", activeProject.pathLabel)}
               plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              onOpenPlansSpecsFileExternal={handleOpenPathExternal}
               onOpenAgentsExternal={(path) => {
                 openPath(path).catch((error) => {
                   showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));

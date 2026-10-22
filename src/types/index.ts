@@ -652,6 +652,8 @@ export type OpenSpecChange = {
     taskProgress?: OpenSpecTaskProgress | null;
     specsCount: number;
     specs: OpenSpecSpec[];
+    /** proposal/design/tasks 與 specs 以外的 md 檔，相對於 change 目錄 */
+    extraFiles: string[];
     createdAt?: string | null;
 };
 

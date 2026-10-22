@@ -27,6 +27,7 @@ import type {
   TreeNode,
 } from "../types";
 import { buildAgentsMdTree } from "../utils/buildTree";
+import { toRelativePath } from "../utils/filePaths";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { ContentViewer } from "./ContentViewer";
 import { ExplorerTree } from "./ExplorerTree";
@@ -115,6 +116,10 @@ function commandFileName(name: string, targetId: string): string {
 
 function getScopeStorageKey(scope: AgentsScope, key: string): string {
   return scope.kind === "global" ? `agents:${key}:global` : `agents:${key}:${scope.projectCwd.toLowerCase()}`;
+}
+
+function toProjectRelativePath(scope: AgentsScope, path: string): string | null {
+  return scope.kind === "project" ? toRelativePath(scope.projectCwd, path) : null;
 }
 
 function scopeGroupKey(scope: AgentsScope): "project" | "global" {
@@ -407,6 +412,9 @@ export function AgentsConfigView(props: Props) {
                   isTaskSaving={false}
                   onToggleTask={async () => {}}
                   headerMeta={selectedMdMetricsLabel ? <span className="explorer-content-header-metrics">{selectedMdMetricsLabel}</span> : null}
+                  absolutePath={groupSelectedNode?.filePath ?? null}
+                  relativePath={groupSelectedNode?.filePath ? toProjectRelativePath(data.scope, groupSelectedNode.filePath) : null}
+                  onOpenExternal={onOpenExternal}
                 />
               )}
             </div>
@@ -784,6 +792,9 @@ export function AgentsConfigView(props: Props) {
                   {formatFileMetrics(previewMetrics, locale, t("agents.metrics.characters"), t("agents.metrics.tokens"))}
                 </span>
               ) : null}
+              absolutePath={previewNode.filePath}
+              relativePath={toProjectRelativePath(primary.scope, previewNode.filePath)}
+              onOpenExternal={onOpenExternal}
             />
         </Modal>
       ) : null}

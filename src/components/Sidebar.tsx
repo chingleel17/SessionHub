@@ -1,8 +1,9 @@
-import { useRef, useState, type DragEvent } from "react";
+import { useCallback, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import packageJson from "../../package.json";
 import appIcon from "../../src-tauri/icons/icon.png";
 import { useI18n } from "../i18n/I18nProvider";
 import type { ProjectGroup, RealtimeStatus } from "../types";
+import { ContextMenu } from "./ContextMenu";
 import {
   AgentsIcon,
   CloseIcon,
@@ -31,6 +32,9 @@ type Props = {
   onReorderOpenProjects: (newKeys: string[]) => void;
   onReorderPinnedProjects: (newKeys: string[]) => void;
   onPinProject: (key: string) => void;
+  onTogglePinProject: (key: string) => void;
+  onOpenProjectFolder: (path: string) => void;
+  onCopyProjectPath: (path: string) => void;
   onCollapseToggle: () => void;
   onRefresh: () => void;
   onConfigurePath: () => void;
@@ -77,6 +81,9 @@ export function Sidebar({
   onReorderOpenProjects,
   onReorderPinnedProjects,
   onPinProject,
+  onTogglePinProject,
+  onOpenProjectFolder,
+  onCopyProjectPath,
   onCollapseToggle,
   onRefresh,
   onConfigurePath,
@@ -87,6 +94,8 @@ export function Sidebar({
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [isDraggingOverPinned, setIsDraggingOverPinned] = useState(false);
+  const [projectMenu, setProjectMenu] = useState<{ x: number; y: number; group: ProjectGroup } | null>(null);
+  const closeProjectMenu = useCallback(() => setProjectMenu(null), []);
   const dragStateRef = useRef<DragState | null>(null);
   const suppressClickRef = useRef(false);
 
@@ -235,6 +244,41 @@ export function Sidebar({
     onOpenProject(projectKey);
   };
 
+  const handleProjectContextMenu = (event: MouseEvent<HTMLElement>, group: ProjectGroup) => {
+    event.preventDefault();
+    setProjectMenu({ x: event.clientX, y: event.clientY, group });
+  };
+
+  const renderProjectMenu = () => {
+    if (!projectMenu) return null;
+    const { group } = projectMenu;
+    const isPinned = pinnedProjects.includes(group.key);
+    const isOpen = openProjectKeys.includes(group.key) || activeView === group.key;
+    const runAction = (action: () => void) => {
+      closeProjectMenu();
+      action();
+    };
+    return (
+      <ContextMenu x={projectMenu.x} y={projectMenu.y} onClose={closeProjectMenu}>
+        {isOpen ? (
+          <button type="button" role="menuitem" className="dropdown-menu-item" onClick={() => runAction(() => onCloseProject(group.key))}>
+            {t("sidebar.menu.close")}
+          </button>
+        ) : null}
+        <button type="button" role="menuitem" className="dropdown-menu-item" onClick={() => runAction(() => onTogglePinProject(group.key))}>
+          {isPinned ? t("sidebar.menu.unpin") : t("sidebar.menu.pin")}
+        </button>
+        <div className="context-menu-separator" role="separator" />
+        <button type="button" role="menuitem" className="dropdown-menu-item" onClick={() => runAction(() => onOpenProjectFolder(group.pathLabel))}>
+          {t("sidebar.menu.openFolder")}
+        </button>
+        <button type="button" role="menuitem" className="dropdown-menu-item" onClick={() => runAction(() => onCopyProjectPath(group.pathLabel))}>
+          {t("sidebar.menu.copyPath")}
+        </button>
+      </ContextMenu>
+    );
+  };
+
   const getGroupTooltip = (group: ProjectGroup) => {
     const branchLabel = group.branchLabel?.trim();
     return branchLabel ? `${group.title} · ${branchLabel}` : group.title;
@@ -328,6 +372,7 @@ export function Sidebar({
                       className={`sidebar-link ${activeView === group.key ? "active" : ""}`}
                       title={getGroupTooltip(group)}
                       onClick={() => handleOpenProject(group.key)}
+                      onContextMenu={(e) => handleProjectContextMenu(e, group)}
                       onPointerDown={() => { suppressClickRef.current = false; }}
                       onDragStart={(e) => handleDragStart(group.key, "pinned", e)}
                       onDragEnd={handleDragEnd}
@@ -380,6 +425,7 @@ export function Sidebar({
                       className={`sidebar-link sidebar-open-item-label ${activeView === group.key ? "active" : ""}`}
                       title={getGroupTooltip(group)}
                       onClick={() => handleOpenProject(group.key)}
+                      onContextMenu={(e) => handleProjectContextMenu(e, group)}
                       onPointerDown={() => { suppressClickRef.current = false; }}
                       onDragStart={(e) => handleDragStart(group.key, "open", e)}
                       onDragEnd={handleDragEnd}
@@ -447,6 +493,7 @@ export function Sidebar({
           </button>
         </div>
       </footer>
+      {renderProjectMenu()}
     </aside>
   );
 }

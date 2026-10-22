@@ -699,7 +699,8 @@ mod tests {
         let settings = AppSettings {
             claude_root: String::new(),
             copilot_root: String::new(),
-            opencode_root: String::new(),
+            // 同時阻斷 OpenCode OpenAI 授權備援，避免讀到本機登入資料而實際呼叫 API
+            opencode_root: "/nonexistent/path/opencode".to_string(),
             codex_root: "/nonexistent/path/.codex".to_string(),
             antigravity_root: String::new(),
             terminal_path: None,

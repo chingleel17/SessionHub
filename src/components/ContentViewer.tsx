@@ -1,10 +1,11 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { TreeNode } from "../types";
 import { formatDate } from "../utils/formatDate";
 import { prepareMarkdownForPreview } from "../utils/splitFrontmatter";
+import { ContextMenu } from "./ContextMenu";
 
 type Props = {
   content: string | null;
@@ -16,6 +17,17 @@ type Props = {
   isTaskSaving: boolean;
   onToggleTask: (filePath: string, taskIndex: number, checked: boolean) => Promise<void>;
   headerMeta?: ReactNode;
+  /** 右鍵選單「複製絕對路徑 / 以預設程式開啟」使用的實際檔案路徑 */
+  absolutePath?: string | null;
+  /** 右鍵選單「複製相對路徑」使用；未提供時不顯示該項目 */
+  relativePath?: string | null;
+  onOpenExternal?: (path: string) => void;
+};
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  selectedText: string;
 };
 
 function getDisplayPath(filePath: string): string {
@@ -90,9 +102,116 @@ export function ContentViewer({
   isTaskSaving,
   onToggleTask,
   headerMeta,
+  absolutePath,
+  relativePath,
+  onOpenExternal,
 }: Props) {
   const { t, locale } = useI18n();
   const contentBodyRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const selectAllContent = () => {
+    const contentBody = contentBodyRef.current;
+    if (!contentBody) return;
+    window.getSelection()?.selectAllChildren(contentBody);
+  };
+
+  // Ctrl+A 只選取檢視器內容，而非整個應用程式畫面
+  const handleBodyKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      selectAllContent();
+    }
+  };
+
+  // 在事件當下記錄選取文字，避免點擊選單項目時選取被清除
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      selectedText: window.getSelection()?.toString() ?? "",
+    });
+  };
+
+  const runMenuAction = (action: () => void) => {
+    closeContextMenu();
+    action();
+  };
+
+  const copyText = (text: string) => {
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  };
+
+  const renderContextMenu = () => {
+    if (!contextMenu) return null;
+    const hasPathActions = Boolean(absolutePath || relativePath);
+    return (
+      <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={closeContextMenu}>
+        <button
+          type="button"
+          role="menuitem"
+          className="dropdown-menu-item"
+          disabled={!contextMenu.selectedText}
+          onClick={() => runMenuAction(() => copyText(contextMenu.selectedText))}
+        >
+          {t("contentViewer.menu.copy")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="dropdown-menu-item"
+          onClick={() => runMenuAction(selectAllContent)}
+        >
+          {t("contentViewer.menu.selectAll")}
+        </button>
+        {hasPathActions ? <div className="context-menu-separator" role="separator" /> : null}
+        {relativePath ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-menu-item"
+            onClick={() => runMenuAction(() => copyText(relativePath))}
+          >
+            {t("contentViewer.menu.copyRelativePath")}
+          </button>
+        ) : null}
+        {absolutePath ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-menu-item"
+            onClick={() => runMenuAction(() => copyText(absolutePath))}
+          >
+            {t("contentViewer.menu.copyAbsolutePath")}
+          </button>
+        ) : null}
+        {absolutePath && onOpenExternal ? (
+          <>
+            <div className="context-menu-separator" role="separator" />
+            <button
+              type="button"
+              role="menuitem"
+              className="dropdown-menu-item"
+              onClick={() => runMenuAction(() => onOpenExternal(absolutePath))}
+            >
+              {t("contentViewer.menu.openExternal")}
+            </button>
+          </>
+        ) : null}
+        <div className="context-menu-separator" role="separator" />
+        <button
+          type="button"
+          role="menuitem"
+          className="dropdown-menu-item"
+          onClick={() => runMenuAction(() => window.location.reload())}
+        >
+          {t("app.actions.refresh")}
+        </button>
+      </ContextMenu>
+    );
+  };
 
   const renderHeader = (path: string) => (
     <div className="explorer-content-header">
@@ -179,10 +298,12 @@ export function ContentViewer({
   }
 
   return (
-    <div className="explorer-content">
+    <div className="explorer-content" onContextMenu={handleContextMenu}>
       {filePath ? renderHeader(filePath) : null}
       <div
         ref={contentBodyRef}
+        tabIndex={0}
+        onKeyDown={handleBodyKeyDown}
         className={[
           "explorer-content-body",
           markdownFile ? "explorer-content-body--markdown" : "explorer-content-body--plain",
@@ -194,6 +315,7 @@ export function ContentViewer({
       >
         {!markdownFile ? content : undefined}
       </div>
+      {renderContextMenu()}
     </div>
   );
 }

@@ -2377,6 +2377,50 @@ mod tests {
     }
 
     #[test]
+    fn scan_openspec_change_lists_extra_markdown_files() {
+        let _guard = test_lock().lock().expect("lock");
+        let project_dir = unique_test_dir("openspec-extra-files");
+        let change_dir = project_dir
+            .join("openspec")
+            .join("changes")
+            .join("feature-extra");
+        fs::create_dir_all(change_dir.join("specs").join("auth")).expect("create spec dir");
+        fs::create_dir_all(change_dir.join("notes")).expect("create notes dir");
+        fs::create_dir_all(change_dir.join(".hidden")).expect("create hidden dir");
+
+        fs::write(change_dir.join("proposal.md"), "# Proposal").expect("write proposal");
+        fs::write(change_dir.join("tasks.md"), "- [ ] task").expect("write tasks");
+        fs::write(change_dir.join("review.md"), "# Review").expect("write review");
+        fs::write(change_dir.join("README.MD"), "# Readme").expect("write readme");
+        fs::write(change_dir.join("notes.txt"), "plain").expect("write txt");
+        fs::write(change_dir.join(".openspec.yaml"), "created: 2026-10-21\n")
+            .expect("write yaml");
+        fs::write(change_dir.join("notes").join("decision.md"), "# Decision")
+            .expect("write nested note");
+        fs::write(change_dir.join(".hidden").join("secret.md"), "# Hidden")
+            .expect("write hidden md");
+        fs::write(change_dir.join("specs").join("auth").join("spec.md"), "# Auth")
+            .expect("write spec");
+        fs::write(change_dir.join("specs").join("NO-SPEC-CHANGES.md"), "none")
+            .expect("write no spec changes");
+
+        let data = scan_openspec_internal(&project_dir);
+
+        assert_eq!(data.active_changes.len(), 1);
+        assert_eq!(
+            data.active_changes[0].extra_files,
+            vec![
+                "README.MD".to_string(),
+                "notes/decision.md".to_string(),
+                "review.md".to_string(),
+                "specs/NO-SPEC-CHANGES.md".to_string(),
+            ]
+        );
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+    }
+
+    #[test]
     fn scan_openspec_falls_back_to_filesystem_created_time_when_yaml_missing() {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("openspec-project-fallback-created-at");
