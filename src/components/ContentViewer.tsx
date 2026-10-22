@@ -200,6 +200,15 @@ export function ContentViewer({
             </button>
           </>
         ) : null}
+        <div className="context-menu-separator" role="separator" />
+        <button
+          type="button"
+          role="menuitem"
+          className="dropdown-menu-item"
+          onClick={() => runMenuAction(() => window.location.reload())}
+        >
+          {t("app.actions.refresh")}
+        </button>
       </ContextMenu>
     );
   };
