@@ -395,6 +395,23 @@ fn scan_opencode_incremental_from_db_internal(
         return Ok(false);
     }
 
+    let mut current_ids = HashSet::new();
+    let mut ids_statement = connection
+        .prepare("SELECT id, time_archived FROM session")
+        .map_err(|error| format!("failed to prepare OpenCode session ids: {error}"))?;
+    let ids = ids_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .map_err(|error| format!("failed to query OpenCode session ids: {error}"))?;
+    for row in ids {
+        let (id, archived_at) =
+            row.map_err(|error| format!("failed to read OpenCode session id: {error}"))?;
+        if show_archived || archived_at.is_none() {
+            current_ids.insert(id);
+        }
+    }
+
     let mut new_cursor = cache.last_cursor;
     let mut statement = connection
         .prepare(
@@ -477,6 +494,9 @@ fn scan_opencode_incremental_from_db_internal(
         }
     }
 
+    cache
+        .sessions
+        .retain(|session| current_ids.contains(&session.id));
     cache.last_cursor = new_cursor;
     Ok(true)
 }
@@ -497,82 +517,9 @@ pub(crate) fn scan_opencode_incremental_internal(
         return Ok(());
     }
 
-    let projects = load_opencode_projects(opencode_root);
-    if projects.is_empty() {
-        return Ok(());
-    }
-
-    let mut new_cursor = cache.last_cursor;
-
-    for (project_id, worktree) in &projects {
-        let session_dir = opencode_root
-            .join("storage")
-            .join("session")
-            .join(project_id);
-        let entries = match fs::read_dir(&session_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let session: OpencodeSessionJson = match serde_json::from_str(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let time_updated = session.time.as_ref().and_then(|t| t.updated).unwrap_or(0);
-            if time_updated <= cache.last_cursor {
-                continue;
-            }
-            let is_archived = session.time.as_ref().and_then(|t| t.archived).is_some();
-            if !show_archived && is_archived {
-                new_cursor = new_cursor.max(time_updated);
-                continue;
-            }
-            let created_at = session
-                .time
-                .as_ref()
-                .and_then(|t| t.created)
-                .and_then(unix_ms_to_iso8601);
-            let updated_at = unix_ms_to_iso8601(time_updated);
-            let session_summary = session.title.clone();
-            let summary_count = session
-                .summary
-                .as_ref()
-                .and_then(|s| summary_count(s.additions, s.deletions, s.files));
-            let session_dir_path = message_dir_for_session(opencode_root, &session.id);
-            let has_events = session_dir_path
-                .read_dir()
-                .map(|mut e| e.next().is_some())
-                .unwrap_or(false);
-            let info = build_opencode_session_info(
-                opencode_root,
-                metadata_conn,
-                session.id.clone(),
-                session.directory.or(worktree.clone()),
-                session_summary,
-                created_at,
-                updated_at,
-                is_archived,
-                summary_count,
-                has_events,
-            );
-            if let Some(pos) = cache.sessions.iter().position(|s| s.id == session.id) {
-                cache.sessions[pos] = info;
-            } else {
-                cache.sessions.push(info);
-            }
-            new_cursor = new_cursor.max(time_updated);
-        }
-    }
-
-    cache.last_cursor = new_cursor;
+    // JSON storage 沒有廉價的刪除游標；以完整快照取代快取，避免保留已刪除的 session。
+    cache.sessions = scan_opencode_sessions_internal(opencode_root, show_archived, metadata_conn)?;
+    cache.last_cursor = 0;
     Ok(())
 }
 

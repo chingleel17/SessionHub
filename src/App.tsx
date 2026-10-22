@@ -350,16 +350,33 @@ function App() {
   const sessionsCachedQuery = useQuery({
     queryKey: [
       "sessions_cached",
+      settingsQuery.data?.copilotRoot ?? "",
+      settingsQuery.data?.opencodeRoot ?? "",
+      settingsQuery.data?.codexRoot ?? "",
+      settingsQuery.data?.claudeRoot ?? "",
+      settingsQuery.data?.antigravityRoot ?? "",
       settingsQuery.data?.showArchived ?? false,
       settingsQuery.data?.enabledProviders ?? [],
     ],
     enabled: Boolean(settingsQuery.data),
     staleTime: Infinity,
-    queryFn: () =>
-      invoke<SessionInfo[]>("get_sessions_cached", {
+    queryFn: async () => {
+      const sessions = await invoke<SessionInfo[]>("get_sessions_cached", {
         showArchived: settingsQuery.data?.showArchived,
         enabledProviders: settingsQuery.data?.enabledProviders,
-      }),
+      });
+      const roots: Record<string, string | undefined> = {
+        copilot: settingsQuery.data?.copilotRoot,
+        opencode: settingsQuery.data?.opencodeRoot,
+        codex: settingsQuery.data?.codexRoot,
+        claude: settingsQuery.data?.claudeRoot,
+        antigravity: settingsQuery.data?.antigravityRoot,
+      };
+      return sessions.filter((session) => {
+        const root = roots[session.provider];
+        return !root || normalizePath(session.sessionDir).startsWith(`${normalizePath(root).replace(/\\+$/, "")}\\`);
+      });
+    },
   });
 
   const sessionsQuery = useQuery({

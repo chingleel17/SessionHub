@@ -1163,6 +1163,25 @@ fn project_skills_scan_includes_nested_skill_directories() {
     fs::remove_dir_all(&root).expect("cleanup root");
 }
 
+#[test]
+fn skill_scan_does_not_descend_into_discovered_skill_contents() {
+    let root = unique_test_dir("skill-content-scan");
+    let skill = root.join("team").join("demo-skill");
+    write_file(&skill.join("SKILL.md"), "demo skill");
+    write_file(
+        &skill.join("vendor").join("nested").join("SKILL.md"),
+        "dependency",
+    );
+
+    let mut discovered = BTreeMap::new();
+    let diagnostics = collect_skill_dirs_with_diagnostics(&root, &mut discovered);
+    assert!(diagnostics.is_empty());
+    assert!(discovered.contains_key("team/demo-skill"));
+    assert!(!discovered.contains_key("team/demo-skill/vendor/nested"));
+
+    fs::remove_dir_all(&root).expect("cleanup root");
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn project_skills_scan_discovers_symlinked_skill_directories() {

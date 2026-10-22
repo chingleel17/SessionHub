@@ -15,12 +15,12 @@ use crate::settings::{
     default_agents_root, default_app_data_dir, default_opencode_config_root,
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
 };
+#[cfg(target_os = "windows")]
+use crate::types::CREATE_NO_WINDOW;
 use crate::types::{
     AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
     OPENCODE_PROVIDER,
 };
-#[cfg(target_os = "windows")]
-use crate::types::CREATE_NO_WINDOW;
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
@@ -279,6 +279,23 @@ fn run_process_internal(
         }
         thread::sleep(Duration::from_millis(20));
     };
+    // 子行程可能留下繼承 pipe 的孫行程；即使 kill/wait 已完成，join 仍可能永遠等不到 EOF。
+    while !timed_out && (!stdout_reader.is_finished() || !stderr_reader.is_finished()) {
+        if started.elapsed() >= timeout {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let timed_out = timed_out || !stdout_reader.is_finished() || !stderr_reader.is_finished();
+    if timed_out {
+        return Ok(CliOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: status.and_then(|value| value.code()),
+            timed_out: true,
+            truncated: false,
+        });
+    }
     let (stdout, stdout_truncated) = stdout_reader.join().unwrap_or_default();
     let (stderr, stderr_truncated) = stderr_reader.join().unwrap_or_default();
     Ok(CliOutput {
@@ -798,6 +815,21 @@ mod tests {
         .expect("large output");
         assert!(truncated.truncated);
         assert!(truncated.stdout.len() <= MAX_CLI_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn runner_bounds_wait_for_inherited_output_pipes() {
+        let started = Instant::now();
+        let output = run_process_internal(
+            "cmd",
+            &["/C", "start /B ping 127.0.0.1 -n 4 & echo ready"],
+            &std::env::temp_dir(),
+            Duration::from_millis(500),
+            false,
+        )
+        .expect("inherited pipe output");
+        assert!(output.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
