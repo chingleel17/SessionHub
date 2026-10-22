@@ -24,6 +24,7 @@ use crate::types::{
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(1);
 const MAX_DIAGNOSTIC_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -280,14 +281,14 @@ fn run_process_internal(
         thread::sleep(Duration::from_millis(20));
     };
     // 子行程可能留下繼承 pipe 的孫行程；即使 kill/wait 已完成，join 仍可能永遠等不到 EOF。
-    while !timed_out && (!stdout_reader.is_finished() || !stderr_reader.is_finished()) {
-        if started.elapsed() >= timeout {
-            break;
-        }
+    // 只給 reader 有限時間收尾，讀完則保留（含逾時前已讀到的）輸出。
+    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+    while (!stdout_reader.is_finished() || !stderr_reader.is_finished())
+        && Instant::now() < drain_deadline
+    {
         thread::sleep(Duration::from_millis(20));
     }
-    let timed_out = timed_out || !stdout_reader.is_finished() || !stderr_reader.is_finished();
-    if timed_out {
+    if !stdout_reader.is_finished() || !stderr_reader.is_finished() {
         return Ok(CliOutput {
             stdout: String::new(),
             stderr: String::new(),
