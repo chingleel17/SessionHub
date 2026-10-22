@@ -107,6 +107,66 @@ fn scan_openspec_specs(specs_dir: &Path) -> Vec<OpenSpecSpec> {
     result
 }
 
+const CHANGE_ARTIFACT_FILES: [&str; 3] = ["proposal.md", "design.md", "tasks.md"];
+
+fn is_markdown_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+/// 遞迴收集 change 目錄內未被既有節點涵蓋的 md 檔，略過 `.` 開頭的檔案與目錄。
+fn collect_extra_markdown_files(dir: &Path, relative_dir: &str, result: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('.') {
+            continue;
+        }
+
+        let relative_path = if relative_dir.is_empty() {
+            file_name.to_string()
+        } else {
+            format!("{relative_dir}/{file_name}")
+        };
+
+        if path.is_dir() {
+            collect_extra_markdown_files(&path, &relative_path, result);
+            continue;
+        }
+        if !path.is_file() || !is_markdown_file(&path) {
+            continue;
+        }
+
+        let is_root_artifact = relative_dir.is_empty()
+            && CHANGE_ARTIFACT_FILES
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(file_name));
+        // specs/<capability>/spec.md 已由 specs 節點呈現
+        let is_capability_spec = file_name == "spec.md"
+            && relative_dir.starts_with("specs/")
+            && relative_dir.matches('/').count() == 1;
+        if is_root_artifact || is_capability_spec {
+            continue;
+        }
+
+        result.push(relative_path);
+    }
+}
+
+fn scan_change_extra_files(change_dir: &Path) -> Vec<String> {
+    let mut result = Vec::new();
+    collect_extra_markdown_files(change_dir, "", &mut result);
+    result.sort();
+    result
+}
+
 fn parse_openspec_yaml_created(change_dir: &Path) -> Option<String> {
     let yaml_path = change_dir.join(".openspec.yaml");
     let content = fs::read_to_string(yaml_path).ok()?;
@@ -156,6 +216,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
     let specs_dir = change_dir.join("specs");
     let specs = scan_openspec_specs(&specs_dir);
     let specs_count = specs.len();
+    let extra_files = scan_change_extra_files(change_dir);
     let created_at = resolve_change_created_at(change_dir);
 
     OpenSpecChange {
@@ -166,6 +227,7 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
         task_progress,
         specs_count,
         specs,
+        extra_files,
         created_at,
     }
 }

@@ -52,6 +52,16 @@ function changeToNodes(change: OpenSpecChange, basePath: string, t: TranslateFn)
       sourceKind: "openspec",
     });
   }
+  for (const extraFile of change.extraFiles) {
+    artifacts.push({
+      id: `change:${change.name}:extra:${extraFile}`,
+      label: extraFile,
+      icon: "note",
+      filePath: `${basePath}/${extraFile}`,
+      filePathType: "openspec",
+      sourceKind: "openspec",
+    });
+  }
   if (change.specs.length > 0) {
     artifacts.push({
       id: `change:${change.name}:specs`,

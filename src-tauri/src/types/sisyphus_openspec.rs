@@ -62,6 +62,8 @@ pub(crate) struct OpenSpecChange {
     pub(crate) task_progress: Option<OpenSpecTaskProgress>,
     pub(crate) specs_count: usize,
     pub(crate) specs: Vec<OpenSpecSpec>,
+    /// change 目錄內 proposal/design/tasks 與 specs/*/spec.md 以外的 md 檔（相對於 change 目錄，以 `/` 分隔）
+    pub(crate) extra_files: Vec<String>,
     pub(crate) created_at: Option<String>,
 }
 

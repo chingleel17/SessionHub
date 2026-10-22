@@ -2472,6 +2472,7 @@ function App() {
                onRefreshAgentsSkills={() => handleRefreshResource("skills", activeProject.pathLabel)}
                onRefreshAgentsCommands={() => handleRefreshResource("commands", activeProject.pathLabel)}
               plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              onOpenPlansSpecsFileExternal={handleOpenPathExternal}
               onOpenAgentsExternal={(path) => {
                 openPath(path).catch((error) => {
                   showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));

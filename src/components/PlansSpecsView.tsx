@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "../i18n/I18nProvider";
 import type { OpenSpecChange, OpenSpecData, SisyphusData, TreeNode } from "../types";
 import { ARCHIVED_CHANGES_GROUP_ID, buildOpenSpecTree, buildSisyphusTree } from "../utils/buildTree";
+import { resolveNodeFilePaths } from "../utils/filePaths";
 import { ContentViewer } from "./ContentViewer";
 import { ExplorerTree } from "./ExplorerTree";
 
@@ -16,6 +17,7 @@ type Props = {
   onRefresh: () => Promise<void>;
   refreshToken: string;
   projectCwd: string;
+  onOpenExternal: (path: string) => void;
 };
 
 type ExplorerViewMode = "tree" | "list" | "cols";
@@ -195,6 +197,7 @@ export function PlansSpecsView({
   onRefresh,
   refreshToken,
   projectCwd,
+  onOpenExternal,
 }: Props) {
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
@@ -385,6 +388,10 @@ export function PlansSpecsView({
       archivedChanges: sortChanges(openspecData.archivedChanges, sortField, sortDir),
     }, t);
   }, [openspecData, sortField, sortDir, t]);
+  const contentPaths = useMemo(
+    () => (contentFilePath ? resolveNodeFilePaths(projectCwd, contentFilePath, contentFilePathType) : null),
+    [contentFilePath, contentFilePathType, projectCwd],
+  );
   const hasSisyphus = sisyphusNodes.length > 0;
   const hasOpenSpec = openspecNodes.length > 0;
 
@@ -884,6 +891,9 @@ export function PlansSpecsView({
         error={contentError}
         isTaskSaving={taskSaving}
         onToggleTask={handleToggleTask}
+        absolutePath={contentPaths?.absolutePath ?? null}
+        relativePath={contentPaths?.relativePath ?? null}
+        onOpenExternal={onOpenExternal}
       />
     </div>
   );

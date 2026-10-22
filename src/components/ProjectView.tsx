@@ -131,6 +131,7 @@ type Props = {
   onRefreshAgentsSkills: () => Promise<void>;
   onRefreshAgentsCommands: () => Promise<void>;
   plansSpecsRefreshToken: string;
+  onOpenPlansSpecsFileExternal: (path: string) => void;
   onOpenAgentsExternal: (path: string) => void;
   onRevealAgentsPath: (path: string) => void;
   onPreviewAgentsSync: (request: SyncRequest) => Promise<SyncReport>;
@@ -277,6 +278,7 @@ export function ProjectView({
   onRefreshAgentsSkills,
   onRefreshAgentsCommands,
   plansSpecsRefreshToken,
+  onOpenPlansSpecsFileExternal,
   onOpenAgentsExternal,
   onRevealAgentsPath,
   onPreviewAgentsSync,
@@ -927,6 +929,7 @@ export function ProjectView({
           onRefresh={onRefreshPlansSpecs}
           refreshToken={plansSpecsRefreshToken}
           projectCwd={project.pathLabel}
+          onOpenExternal={onOpenPlansSpecsFileExternal}
         />
       ) : normalizedSubTab === "agents" ? (
         <AgentsConfigView
