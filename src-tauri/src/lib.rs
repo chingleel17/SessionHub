@@ -2528,10 +2528,7 @@ mod tests {
             assert_eq!(cache.sessions[0].id, "oc-session-001");
             assert_eq!(cache.sessions[0].provider, "opencode");
             assert_eq!(cache.sessions[0].summary.as_deref(), Some("OC Title"));
-            assert_eq!(
-                cache.last_cursor, 2000,
-                "cursor should advance to max time_updated"
-            );
+            assert_eq!(cache.last_cursor, 0, "JSON 快照不使用 DB 游標");
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
@@ -2539,8 +2536,8 @@ mod tests {
     }
 
     #[test]
-    fn incremental_opencode_cursor_advances_after_scan() {
-        // 掃描後 cursor 應更新為最大 time_updated
+    fn incremental_opencode_json_does_not_retain_db_cursor() {
+        // JSON storage 以完整快照核對，不沿用 DB 的更新游標。
         let _guard = test_lock().lock().expect("lock");
         let oc_dir = unique_test_dir("oc-cursor");
         let appdata_dir = unique_test_dir("appdata");
@@ -2564,7 +2561,7 @@ mod tests {
                 .expect("scan");
 
             assert_eq!(cache.sessions.len(), 3);
-            assert_eq!(cache.last_cursor, 5000, "cursor should be max time_updated");
+            assert_eq!(cache.last_cursor, 0);
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
@@ -2572,8 +2569,8 @@ mod tests {
     }
 
     #[test]
-    fn incremental_opencode_skips_sessions_before_cursor() {
-        // cursor 設為 3000，time_updated <= 3000 的 session 不應被撈到
+    fn incremental_opencode_json_reconciles_sessions_before_cursor() {
+        // JSON storage 需以完整快照核對，不能因舊游標漏掉仍存在的 session。
         let _guard = test_lock().lock().expect("lock");
         let oc_dir = unique_test_dir("oc-skip");
         let appdata_dir = unique_test_dir("appdata");
@@ -2595,18 +2592,15 @@ mod tests {
                 sessions: Vec::new(),
                 session_mtimes: HashMap::new(),
                 last_full_scan_at: Instant::now(),
-                last_cursor: 3000, // 只掃 time_updated > 3000
+                last_cursor: 3000,
             };
             scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
                 .expect("scan");
 
-            assert_eq!(
-                cache.sessions.len(),
-                1,
-                "only new session should be picked up"
-            );
-            assert_eq!(cache.sessions[0].id, "oc-new");
-            assert_eq!(cache.last_cursor, 5000);
+            assert_eq!(cache.sessions.len(), 2);
+            assert!(cache.sessions.iter().any(|session| session.id == "oc-old"));
+            assert!(cache.sessions.iter().any(|session| session.id == "oc-new"));
+            assert_eq!(cache.last_cursor, 0);
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
@@ -2633,7 +2627,7 @@ mod tests {
             scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
                 .expect("first scan");
             assert_eq!(cache.sessions.len(), 1);
-            assert_eq!(cache.last_cursor, 2000);
+            assert_eq!(cache.last_cursor, 0);
 
             // 手動更新 JSON 檔案模擬 session 被修改（time_updated 推進）
             let session_json_path = oc_dir
@@ -2656,7 +2650,7 @@ mod tests {
                 Some("Title v2"),
                 "summary should be updated"
             );
-            assert_eq!(cache.last_cursor, 4000);
+            assert_eq!(cache.last_cursor, 0);
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
@@ -2752,8 +2746,8 @@ mod tests {
     }
 
     #[test]
-    fn incremental_opencode_cursor_unchanged_when_no_new_rows() {
-        // 沒有新 row 時 cursor 不應改變
+    fn incremental_opencode_json_retains_existing_session_even_when_cursor_is_ahead() {
+        // JSON 快照仍需包含目前存在的 session，即使舊游標比來源時間還新。
         let _guard = test_lock().lock().expect("lock");
         let oc_dir = unique_test_dir("oc-no-new");
         let appdata_dir = unique_test_dir("appdata");
@@ -2774,8 +2768,9 @@ mod tests {
             scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
                 .expect("scan");
 
-            assert!(cache.sessions.is_empty(), "no new sessions");
-            assert_eq!(cache.last_cursor, 9999, "cursor should not change");
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "oc-z");
+            assert_eq!(cache.last_cursor, 0, "JSON 快照應清除舊 DB 游標");
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
@@ -2808,6 +2803,116 @@ mod tests {
         });
 
         fs::remove_dir_all(&oc_dir).expect("cleanup oc dir");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn incremental_opencode_removes_deleted_and_archived_db_sessions() {
+        let _guard = test_lock().lock().expect("lock");
+        let oc_dir = unique_test_dir("oc-db-reconcile");
+        let appdata_dir = unique_test_dir("appdata");
+        create_opencode_db_sessions(
+            &oc_dir,
+            "project-db-reconcile",
+            "D:\\repo\\reconcile",
+            &[
+                ("ses_deleted", "Deleted", 1000, 2000, None),
+                ("ses_archived", "Archived", 1000, 2000, None),
+                ("ses_kept", "Kept", 1000, 2000, None),
+            ],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let metadata_conn = open_db_connection().expect("open metadata db");
+            init_db(&metadata_conn).expect("init db");
+            let mut cache = empty_copilot_cache();
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("initial scan");
+            let source = Connection::open(oc_dir.join("opencode.db")).expect("open source db");
+            source
+                .execute("DELETE FROM session WHERE id = 'ses_deleted'", [])
+                .expect("delete session");
+            source
+                .execute(
+                    "UPDATE session SET time_archived = 3000 WHERE id = 'ses_archived'",
+                    [],
+                )
+                .expect("archive session without changing update cursor");
+
+            scan_opencode_incremental_internal(&oc_dir, false, &metadata_conn, &mut cache)
+                .expect("reconcile scan");
+            assert_eq!(cache.sessions.len(), 1);
+            assert_eq!(cache.sessions[0].id, "ses_kept");
+            persist_provider_cache(&metadata_conn, OPENCODE_PROVIDER, &cache)
+                .expect("persist cache");
+            let cached = load_sessions_cache_from_db(&metadata_conn, Some(OPENCODE_PROVIDER))
+                .expect("load cache");
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].id, "ses_kept");
+        });
+
+        fs::remove_dir_all(&oc_dir).expect("cleanup opencode root");
+        fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
+    }
+
+    #[test]
+    fn completed_scan_persists_presented_project_paths_and_replaces_old_root() {
+        let _guard = test_lock().lock().expect("lock");
+        let first_root = unique_test_dir("oc-cache-first");
+        let second_root = unique_test_dir("oc-cache-second");
+        let appdata_dir = unique_test_dir("appdata");
+        create_opencode_db_sessions(
+            &first_root,
+            "project-first",
+            "D:\\repo\\old",
+            &[("ses_first", "First", 1000, 5000, None)],
+        );
+        create_opencode_db_sessions(
+            &second_root,
+            "project-second",
+            "D:\\repo\\second",
+            &[("ses_second", "Second", 1000, 2000, None)],
+        );
+
+        with_appdata(&appdata_dir, || {
+            let connection = open_db_connection().expect("open metadata db");
+            init_db(&connection).expect("init db");
+            upsert_path_remap(&connection, "D:\\repo\\old", "D:\\repo\\current")
+                .expect("save path remap");
+            let cache = ScanCache::default();
+            let scan = |root: &Path| {
+                get_sessions_internal(
+                    None,
+                    Some(root.to_string_lossy().to_string()),
+                    None,
+                    None,
+                    None,
+                    Some(false),
+                    Some(vec![OPENCODE_PROVIDER.to_string()]),
+                    Some(false),
+                    &cache,
+                    &connection,
+                )
+                .expect("scan sessions")
+            };
+
+            let first = scan(&first_root);
+            let cached = load_sessions_cache_from_db(&connection, Some(OPENCODE_PROVIDER))
+                .expect("load first cache");
+            assert_eq!(first[0].cwd, cached[0].cwd);
+            assert_eq!(cached[0].cwd.as_deref(), Some("D:\\repo\\current"));
+
+            let second = scan(&second_root);
+            let cached = load_sessions_cache_from_db(&connection, Some(OPENCODE_PROVIDER))
+                .expect("load second cache");
+            assert_eq!(second.len(), 1);
+            assert_eq!(second[0].id, "ses_second");
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].id, "ses_second");
+        });
+
+        fs::remove_dir_all(&first_root).expect("cleanup first root");
+        fs::remove_dir_all(&second_root).expect("cleanup second root");
         fs::remove_dir_all(&appdata_dir).expect("cleanup appdata");
     }
 

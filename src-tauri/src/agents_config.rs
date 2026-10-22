@@ -39,6 +39,7 @@ const SKILL_FILE_NAME: &str = "SKILL.md";
 const AGENTS_PREFS_FILE_NAME: &str = "agents.json";
 const MAX_SCAN_DEPTH: usize = 8;
 const MAX_SCANNED_DIRS: u64 = 20_000;
+const MAX_SKILL_SCAN_DIRS: usize = 2_000;
 const FIXED_IGNORED_DIRS: &[&str] = &[
     "node_modules",
     ".git",
@@ -1872,11 +1873,12 @@ fn collect_skill_dirs_with_diagnostics(
 
     // skill 目錄可能是符號連結（例如集中存放後 link 到 .agents/skills），
     // 因此需要 follow_links 才能探索連結後的內容；迴圈連結會由 walkdir 回報錯誤而被濾除。
-    let walker = WalkDir::new(root)
+    let mut walker = WalkDir::new(root)
         .follow_links(true)
         .sort_by_file_name()
         .into_iter();
-    for result in walker {
+    let mut scanned_dirs = 0;
+    while let Some(result) = walker.next() {
         let entry = match result {
             Ok(entry) => entry,
             Err(error) => {
@@ -1892,9 +1894,20 @@ fn collect_skill_dirs_with_diagnostics(
         }
 
         let dir = entry.path();
+        if scanned_dirs >= MAX_SKILL_SCAN_DIRS {
+            diagnostics.push(format!(
+                "{}: 技能掃描超過 {MAX_SKILL_SCAN_DIRS} 個目錄，上限位置 {}",
+                root.display(),
+                dir.display()
+            ));
+            break;
+        }
+        scanned_dirs += 1;
         if !dir.join(SKILL_FILE_NAME).is_file() {
             continue;
         }
+        // 技能內容可能包含大量依賴或連結；找到技能後不再深入其內部。
+        walker.skip_current_dir();
 
         let Ok(relative) = dir.strip_prefix(root) else {
             continue;

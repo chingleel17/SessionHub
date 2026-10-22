@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::db::{
     apply_session_metadata, cleanup_usage_for_missing_sessions, instant_from_unix_secs,
     list_path_remaps, load_scan_state_from_db, load_session_mtimes_from_db,
-    load_sessions_cache_from_db, persist_provider_cache, remap_path,
+    load_sessions_cache_from_db, persist_provider_cache, remap_path, save_sessions_cache_to_db,
 };
 use crate::settings::{
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
@@ -229,7 +229,12 @@ pub(crate) fn get_sessions_internal(
             let opencode_force_full = force
                 || oc_guard
                     .as_ref()
-                    .map(|cache| cache.sessions.is_empty())
+                    .map(|cache| {
+                        cache.sessions.is_empty()
+                            || cache.sessions.iter().any(|session| {
+                                !Path::new(&session.session_dir).starts_with(oc_root)
+                            })
+                    })
                     .unwrap_or(true);
 
             if should_full_scan(&oc_guard, opencode_force_full) {
@@ -483,16 +488,15 @@ pub(crate) fn get_sessions_internal(
         }
     }
 
-    // 只對尚未填入 repo_root 的 session 執行 git 查詢，避免每次重跑 git 子程序
+    // 磁碟快取含 Git 資訊；每次掃描仍需更新分支與專案名稱，避免冷啟動快取永久沿用舊分支。
     let needs_git: Vec<usize> = all_sessions
         .iter()
         .enumerate()
         .filter(|(_, s)| {
-            s.repo_root.is_none()
-                && s.cwd
-                    .as_deref()
-                    .map(|c| !c.trim().is_empty())
-                    .unwrap_or(false)
+            s.cwd
+                .as_deref()
+                .map(|c| !c.trim().is_empty())
+                .unwrap_or(false)
         })
         .map(|(i, _)| i)
         .collect();
@@ -510,6 +514,8 @@ pub(crate) fn get_sessions_internal(
 
     apply_session_metadata(connection, &mut all_sessions)?;
     all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    // 冷啟動占位資料必須與本次回傳一致，包含路徑轉換及 Git 專案資訊。
+    save_sessions_cache_to_db(connection, &providers, &all_sessions)?;
     cleanup_usage_for_missing_sessions(connection, &providers)?;
 
     Ok(all_sessions)

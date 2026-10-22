@@ -15,15 +15,16 @@ use crate::settings::{
     default_agents_root, default_app_data_dir, default_opencode_config_root,
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
 };
+#[cfg(target_os = "windows")]
+use crate::types::CREATE_NO_WINDOW;
 use crate::types::{
     AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
     OPENCODE_PROVIDER,
 };
-#[cfg(target_os = "windows")]
-use crate::types::CREATE_NO_WINDOW;
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(1);
 const MAX_DIAGNOSTIC_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -279,6 +280,23 @@ fn run_process_internal(
         }
         thread::sleep(Duration::from_millis(20));
     };
+    // 子行程可能留下繼承 pipe 的孫行程；即使 kill/wait 已完成，join 仍可能永遠等不到 EOF。
+    // 只給 reader 有限時間收尾，讀完則保留（含逾時前已讀到的）輸出。
+    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
+    while (!stdout_reader.is_finished() || !stderr_reader.is_finished())
+        && Instant::now() < drain_deadline
+    {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        return Ok(CliOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: status.and_then(|value| value.code()),
+            timed_out: true,
+            truncated: false,
+        });
+    }
     let (stdout, stdout_truncated) = stdout_reader.join().unwrap_or_default();
     let (stderr, stderr_truncated) = stderr_reader.join().unwrap_or_default();
     Ok(CliOutput {
@@ -798,6 +816,21 @@ mod tests {
         .expect("large output");
         assert!(truncated.truncated);
         assert!(truncated.stdout.len() <= MAX_CLI_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn runner_bounds_wait_for_inherited_output_pipes() {
+        let started = Instant::now();
+        let output = run_process_internal(
+            "cmd",
+            &["/C", "start /B ping 127.0.0.1 -n 4 & echo ready"],
+            &std::env::temp_dir(),
+            Duration::from_millis(500),
+            false,
+        )
+        .expect("inherited pipe output");
+        assert!(output.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
