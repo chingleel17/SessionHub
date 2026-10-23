@@ -72,10 +72,13 @@ fn spawn_gh(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+// 僅 Windows 執行路徑使用；其他平台只在測試中呼叫
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn is_copilot_cli_credential_target(target: &str) -> bool {
     target.ends_with(".copilot-cli")
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn decode_credential_blob(blob: &[u8]) -> Option<String> {
     let is_utf16_le = blob.len().is_multiple_of(2)
         && blob

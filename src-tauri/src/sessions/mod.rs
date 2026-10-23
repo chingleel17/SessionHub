@@ -59,6 +59,8 @@ pub(crate) fn text_from_value(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+// 僅 Windows 執行路徑使用；其他平台只在測試中呼叫
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn merge_msys_options(existing: Option<&str>) -> String {
     let existing = existing.unwrap_or_default();
     let has_error_start = existing.split_ascii_whitespace().any(|token| {

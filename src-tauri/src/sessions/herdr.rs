@@ -203,6 +203,8 @@ pub(crate) fn herdr_server_is_running() -> Result<bool, String> {
             || parse_herdr_server_status(&String::from_utf8_lossy(&output.stderr))))
 }
 
+// 僅 Windows 執行路徑使用；其他平台只在測試中呼叫
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn parse_herdr_socket_path(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let (key, value) = line.split_once(':')?;
@@ -215,6 +217,7 @@ pub(crate) fn parse_herdr_socket_path(output: &str) -> Option<String> {
     })
 }
 
+#[cfg(target_os = "windows")]
 fn herdr_socket_path() -> Option<String> {
     let output = run_herdr(&["status", "server"]).ok()?;
     parse_herdr_socket_path(&String::from_utf8_lossy(&output.stdout))
@@ -224,6 +227,7 @@ fn herdr_socket_path() -> Option<String> {
 ///
 /// herdr 在無 client 時回報 `no_foreground_client`；此處的「foreground」指 herdr
 /// 用以呈現畫面的 client，與作業系統視窗焦點無關（實測切換前景視窗後仍回報 `set`）。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn parse_herdr_client_attached(stdout: &str) -> Option<bool> {
     let value: Value = serde_json::from_str(stdout.trim()).ok()?;
     let reason = value
