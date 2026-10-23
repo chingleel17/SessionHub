@@ -89,6 +89,20 @@ async function handleV2Event(event: any) {
         error: data.error?.message ?? null,
       }));
       break;
+    case "session.status": {
+      const status = data.status?.type ?? data.status;
+      if (status === "busy" || status === "retry" || status === "idle") {
+        await appendRecord(buildRecord(status === "idle" ? "session.idle" : "session.active", timestamp, {
+          sessionId: data.sessionID ?? null,
+        }));
+      }
+      break;
+    }
+    case "session.idle":
+      await appendRecord(buildRecord("session.idle", timestamp, {
+        sessionId: data.sessionID ?? null,
+      }));
+      break;
     case "permission.asked": {
       const permissionType = data.action ?? "permission";
       await appendRecord(buildRecord("permission.asked", timestamp, {
@@ -121,6 +135,17 @@ async function handleV1Event(event: any) {
     await appendRecord(buildRecord(event.type, new Date().toISOString(), {
       sessionId: props.sessionID ?? null,
       error: props.error?.message ?? String(props.error ?? "") ?? null,
+    }));
+  } else if (event.type === "session.status") {
+    const status = props.status?.type ?? props.status;
+    if (status === "busy" || status === "retry" || status === "idle") {
+      await appendRecord(buildRecord(status === "idle" ? "session.idle" : "session.active", new Date().toISOString(), {
+        sessionId: props.sessionID ?? null,
+      }));
+    }
+  } else if (event.type === "session.idle") {
+    await appendRecord(buildRecord("session.idle", new Date().toISOString(), {
+      sessionId: props.sessionID ?? null,
     }));
   } else if (event.type === "permission.updated" || event.type === "permission.asked") {
     const permissionType = props.title ?? props.permission ?? props.type ?? props.action ?? "permission";
@@ -325,7 +350,19 @@ pub(crate) fn detect_opencode_integration_status() -> ProviderIntegrationStatus 
     };
 
     let installed_version = Some(metadata.integration_version);
-    match validate_managed_metadata(&metadata, OPENCODE_PROVIDER, &expected_bridge_path) {
+    let integration_status =
+        validate_managed_metadata(&metadata, OPENCODE_PROVIDER, &expected_bridge_path).and_then(
+            |_| {
+                if content.contains("case \"session.status\"")
+                    && content.contains("event.type === \"session.status\"")
+                {
+                    Ok(())
+                } else {
+                    Err("OpenCode bridge 缺少 session 狀態事件，請更新整合。".to_string())
+                }
+            },
+        );
+    match integration_status {
         Ok(()) => build_provider_integration_status(
             OPENCODE_PROVIDER,
             ProviderIntegrationState::Installed,

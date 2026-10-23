@@ -12,7 +12,7 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "5";
+const HOOK_SCRIPT_VERSION: &str = "6";
 
 // Node.js 主軌（.cjs，強制 CommonJS）
 const MODULE_RECORD_EVENT_JS: &str =
@@ -28,6 +28,8 @@ const SCRIPT_ON_POST_TOOL_USE_JS: &str =
     include_str!("../../../hooks/copilot/on-post-tool-use.cjs");
 const SCRIPT_ON_ERROR_OCCURRED_JS: &str =
     include_str!("../../../hooks/copilot/on-error-occurred.cjs");
+const SCRIPT_ON_NOTIFICATION_JS: &str = include_str!("../../../hooks/copilot/on-notification.cjs");
+const SCRIPT_ON_AGENT_STOP_JS: &str = include_str!("../../../hooks/copilot/on-agent-stop.cjs");
 
 // sh fallback（無 node 環境時的手動退路）
 const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/copilot/modules/record-event.sh");
@@ -40,7 +42,7 @@ const SCRIPT_ON_POST_TOOL_USE_SH: &str = include_str!("../../../hooks/copilot/on
 const SCRIPT_ON_ERROR_OCCURRED_SH: &str =
     include_str!("../../../hooks/copilot/on-error-occurred.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 15] {
+fn hook_script_entries() -> [(&'static str, &'static str); 17] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
         ("modules/notify.cjs", MODULE_NOTIFY_JS),
@@ -53,6 +55,8 @@ fn hook_script_entries() -> [(&'static str, &'static str); 15] {
         ("on-pre-tool-use.cjs", SCRIPT_ON_PRE_TOOL_USE_JS),
         ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
         ("on-error-occurred.cjs", SCRIPT_ON_ERROR_OCCURRED_JS),
+        ("on-notification.cjs", SCRIPT_ON_NOTIFICATION_JS),
+        ("on-agent-stop.cjs", SCRIPT_ON_AGENT_STOP_JS),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
         ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
         ("on-session-end.sh", SCRIPT_ON_SESSION_END_SH),
@@ -120,6 +124,8 @@ fn render_copilot_integration(
             "preToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-pre-tool-use.cjs"), bridge_path) }],
             "postToolUse": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-post-tool-use.cjs"), bridge_path) }],
             "errorOccurred": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-error-occurred.cjs"), bridge_path) }],
+            "notification": [{ "type": "command", "matcher": "permission_prompt|elicitation_dialog", "command": render_copilot_hook_command(&hook_scripts_root.join("on-notification.cjs"), bridge_path) }],
+            "agentStop": [{ "type": "command", "command": render_copilot_hook_command(&hook_scripts_root.join("on-agent-stop.cjs"), bridge_path) }],
         }
     });
 
@@ -301,7 +307,17 @@ pub(crate) fn detect_copilot_integration_status(
     };
 
     let installed_version = Some(metadata.integration_version);
-    match validate_managed_metadata(&metadata, COPILOT_PROVIDER, &expected_bridge_path) {
+    let integration_status =
+        validate_managed_metadata(&metadata, COPILOT_PROVIDER, &expected_bridge_path).and_then(
+            |_| {
+                if content.contains("on-notification.cjs") && content.contains("on-agent-stop.cjs") {
+                    Ok(())
+                } else {
+                    Err("Copilot bridge 缺少等待介入或完成事件，請更新整合。".to_string())
+                }
+            },
+        );
+    match integration_status {
         Ok(()) => build_provider_integration_status(
             COPILOT_PROVIDER,
             ProviderIntegrationState::Installed,

@@ -300,9 +300,10 @@ pub(crate) fn derive_activity_status(
     stop_reason: Option<&str>,
 ) -> (String, Option<String>) {
     match event_type {
-        "session.started" | "prompt.submitted" => {
+        "session.started" | "session.active" | "prompt.submitted" => {
             ("active".to_string(), Some("thinking".to_string()))
         }
+        "session.idle" => ("idle".to_string(), None),
         "tool.pre" => ("active".to_string(), Some("tool_call".to_string())),
         "tool.post" => ("active".to_string(), Some("working".to_string())),
         "session.stop" => {
@@ -318,10 +319,10 @@ pub(crate) fn derive_activity_status(
         | "permission.v2.asked"
         | "permission.requested" => ("waiting".to_string(), None),
         "permission.replied" | "permission.v2.replied" => ("active".to_string(), None),
-        // Claude Notification hook：permission_prompt / idle_prompt 代表需授權/等待回應，
+        // Claude Notification hook：只有 permission_prompt 代表需授權；idle_prompt 是回覆完成後的閒置提醒。
         // stop_reason 參數在此路徑帶入 notification_type（見 process_provider_bridge_event 的 Claude 分支）
         "notification" => match stop_reason {
-            Some("permission_prompt") | Some("idle_prompt") => ("waiting".to_string(), None),
+            Some("permission_prompt") => ("waiting".to_string(), None),
             _ => ("idle".to_string(), None),
         },
         _ => ("idle".to_string(), None),
@@ -467,10 +468,58 @@ pub(crate) fn process_provider_bridge_event(
     provider: &str,
 ) -> Result<bool, String> {
     let bridge_path = resolve_provider_bridge_path(provider)?;
-    let Some(record) = read_last_bridge_record(&bridge_path)? else {
-        return Ok(false);
-    };
+    let previous = last_bridge_records
+        .lock()
+        .map_err(|_| "failed to lock provider bridge record state".to_string())?
+        .get(provider)
+        .cloned();
+    let records = read_bridge_records_since(&bridge_path, previous.as_deref())?;
+    let mut processed = false;
+    for record in records {
+        processed |= process_provider_bridge_record(
+            app,
+            refresh_state,
+            last_bridge_records,
+            provider,
+            &bridge_path,
+            record,
+        )?;
+    }
+    Ok(processed)
+}
 
+/// Codex 與 Copilot CLI 的 hook-only 狀態；只有實際介入訊號才點亮紅燈。
+fn overlay_hook_status(
+    provider: &str,
+    event_type: &str,
+    title: Option<&str>,
+) -> Option<&'static str> {
+    match (provider, event_type) {
+        (CODEX_PROVIDER, "permission.requested") => Some("waiting"),
+        (COPILOT_PROVIDER, "notification")
+            if matches!(title, Some("permission_prompt" | "elicitation_dialog")) =>
+        {
+            Some("waiting")
+        }
+        (CODEX_PROVIDER | COPILOT_PROVIDER, "tool.pre" | "tool.post" | "prompt.submitted") => {
+            Some("active")
+        }
+        (
+            CODEX_PROVIDER | COPILOT_PROVIDER,
+            "session.started" | "session.stop" | "session.idle" | "session.ended",
+        ) => Some("idle"),
+        _ => None,
+    }
+}
+
+fn process_provider_bridge_record(
+    app: &tauri::AppHandle,
+    refresh_state: &Arc<Mutex<HashMap<String, Instant>>>,
+    last_bridge_records: &Arc<Mutex<HashMap<String, String>>>,
+    provider: &str,
+    bridge_path: &Path,
+    record: ProviderBridgeRecord,
+) -> Result<bool, String> {
     if record.provider != provider {
         return Err(format!(
             "unexpected provider '{}' in {} bridge file",
@@ -482,6 +531,22 @@ pub(crate) fn process_provider_bridge_event(
     if !register_provider_bridge_record(last_bridge_records, provider, &record)? {
         emit_event_log(app, make_log_entry(&record, "skipped_dedup"));
         return Ok(false);
+    }
+
+    if let Some(status) = overlay_hook_status(provider, &record.event_type, record.title.as_deref()) {
+        let tool_label = if provider == CODEX_PROVIDER && status == "waiting" {
+            record.title.clone()
+        } else {
+            None
+        };
+        sync_intervention_registry(
+            app,
+            record.session_id.as_deref(),
+            status,
+            record.cwd.as_deref(),
+            tool_label,
+            provider,
+        );
     }
 
     if provider == COPILOT_PROVIDER {
@@ -542,6 +607,11 @@ pub(crate) fn process_provider_bridge_event(
     }
 
     if provider == CLAUDE_PROVIDER {
+        // 舊版已安裝的 hook 仍可能寫入 idle_prompt；不能讓它覆蓋真正的 waiting 狀態。
+        if record.event_type == "notification" && record.title.as_deref() == Some("idle_prompt") {
+            emit_event_log(app, make_log_entry(&record, "ignored_idle_prompt"));
+            return Ok(false);
+        }
         if let Some(cwd) = record.cwd.as_deref().filter(|c| !c.is_empty()) {
             // tool.pre / tool.post / prompt.submitted / session.started / session.stop
             // 及 notification / permission.requested（等待授權訊號）：只需更新 activity status，
@@ -637,6 +707,8 @@ pub(crate) fn process_provider_bridge_event(
                 | "permission.v2.asked"
                 | "permission.replied"
                 | "permission.v2.replied"
+                | "session.active"
+                | "session.idle"
         )
     {
         let (status, detail) = derive_activity_status(&record.event_type, None);
@@ -701,9 +773,12 @@ fn coerce_json_string(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRecord>, String> {
+fn read_bridge_records_since(
+    bridge_path: &Path,
+    previous: Option<&str>,
+) -> Result<Vec<ProviderBridgeRecord>, String> {
     if !bridge_path.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
     let file = File::open(bridge_path).map_err(|error| {
@@ -713,6 +788,8 @@ fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRe
         )
     })?;
     let mut last_non_empty_line: Option<String> = None;
+    let mut found_previous = false;
+    let mut pending = Vec::new();
 
     for line in BufReader::new(file).lines() {
         let line = line.map_err(|error| {
@@ -722,15 +799,43 @@ fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRe
             )
         })?;
         if !line.trim().is_empty() {
+            if let Some(previous) = previous {
+                match parse_bridge_record(&line, bridge_path) {
+                    Ok(record) => {
+                        if provider_bridge_record_fingerprint(&record) == previous {
+                            found_previous = true;
+                            pending.clear();
+                        } else if found_previous {
+                            pending.push(record);
+                        }
+                    }
+                    Err(error) if found_previous => return Err(error),
+                    Err(_) => {}
+                }
+            }
             last_non_empty_line = Some(line);
         }
     }
 
-    let Some(last_line) = last_non_empty_line else {
-        return Ok(None);
-    };
+    if found_previous {
+        return Ok(pending);
+    }
 
-    let raw: serde_json::Value = serde_json::from_str(&last_line).map_err(|error| {
+    // 初次啟動或 bridge 檔被輪替時只讀最新一筆，避免重播舊 session 的事件。
+    last_non_empty_line
+        .map(|line| parse_bridge_record(&line, bridge_path).map(|record| vec![record]))
+        .unwrap_or_else(|| Ok(Vec::new()))
+}
+
+fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRecord>, String> {
+    Ok(read_bridge_records_since(bridge_path, None)?.pop())
+}
+
+fn parse_bridge_record(
+    last_line: &str,
+    bridge_path: &Path,
+) -> Result<ProviderBridgeRecord, String> {
+    let raw: serde_json::Value = serde_json::from_str(last_line).map_err(|error| {
         format!(
             "failed to parse bridge file {}: {error}",
             bridge_path.display()
@@ -757,7 +862,7 @@ fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRe
             .unwrap_or(default)
     };
 
-    Ok(Some(ProviderBridgeRecord {
+    Ok(ProviderBridgeRecord {
         version: get_u32("version", default_provider_bridge_version()),
         provider: get_req_str("provider")?,
         event_type: get_req_str("eventType")?,
@@ -767,7 +872,7 @@ fn read_last_bridge_record(bridge_path: &Path) -> Result<Option<ProviderBridgeRe
         source_path: get_str("sourcePath"),
         title: get_str("title"),
         error: get_str("error"),
-    }))
+    })
 }
 
 pub(crate) fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnostics {
@@ -808,4 +913,74 @@ pub(crate) fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnosti
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_and_copilot_only_wait_for_real_intervention_events() {
+        for (provider, event, title, expected) in [
+            (CODEX_PROVIDER, "permission.requested", Some("Bash"), Some("waiting")),
+            (CODEX_PROVIDER, "tool.pre", None, Some("active")),
+            (CODEX_PROVIDER, "session.stop", Some("end_turn"), Some("idle")),
+            (CODEX_PROVIDER, "session.ended", None, Some("idle")),
+            (COPILOT_PROVIDER, "notification", Some("permission_prompt"), Some("waiting")),
+            (COPILOT_PROVIDER, "notification", Some("elicitation_dialog"), Some("waiting")),
+            (COPILOT_PROVIDER, "notification", Some("agent_idle"), None),
+            (COPILOT_PROVIDER, "tool.pre", None, Some("active")),
+            (COPILOT_PROVIDER, "session.idle", None, Some("idle")),
+            (COPILOT_PROVIDER, "session.ended", None, Some("idle")),
+        ] {
+            assert_eq!(overlay_hook_status(provider, event, title), expected);
+        }
+    }
+
+    #[test]
+    fn reads_every_event_after_last_processed_record() {
+        let path = std::env::temp_dir().join(format!(
+            "sessionhub-bridge-batch-{}-{}.jsonl",
+            std::process::id(),
+            EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let record = |event_type: &str, timestamp: usize| {
+            format!(
+                "{{\"provider\":\"opencode\",\"eventType\":\"{event_type}\",\"timestamp\":\"{timestamp}\",\"sessionId\":\"session-1\"}}\n"
+            )
+        };
+        let first = record("permission.asked", 1);
+        fs::write(&path, &first).expect("write initial record");
+        let initial = read_bridge_records_since(&path, None).expect("initial record");
+        let fingerprint = provider_bridge_record_fingerprint(&initial[0]);
+
+        fs::write(
+            &path,
+            format!(
+                "{first}{}{}",
+                record("permission.replied", 2),
+                record("session.updated", 3)
+            ),
+        )
+        .expect("append batched records");
+        let pending =
+            read_bridge_records_since(&path, Some(&fingerprint)).expect("pending records");
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.event_type.as_str())
+                .collect::<Vec<_>>(),
+            ["permission.replied", "session.updated"]
+        );
+        let latest = provider_bridge_record_fingerprint(&pending[1]);
+        assert!(read_bridge_records_since(&path, Some(&latest))
+            .expect("no new records")
+            .is_empty());
+
+        fs::write(&path, record("session.created", 4)).expect("rotate bridge file");
+        let rotated = read_bridge_records_since(&path, Some(&latest)).expect("rotated record");
+        assert_eq!(rotated.len(), 1);
+        assert_eq!(rotated[0].event_type, "session.created");
+        fs::remove_file(path).expect("remove test bridge file");
+    }
 }
