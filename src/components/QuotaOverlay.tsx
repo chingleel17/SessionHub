@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
-import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useI18n } from "../i18n/I18nProvider";
@@ -144,6 +144,7 @@ export function QuotaOverlay({
   const visibleSnapshots = getVisibleRows(snapshots, enabledProviders, selectedProviders);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const interventionRef = useRef<HTMLDivElement | null>(null);
+  const sizeSyncQueue = useRef<Promise<void>>(Promise.resolve());
   const showIndicator = interventionEnabled && interventionStyle === "indicator";
   const showIntervention = interventionEnabled && interventionStyle === "cards" && interventionItems.length > 0;
   // 紅：有 session 等待使用者處理；黃：有 session 處理中；灰：閒置
@@ -166,9 +167,11 @@ export function QuotaOverlay({
 
     let lastWidth = 0;
     let lastHeight = 0;
+    let disposed = false;
 
     const syncWindowSize = () => {
-      void (async () => {
+      sizeSyncQueue.current = sizeSyncQueue.current.then(async () => {
+        if (disposed) return;
         const width = Math.ceil(wrapper.scrollWidth);
         const height = Math.ceil(wrapper.scrollHeight);
         if (width === 0 || height === 0) return;
@@ -212,13 +215,16 @@ export function QuotaOverlay({
           setExtendUp(false);
         }
 
-        lastWidth = width;
-        lastHeight = height;
+        if (disposed) return;
         await currentWindow.setSize(new LogicalSize(width, height));
         if (targetPosition) {
           await currentWindow.setPosition(targetPosition);
         }
-      })();
+        lastWidth = width;
+        lastHeight = height;
+      }).catch((error: unknown) => {
+        console.error("Failed to synchronize quota overlay size", error);
+      });
     };
 
     syncWindowSize();
@@ -227,23 +233,11 @@ export function QuotaOverlay({
     const mutationObserver = new MutationObserver(syncWindowSize);
     mutationObserver.observe(wrapper, { childList: true, subtree: true, characterData: true });
     return () => {
+      disposed = true;
       observer.disconnect();
       mutationObserver.disconnect();
     };
   }, [styleMode, locked, visibleSnapshots.length, showIntervention, showIndicator, interventionItems.length]);
-
-  useEffect(() => {
-    const refreshTransparentWebview = async () => {
-      const currentWindow = getCurrentWindow();
-      const size = await currentWindow.innerSize();
-      await currentWindow.setSize(new PhysicalSize(size.width + 1, size.height));
-      await currentWindow.setSize(size);
-    };
-
-    void requestAnimationFrame(() => {
-      void refreshTransparentWebview();
-    });
-  }, [opacity, theme, styleMode, locked, selectedProviders]);
 
   const isCompact = styleMode === "compact";
 
