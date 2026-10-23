@@ -132,14 +132,19 @@ fn read_codex_credentials(codex_root: &str) -> Result<CodexCredentials, String> 
     Err("no access_token found in auth.json".to_string())
 }
 
-/// OpenCode 以 OpenAI（ChatGPT）OAuth 登入時，憑證存在 `<opencode_root>/auth.json` 的 `openai` 項目，
-/// 與 Codex 使用同一套 ChatGPT token，可作為 Codex 用量的備援來源（唯讀，不做 token 更新）。
+/// OpenCode 以 OpenAI（ChatGPT）OAuth 登入時的憑證，與 Codex 使用同一套 ChatGPT token，
+/// 可作為 Codex 用量的備援來源（唯讀，不做 token 更新）。
+/// 新版 OpenCode 存於 `<opencode_root>/opencode.db` 的 `credential` 表，舊版存於 `auth.json` 的 `openai` 項目；
+/// 優先讀資料庫，找不到時才退回 `auth.json`（舊檔可能殘留過期 token）。
 fn read_opencode_openai_credentials(opencode_root: &str) -> Result<CodexCredentials, String> {
     let root = if opencode_root.trim().is_empty() {
         crate::settings::default_opencode_root()?
     } else {
         std::path::PathBuf::from(opencode_root.trim())
     };
+    if let Some(entry) = read_opencode_db_openai_entry(&root.join("opencode.db")) {
+        return parse_opencode_openai_entry(&entry);
+    }
     let auth_path = root.join("auth.json");
     let content = std::fs::read_to_string(&auth_path)
         .map_err(|e| format!("failed to read {}: {e}", auth_path.display()))?;
@@ -147,25 +152,54 @@ fn read_opencode_openai_credentials(opencode_root: &str) -> Result<CodexCredenti
         .map_err(|e| format!("failed to parse {}: {e}", auth_path.display()))?;
     let openai = json
         .get("openai")
-        .filter(|entry| entry.get("type").and_then(|v| v.as_str()) == Some("oauth"))
         .ok_or_else(|| format!("no OpenAI OAuth entry in {}", auth_path.display()))?;
-    let access_token = openai
+    parse_opencode_openai_entry(openai)
+}
+
+/// 讀取 OpenCode 資料庫中最新且啟用中的 OpenAI 憑證；資料庫或資料表不存在時回傳 None。
+fn read_opencode_db_openai_entry(db_path: &std::path::Path) -> Option<serde_json::Value> {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+
+    if !db_path.is_file() {
+        return None;
+    }
+    let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let value: String = connection
+        .query_row(
+            "SELECT value FROM credential
+             WHERE integration_id = 'openai' AND (active IS NULL OR active != 0)
+             ORDER BY time_updated DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()??;
+    serde_json::from_str(&value).ok()
+}
+
+fn parse_opencode_openai_entry(entry: &serde_json::Value) -> Result<CodexCredentials, String> {
+    if entry.get("type").and_then(|v| v.as_str()) != Some("oauth") {
+        return Err("OpenCode OpenAI entry is not OAuth".to_string());
+    }
+    let access_token = entry
         .get("access")
         .and_then(|v| v.as_str())
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| "OpenCode OpenAI entry has no access token".to_string())?
         .to_string();
-    if let Some(expires_ms) = openai.get("expires").and_then(|v| v.as_i64()) {
+    if let Some(expires_ms) = entry.get("expires").and_then(|v| v.as_i64()) {
         if chrono::Utc::now().timestamp_millis() >= expires_ms {
             return Err("OpenCode 的 OpenAI token 已過期，請在 OpenCode 中使用一次以自動更新".to_string());
         }
     }
+    let account_id = entry
+        .get("accountId")
+        .or_else(|| entry.pointer("/metadata/accountID"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     Ok(CodexCredentials {
         access_token,
-        account_id: openai
-            .get("accountId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        account_id,
     })
 }
 
@@ -766,6 +800,37 @@ mod tests {
         )
         .unwrap();
         assert!(read_opencode_openai_credentials(dir.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opencode_db_credential_takes_precedence_over_stale_auth_json() {
+        let dir = std::env::temp_dir().join(format!("sessionhub-oc-db-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            json!({"openai": {"type": "oauth", "access": "stale", "expires": 1}}).to_string(),
+        )
+        .unwrap();
+        let future_ms = chrono::Utc::now().timestamp_millis() + 3_600_000;
+        let conn = rusqlite::Connection::open(dir.join("opencode.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE credential (id TEXT PRIMARY KEY, integration_id TEXT, label TEXT NOT NULL,
+             value TEXT NOT NULL, connector_id TEXT, method_id TEXT, active INTEGER,
+             time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let value = json!({"type": "oauth", "access": "fresh", "refresh": "r", "expires": future_ms, "metadata": {"accountID": "acc"}});
+        conn.execute(
+            "INSERT INTO credential VALUES ('c1', 'openai', 'OAuth', ?1, NULL, NULL, NULL, 1, 2)",
+            [value.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let creds = read_opencode_openai_credentials(dir.to_str().unwrap()).unwrap();
+        assert_eq!(creds.access_token, "fresh");
+        assert_eq!(creds.account_id.as_deref(), Some("acc"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
