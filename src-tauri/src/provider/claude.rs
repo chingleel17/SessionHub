@@ -11,7 +11,7 @@ use super::bridge::read_bridge_diagnostics;
 use super::{build_install_failure_status, build_provider_integration_status};
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "6";
+const HOOK_SCRIPT_VERSION: &str = "7";
 
 const CLAUDE_MANAGED_EVENTS: [&str; 7] = [
     "SessionStart",
@@ -188,7 +188,7 @@ fn render_claude_integration(
         (
             "Notification",
             "on-notification.cjs",
-            Some("permission_prompt|idle_prompt"),
+            Some("permission_prompt"),
         ),
         ("PermissionRequest", "on-permission-request.cjs", None),
     ];
@@ -650,7 +650,7 @@ mod tests {
             .iter()
             .find(|group| is_sessionhub_hook_group(group))
             .unwrap();
-        assert_eq!(notification["matcher"], "permission_prompt|idle_prompt");
+        assert_eq!(notification["matcher"], "permission_prompt");
 
         let permission_request = v["hooks"]["PermissionRequest"]
             .as_array()

@@ -722,6 +722,7 @@ mod tests {
     };
     use crate::provider::opencode::{
         detect_opencode_integration_status, install_or_update_opencode_integration,
+        render_opencode_integration,
     };
     use crate::provider::register_provider_bridge_record;
     use crate::sessions::copilot::{
@@ -1076,11 +1077,19 @@ mod tests {
             derive_activity_status("permission.v2.replied", None),
             ("active".to_string(), None)
         );
+        assert_eq!(
+            derive_activity_status("session.active", None),
+            ("active".to_string(), Some("thinking".to_string()))
+        );
+        assert_eq!(
+            derive_activity_status("session.idle", None),
+            ("idle".to_string(), None)
+        );
     }
 
     #[test]
     fn derive_activity_status_maps_claude_permission_and_notification_events() {
-        // Claude Code 授權/等待訊號：permission.requested 與 notification(permission_prompt/idle_prompt)
+        // idle_prompt 是回覆完成後的閒置提醒，不代表仍等待授權。
         assert_eq!(
             derive_activity_status("permission.requested", None),
             ("waiting".to_string(), None)
@@ -1091,7 +1100,7 @@ mod tests {
         );
         assert_eq!(
             derive_activity_status("notification", Some("idle_prompt")),
-            ("waiting".to_string(), None)
+            ("idle".to_string(), None)
         );
         // 其他 notification 類型不視為 waiting
         assert_eq!(
@@ -2966,7 +2975,7 @@ mod tests {
         fs::create_dir_all(config_path.parent().expect("config parent")).expect("create hooks dir");
         fs::create_dir_all(&appdata_dir).expect("create appdata dir");
 
-        let status = with_appdata(&appdata_dir, || {
+        let (status, outdated) = with_appdata(&appdata_dir, || {
             let bridge_path =
                 resolve_provider_bridge_path(COPILOT_PROVIDER).expect("resolve copilot bridge");
             ensure_parent_dir(&bridge_path).expect("create bridge dir");
@@ -2994,6 +3003,8 @@ mod tests {
                 "hooks": {
                     "sessionStart": [{ "type": "command", "command": "node on-session-start.cjs" }],
                     "sessionEnd": [{ "type": "command", "command": "node on-session-end.cjs" }],
+                    "agentStop": [{ "type": "command", "command": "node on-agent-stop.cjs" }],
+                    "notification": [{ "type": "command", "command": "node on-notification.cjs" }],
                     "userPromptSubmitted": [{ "type": "command", "command": "node on-user-prompt-submitted.cjs" }],
                     "preToolUse": [{ "type": "command", "command": "node on-pre-tool-use.cjs" }],
                     "postToolUse": [{ "type": "command", "command": "node on-post-tool-use.cjs" }],
@@ -3007,10 +3018,15 @@ mod tests {
             .expect("write copilot integration");
 
             let root_string = copilot_root.to_string_lossy().to_string();
-            detect_copilot_integration_status(Some(root_string.as_str()))
+            let status = detect_copilot_integration_status(Some(root_string.as_str()));
+            let old_config = fs::read_to_string(&config_path).expect("read copilot config");
+            fs::write(&config_path, old_config.replace("on-notification.cjs", "old-hook.cjs"))
+                .expect("write old copilot config");
+            (status, detect_copilot_integration_status(Some(root_string.as_str())))
         });
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(outdated.status, ProviderIntegrationState::Outdated);
         assert_eq!(
             status.last_event_at.as_deref(),
             Some("2026-04-01T12:00:00Z")
@@ -3103,6 +3119,9 @@ mod tests {
         assert!(content.contains("\"preToolUse\""));
         assert!(content.contains("\"postToolUse\""));
         assert!(content.contains("\"errorOccurred\""));
+        assert!(content.contains("\"agentStop\""));
+        assert!(content.contains("\"notification\""));
+        assert!(content.contains("permission_prompt|elicitation_dialog"));
         assert!(content.contains("node "));
         assert!(content.contains("on-session-start.cjs"));
         assert!(content.contains("\"command\""));
@@ -3121,7 +3140,7 @@ mod tests {
         fs::create_dir_all(&appdata_dir).expect("create appdata dir");
         fs::create_dir_all(&user_profile).expect("create user profile dir");
 
-        let status = with_appdata(&appdata_dir, || {
+        let (status, outdated) = with_appdata(&appdata_dir, || {
             with_env_var("USERPROFILE", &user_profile, || {
                 let config_path =
                     resolve_opencode_integration_path().expect("resolve opencode integration path");
@@ -3145,21 +3164,15 @@ mod tests {
                 )
                 .expect("write bridge record");
 
-                let metadata = serde_json::json!({
-                    "provider": OPENCODE_PROVIDER,
-                    "bridgePath": bridge_path.to_string_lossy().to_string(),
-                    "integrationVersion": PROVIDER_INTEGRATION_VERSION
-                });
+                let content = render_opencode_integration(&bridge_path).expect("render plugin");
+                fs::write(&config_path, &content).expect("write plugin file");
+                let status = detect_opencode_integration_status();
                 fs::write(
                     &config_path,
-                    format!(
-                        "{OPENCODE_PLUGIN_METADATA_PREFIX}{}\nexport const SessionHubBridge = () => ({{}});\n",
-                        serde_json::to_string(&metadata).expect("serialize metadata")
-                    ),
+                    content.replace("case \"session.status\"", "case \"session.other\""),
                 )
-                .expect("write plugin file");
-
-                detect_opencode_integration_status()
+                .expect("write old plugin file");
+                (status, detect_opencode_integration_status())
             })
         });
 
@@ -3169,6 +3182,7 @@ mod tests {
             Some("2026-04-02T08:30:00Z")
         );
         assert!(status.last_error.is_none());
+        assert_eq!(outdated.status, ProviderIntegrationState::Outdated);
         assert!(status
             .config_path
             .as_deref()
@@ -3248,6 +3262,9 @@ mod tests {
         assert!(content.contains("\"session.updated\""));
         assert!(content.contains("\"session.renamed\""));
         assert!(content.contains("\"session.execution.failed\""));
+        assert!(content.contains("case \"session.status\""));
+        assert!(content.contains("event.type === \"session.status\""));
+        assert!(content.contains("\"session.idle\""));
         assert!(content.contains("\"permission.updated\""));
         assert!(content.contains("\"permission.asked\""));
         assert!(content.contains("\"permission.replied\""));
@@ -3272,7 +3289,7 @@ mod tests {
         fs::create_dir_all(&codex_root).expect("create codex root");
         fs::create_dir_all(&appdata_dir).expect("create appdata dir");
 
-        let status = with_appdata(&appdata_dir, || {
+        let (status, outdated) = with_appdata(&appdata_dir, || {
             let bridge_path =
                 resolve_provider_bridge_path(CODEX_PROVIDER).expect("resolve codex bridge");
             ensure_parent_dir(&bridge_path).expect("create bridge dir");
@@ -3290,7 +3307,7 @@ mod tests {
             )
             .expect("write bridge record");
 
-            let integration = serde_json::json!({
+            let mut integration = serde_json::json!({
                 "sessionHub": {
                     "provider": CODEX_PROVIDER,
                     "bridgePath": bridge_path.to_string_lossy().to_string(),
@@ -3345,6 +3362,17 @@ mod tests {
                     }]
                 }
             });
+            for event in ["PermissionRequest", "Interrupt", "SessionEnd"] {
+                integration["hooks"][event] = serde_json::json!([{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!(
+                            "node '/tmp/on-session-end.cjs' --bridge-path '{}' --provider codex # sessionhub-provider-event-bridge",
+                            bridge_path.to_string_lossy()
+                        )
+                    }]
+                }]);
+            }
             fs::write(
                 &config_path,
                 serde_json::to_string_pretty(&integration).expect("serialize codex integration"),
@@ -3352,10 +3380,15 @@ mod tests {
             .expect("write codex integration");
 
             let root_string = codex_root.to_string_lossy().to_string();
-            detect_codex_integration_status(Some(root_string.as_str()))
+            let status = detect_codex_integration_status(Some(root_string.as_str()));
+            let old_config = fs::read_to_string(&config_path).expect("read codex config");
+            fs::write(&config_path, old_config.replace("\"PermissionRequest\"", "\"OldEvent\""))
+                .expect("write old codex config");
+            (status, detect_codex_integration_status(Some(root_string.as_str())))
         });
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);
+        assert_eq!(outdated.status, ProviderIntegrationState::Outdated);
         assert_eq!(
             status.last_event_at.as_deref(),
             Some("2026-04-03T09:15:00Z")
@@ -3426,10 +3459,13 @@ mod tests {
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);
         assert!(content.contains("\"SessionStart\""));
+        assert!(content.contains("\"PermissionRequest\""));
         assert!(content.contains("\"PreToolUse\""));
         assert!(content.contains("\"PostToolUse\""));
         assert!(content.contains("\"UserPromptSubmit\""));
         assert!(content.contains("\"Stop\""));
+        assert!(content.contains("\"Interrupt\""));
+        assert!(content.contains("\"SessionEnd\""));
         assert!(content.contains("node "));
         assert!(content.contains("on-session-start.cjs"));
         assert!(content.contains("sessionhub-provider-event-bridge"));

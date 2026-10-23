@@ -19,11 +19,10 @@ pub(crate) struct InterventionItem {
 
 /// 後端維護的 `waiting` session 清單，作為介入提醒的 single source of truth。
 ///
-/// 更新點位於後端 activity 狀態計算之後（`provider/bridge.rs` 的 Claude / OpenCode
+/// 更新點位於後端 activity 狀態計算之後（`provider/bridge.rs` 的各 provider
 /// 分支），不依賴任何前端視窗的 state；主視窗關閉或最小化時仍正常更新。
 ///
-/// 範圍排除 Copilot／Codex：Copilot CLI 官方 hook 事件集合無等待授權訊號，
-/// Codex 的 activity 計算從未產生 `waiting`，詳見 design.md 決策 1「已知限制」。
+/// Codex 以 PermissionRequest、Copilot CLI 以 notification 判定等待介入。
 #[derive(Default)]
 pub(crate) struct InterventionRegistry {
     items: Mutex<HashMap<String, InterventionItem>>,

@@ -13,13 +13,16 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "5";
-const CODEX_MANAGED_EVENTS: [&str; 5] = [
+const HOOK_SCRIPT_VERSION: &str = "6";
+const CODEX_MANAGED_EVENTS: [&str; 8] = [
     "SessionStart",
+    "PermissionRequest",
     "PreToolUse",
     "PostToolUse",
     "UserPromptSubmit",
     "Stop",
+    "Interrupt",
+    "SessionEnd",
 ];
 
 // Node.js 主軌（.cjs，強制 CommonJS）
@@ -31,6 +34,9 @@ const SCRIPT_ON_POST_TOOL_USE_JS: &str = include_str!("../../../hooks/codex/on-p
 const SCRIPT_ON_USER_PROMPT_SUBMIT_JS: &str =
     include_str!("../../../hooks/codex/on-user-prompt-submit.cjs");
 const SCRIPT_ON_STOP_JS: &str = include_str!("../../../hooks/codex/on-stop.cjs");
+const SCRIPT_ON_PERMISSION_REQUEST_JS: &str =
+    include_str!("../../../hooks/codex/on-permission-request.cjs");
+const SCRIPT_ON_SESSION_END_JS: &str = include_str!("../../../hooks/codex/on-session-end.cjs");
 
 // sh fallback（無 node 環境時的手動退路）
 const MODULE_RECORD_EVENT_SH: &str = include_str!("../../../hooks/codex/modules/record-event.sh");
@@ -41,7 +47,7 @@ const SCRIPT_ON_USER_PROMPT_SUBMIT_SH: &str =
     include_str!("../../../hooks/codex/on-user-prompt-submit.sh");
 const SCRIPT_ON_STOP_SH: &str = include_str!("../../../hooks/codex/on-stop.sh");
 
-fn hook_script_entries() -> [(&'static str, &'static str); 13] {
+fn hook_script_entries() -> [(&'static str, &'static str); 15] {
     [
         ("modules/record-event.cjs", MODULE_RECORD_EVENT_JS),
         ("modules/notify.cjs", MODULE_NOTIFY_JS),
@@ -50,6 +56,8 @@ fn hook_script_entries() -> [(&'static str, &'static str); 13] {
         ("on-post-tool-use.cjs", SCRIPT_ON_POST_TOOL_USE_JS),
         ("on-user-prompt-submit.cjs", SCRIPT_ON_USER_PROMPT_SUBMIT_JS),
         ("on-stop.cjs", SCRIPT_ON_STOP_JS),
+        ("on-permission-request.cjs", SCRIPT_ON_PERMISSION_REQUEST_JS),
+        ("on-session-end.cjs", SCRIPT_ON_SESSION_END_JS),
         ("modules/record-event.sh", MODULE_RECORD_EVENT_SH),
         ("on-session-start.sh", SCRIPT_ON_SESSION_START_SH),
         ("on-pre-tool-use.sh", SCRIPT_ON_PRE_TOOL_USE_SH),
@@ -162,9 +170,12 @@ fn render_codex_integration(
             Some("startup|resume|clear|compact"),
         ),
         ("PreToolUse", "on-pre-tool-use.cjs", None),
+        ("PermissionRequest", "on-permission-request.cjs", None),
         ("PostToolUse", "on-post-tool-use.cjs", None),
         ("UserPromptSubmit", "on-user-prompt-submit.cjs", None),
         ("Stop", "on-stop.cjs", None),
+        ("Interrupt", "on-session-end.cjs", None),
+        ("SessionEnd", "on-session-end.cjs", None),
     ];
 
     for (event_name, script_cjs, matcher) in managed_groups {

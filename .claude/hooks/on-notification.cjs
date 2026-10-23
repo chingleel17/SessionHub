@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-// Claude Notification hook：處理 permission_prompt（需授權）與 idle_prompt（等待回應）
+// Claude Notification hook：僅處理真正需要授權的 permission_prompt
 // https://docs.anthropic.com/zh-TW/docs/claude-code/hooks#notification
 
 const path = require("path");
@@ -22,6 +22,7 @@ function handleNotification({
     notify = sendNotification,
 }) {
     const notificationType = getHookStringValue(payload, ["notification_type"]);
+    if (notificationType !== "permission_prompt") return notificationType;
     const sessionId = getHookStringValue(payload, ["session_id", "sessionId"]);
 
     recordEvent({
@@ -32,21 +33,12 @@ function handleNotification({
         title: notificationType,
     });
 
-    if (notificationType === "permission_prompt") {
-        notify({
-            sessionId,
-            title: "SessionHub — 需要您授權",
-            body: "Claude 需要您確認工具使用授權",
-            kind: "intervention",
-        });
-    } else if (notificationType === "idle_prompt") {
-        notify({
-            sessionId,
-            title: "SessionHub — 等待您回應",
-            body: "Claude 正在等待您的決策或回覆",
-            kind: "intervention",
-        });
-    }
+    notify({
+        sessionId,
+        title: "SessionHub — 需要您授權",
+        body: "Claude 需要您確認工具使用授權",
+        kind: "intervention",
+    });
 
     return notificationType;
 }

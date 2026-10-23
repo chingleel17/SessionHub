@@ -69,7 +69,7 @@ test("PermissionRequest handles file and external-directory tools without filter
 test("Notification branches on notification_type only", () => {
     const cases = [
         ["permission_prompt", 1, "需要您授權"],
-        ["idle_prompt", 1, "等待您回應"],
+        ["idle_prompt", 0, null],
         ["auth_success", 0, null],
     ];
 
@@ -89,7 +89,8 @@ test("Notification branches on notification_type only", () => {
         });
 
         assert.equal(result, notificationType);
-        assert.equal(records[0].title, notificationType);
+        assert.equal(records.length, expectedCount);
+        if (expectedCount > 0) assert.equal(records[0].title, notificationType);
         assert.equal(notifications.length, expectedCount);
         if (expectedTitle) {
             assert.equal(notifications[0].title.includes(expectedTitle), true);
