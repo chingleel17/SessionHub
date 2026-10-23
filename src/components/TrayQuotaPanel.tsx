@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 import { useI18n } from "../i18n/I18nProvider";
 import type { QuotaSnapshot, QuotaWindow } from "../types";
 import { getProviderLabel } from "../utils/providerLabel";
@@ -6,6 +8,21 @@ import { localizedWindowLabel } from "../utils/quotaWindowLabel";
 import { compareProviders } from "../utils/providerOrder";
 import { RefreshIcon, SettingsIcon } from "./Icons";
 import { IconButton } from "./ui/IconButton";
+
+// macOS 視窗套用系統毛玻璃（Liquid Glass），面板背景需改為半透明才看得到
+const IS_MACOS = navigator.userAgent.includes("Macintosh");
+
+/** macOS 選單列面板跟隨系統深淺色（與原生毛玻璃一致），不使用主視窗的主題設定 */
+function useSystemThemeOnMacos() {
+  useEffect(() => {
+    if (!IS_MACOS) return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => document.documentElement.setAttribute("data-theme", query.matches ? "dark" : "light");
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+}
 
 type TrayQuotaPanelProps = {
   snapshots: QuotaSnapshot[];
@@ -113,13 +130,14 @@ function WindowRow({ provider, window }: { provider: string; window: QuotaWindow
 
 export function TrayQuotaPanel({ snapshots, enabledProviders, onRefresh, onOpenSettings }: TrayQuotaPanelProps) {
   const { t, locale } = useI18n();
+  useSystemThemeOnMacos();
   const visibleSnapshots = sortSnapshots(snapshots.filter((snapshot) => enabledProviders.includes(snapshot.provider)));
   const latestFetchedAt = visibleSnapshots
     .map((snapshot) => snapshot.fetchedAt)
     .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
 
   return (
-    <div className="tray-panel-window-root">
+    <div className="tray-panel-window-root" data-platform={IS_MACOS ? "macos" : undefined}>
       <section className="tray-panel-root">
         <header className="tray-panel-header">
           <div>

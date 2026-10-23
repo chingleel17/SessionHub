@@ -2810,6 +2810,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   box-shadow: var(--shadow-float);
 }
 
+/* macOS：由原生 Liquid Glass / 毛玻璃提供背景與陰影，面板僅保留淡色染色 */
+.tray-panel-window-root[data-platform="macos"] .tray-panel-root {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--color-surface-panel) 35%, transparent);
+  box-shadow: none;
+}
+
 .tray-panel-header,
 .tray-panel-footer {
   display: flex;

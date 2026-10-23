@@ -39,6 +39,9 @@ pub(crate) const TRAY_PANEL_WIDTH: f64 = 320.0;
 pub(crate) const TRAY_PANEL_HEIGHT: f64 = 480.0;
 /// mini panel 與螢幕邊緣的邏輯間距
 pub(crate) const TRAY_PANEL_MARGIN: f64 = 12.0;
+/// mini panel 圓角半徑（需與 App.css 的 .tray-panel-root 一致）
+#[cfg(target_os = "macos")]
+const TRAY_PANEL_RADIUS: f64 = 12.0;
 
 /// 動態建立的 webview label 清單，作為定向送出事件的單一來源。
 /// 新增動態視窗時只需在此處加入 label，所有共用此清單的 emit 函式即自動涵蓋。
@@ -300,6 +303,18 @@ pub(crate) fn toggle_tray_panel(app: &tauri::AppHandle, tray_rect: Option<tauri:
     .inner_size(TRAY_PANEL_WIDTH, TRAY_PANEL_HEIGHT)
     .visible(false);
 
+    // macOS 26+ 使用 Liquid Glass，較舊版本退回 Popover 毛玻璃材質
+    #[cfg(target_os = "macos")]
+    let builder = builder.effects(tauri::utils::config::WindowEffectsConfig {
+        effects: vec![
+            tauri::window::Effect::LiquidGlassRegular,
+            tauri::window::Effect::Popover,
+        ],
+        state: Some(tauri::window::EffectState::Active),
+        radius: Some(TRAY_PANEL_RADIUS),
+        ..Default::default()
+    });
+
     let window = match builder.build() {
         Ok(w) => w,
         Err(err) => {
@@ -345,10 +360,16 @@ pub(crate) fn compute_panel_position(
     let max_y = (screen.y + screen.height - panel_h - margin).max(screen.y);
 
     match tray_phys {
-        // 以 tray 圖示為中心水平對齊，垂直貼齊 work area 底部（即 taskbar 上方）
-        Some((tray_x, _)) => {
+        // 以 tray 圖示為中心水平對齊；圖示在螢幕上半部（macOS 選單列、置頂 taskbar）時貼齊
+        // work area 頂部，否則貼齊底部（即 taskbar 上方）
+        Some((tray_x, tray_y)) => {
             let x = (tray_x - panel_w / 2.0).min(max_x).max(screen.x + margin);
-            (x, max_y)
+            let y = if tray_y < screen.y + screen.height / 2.0 {
+                screen.y + margin
+            } else {
+                max_y
+            };
+            (x, y)
         }
         None => (max_x, max_y),
     }
@@ -657,6 +678,21 @@ mod panel_position_tests {
         let (_, y) = compute_panel_position(screen, Some((1500.0, 1050.0)));
         // 底部貼齊 work area（1032）扣掉 panel 高度與間距
         assert_eq!(y, 1032.0 - 480.0 - 12.0);
+    }
+
+    #[test]
+    fn panel_sits_below_top_menu_bar() {
+        // macOS：選單列在上方，work area 從選單列下緣開始
+        let screen = PanelScreen {
+            x: 0.0,
+            y: 50.0,
+            width: 2880.0,
+            height: 1750.0,
+            scale: 2.0,
+        };
+        let (x, y) = compute_panel_position(screen, Some((2400.0, 0.0)));
+        assert_eq!(x, 2400.0 - 320.0);
+        assert_eq!(y, 50.0 + 24.0);
     }
 
     #[test]
