@@ -14,6 +14,10 @@ use crate::settings::{provider_bridge_dir, resolve_copilot_root, resolve_provide
 use crate::types::*;
 
 static EVENT_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// 確保同一時間只有一個執行緒處理 bridge 事件。
+/// watcher 的防抖執行緒可能在前一批尚未處理完時再啟動一批，兩者讀到同一段記錄會讓
+/// 較舊事件被重複處理，造成燈號倒退（例如已授權又變回 waiting）。
+static BRIDGE_PROCESSING_LOCK: Mutex<()> = Mutex::new(());
 
 // ── 路徑輔助 ────────────────────────────────────────────────────────────────
 
@@ -467,6 +471,10 @@ pub(crate) fn process_provider_bridge_event(
     last_bridge_records: &Arc<Mutex<HashMap<String, String>>>,
     provider: &str,
 ) -> Result<bool, String> {
+    // 前一次處理 panic 時鎖會中毒，但內部無共享資料，可直接沿用
+    let _processing = BRIDGE_PROCESSING_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let bridge_path = resolve_provider_bridge_path(provider)?;
     let previous = last_bridge_records
         .lock()
