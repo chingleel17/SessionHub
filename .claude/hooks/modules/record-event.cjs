@@ -105,7 +105,22 @@ function addBridgeRecord(bridgePath, record) {
         if (parent && parent !== ".") {
             fs.mkdirSync(parent, { recursive: true });
         }
-        fs.appendFileSync(bridgePath, JSON.stringify(record) + "\n", "utf8");
+        const lockPath = `${bridgePath}.lock`;
+        const deadline = Date.now() + 5000;
+        while (true) {
+            try {
+                fs.mkdirSync(lockPath);
+                break;
+            } catch (error) {
+                if (error.code !== "EEXIST" || Date.now() >= deadline) throw error;
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+            }
+        }
+        try {
+            fs.appendFileSync(bridgePath, JSON.stringify(record) + "\n", "utf8");
+        } finally {
+            fs.rmdirSync(lockPath);
+        }
     });
 }
 

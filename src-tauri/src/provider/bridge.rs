@@ -944,8 +944,27 @@ fn prune_provider_bridge_files(cutoff: chrono::DateTime<chrono::Utc>) -> Result<
 
 /// 移除 `cutoff` 之前的記錄並回傳移除筆數。
 /// 一律保留最後一筆（診斷資訊的最後事件時間來源）；無法解析時間的行視為保留。
-/// hook 可能同時 append，寫回前若檔案大小已變動則放棄本次清理，避免吃掉新事件。
+/// 與所有新版 hook 共用目錄鎖；鎖涵蓋讀取到替換，忙碌時略過本輪清理。
 fn prune_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Result<usize, String> {
+    let lock_path = path.with_extension("jsonl.lock");
+    match fs::create_dir(&lock_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    }
+    let _lock = BridgeFileLock(lock_path);
+    prune_locked_bridge_file(path, cutoff)
+}
+
+struct BridgeFileLock(PathBuf);
+
+impl Drop for BridgeFileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+fn prune_locked_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Result<usize, String> {
     let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = content.lines().filter(|line| !line.trim().is_empty()).collect();
     let last_index = lines.len().saturating_sub(1);
@@ -963,11 +982,6 @@ fn prune_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Resu
     let temp_path = path.with_extension("jsonl.tmp");
     let pruned: String = kept.iter().map(|line| format!("{line}\n")).collect();
     fs::write(&temp_path, pruned).map_err(|e| e.to_string())?;
-    let unchanged = fs::metadata(path).is_ok_and(|meta| meta.len() == content.len() as u64);
-    if !unchanged {
-        let _ = fs::remove_file(&temp_path);
-        return Ok(0);
-    }
     fs::rename(&temp_path, path).map_err(|e| {
         let _ = fs::remove_file(&temp_path);
         e.to_string()
@@ -1079,5 +1093,70 @@ mod tests {
         assert_eq!(prune_bridge_file(&path, cutoff).expect("prune stale"), 1);
         assert_eq!(fs::read_to_string(&path).expect("read"), stale);
         fs::remove_file(path).expect("remove test bridge file");
+    }
+
+    #[test]
+    fn prune_skips_busy_file_and_releases_lock_on_error() {
+        let path = std::env::temp_dir().join(format!("sessionhub-prune-lock-{}-{}.jsonl",
+            std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+        let lock_path = path.with_extension("jsonl.lock");
+        fs::create_dir(&lock_path).expect("writer lock");
+        assert_eq!(prune_bridge_file(&path, chrono::Utc::now()).expect("skip busy"), 0);
+        assert!(lock_path.exists(), "must not remove another owner's lock");
+        fs::remove_dir(&lock_path).expect("unlock writer");
+        assert!(prune_bridge_file(&path, chrono::Utc::now()).is_err());
+        assert!(!lock_path.exists(), "read failure must release lock");
+    }
+
+    #[test]
+    fn hook_append_waits_until_prune_replaces_file() {
+        use std::process::{Command, Stdio};
+
+        for module in ["hooks/codex", "hooks/copilot", ".claude/hooks"] {
+            let path = std::env::temp_dir().join(format!("sessionhub-prune-append-{}-{}.jsonl",
+                std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+            let old = "{\"timestamp\":\"2000-01-01T00:00:00Z\",\"eventType\":\"old\"}\n";
+            let last = "{\"timestamp\":\"2000-01-02T00:00:00Z\",\"eventType\":\"last\"}\n";
+            fs::write(&path, format!("{old}{last}")).expect("seed bridge");
+            let lock_path = path.with_extension("jsonl.lock");
+            fs::create_dir(&lock_path).expect("prune lock");
+            let lock = BridgeFileLock(lock_path);
+            let module_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent().expect("repo root").join(module).join("modules/record-event.cjs");
+            // 寫入端第一次遇到鎖時通知父程序，固定重現 append 與替換重疊的時序。
+            let script = r#"
+const fs = require('fs');
+const mkdir = fs.mkdirSync;
+let signaled = false;
+fs.mkdirSync = function (...args) {
+  try { return mkdir.apply(this, args); }
+  catch (error) {
+    if (error.code === 'EEXIST' && !signaled) {
+      signaled = true;
+      fs.writeSync(1, 'waiting\n');
+    }
+    throw error;
+  }
+};
+require(process.argv[1]).writeBridgeEventRecord({
+  bridgePath: process.argv[2], provider: 'codex', eventType: 'permission.requested',
+  payload: { session_id: 'new-session' }
+});
+"#;
+            let mut child = Command::new("node").args(["-e", script])
+                .arg(module_path).arg(&path).stdout(Stdio::piped()).spawn().expect("node hook");
+            let mut signal = String::new();
+            BufReader::new(child.stdout.take().expect("stdout"))
+                .read_line(&mut signal).expect("read lock signal");
+            assert_eq!(signal.trim(), "waiting");
+            assert_eq!(prune_locked_bridge_file(&path, chrono::Utc::now()).expect("prune"), 1);
+            drop(lock);
+            assert!(child.wait().expect("hook exit").success());
+            let result = fs::read_to_string(&path).expect("read result");
+            assert_eq!(result.lines().count(), 2);
+            assert!(result.starts_with(last));
+            assert!(result.contains("new-session"));
+            fs::remove_file(path).expect("cleanup");
+        }
     }
 }

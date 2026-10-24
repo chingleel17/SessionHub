@@ -13,7 +13,7 @@ use super::{
 };
 
 const SESSIONHUB_HOOK_COMMAND_MARKER: &str = "sessionhub-provider-event-bridge";
-const HOOK_SCRIPT_VERSION: &str = "6";
+const HOOK_SCRIPT_VERSION: &str = "7";
 const CODEX_MANAGED_EVENTS: [&str; 8] = [
     "SessionStart",
     "PermissionRequest",

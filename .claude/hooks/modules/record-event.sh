@@ -121,7 +121,18 @@ write_bridge_event_record() {
         '{version:$version,provider:$provider,eventType:$eventType,timestamp:$timestamp,sessionId:$sessionId,cwd:$cwd,sourcePath:$sourcePath,title:$title,error:$error}'
     )"
 
-    invoke_with_retry "printf '%s\n' '$record' >> '$bridge_path'"
+    (
+        lock_path="${bridge_path}.lock"
+        attempts=0
+        until mkdir "$lock_path" 2>/dev/null; do
+            attempts=$((attempts + 1))
+            [ "$attempts" -lt 200 ] || exit 1
+            sleep 0.025
+        done
+        trap 'rmdir "$lock_path"' EXIT
+        trap 'exit 1' INT TERM
+        printf '%s\n' "$record" >> "$bridge_path"
+    )
 }
 
 _ensure_jq

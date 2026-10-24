@@ -2981,6 +2981,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("copilot.jsonl")
             );
             assert_eq!(
@@ -2988,6 +2989,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("opencode.jsonl")
             );
             assert_eq!(
@@ -2995,6 +2997,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("codex.jsonl")
             );
         });

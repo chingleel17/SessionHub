@@ -252,7 +252,8 @@ pub(crate) fn resolve_codex_root(root_dir: Option<&str>) -> Result<PathBuf, Stri
 }
 
 pub(crate) fn provider_bridge_dir() -> Result<PathBuf, String> {
-    Ok(default_app_data_dir()?.join("provider-bridge"))
+    // 新協定使用獨立目錄，舊版未加鎖的 hook 不得與清理程序共用檔案。
+    Ok(default_app_data_dir()?.join("provider-bridge").join("locked-v1"))
 }
 
 pub(crate) fn resolve_provider_bridge_path(provider: &str) -> Result<PathBuf, String> {
