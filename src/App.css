@@ -2879,6 +2879,29 @@ html.embedded-quota-view .quota-overlay-no-drag {
 }
 
 .tray-panel-provider-header,
+.tray-panel-window-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* panel 有 overflow: hidden，提示改往面板內側展開避免被裁切 */
+.tray-panel-header .ui-icon-button[title]:hover::after,
+.tray-panel-header .ui-icon-button[title]:focus-visible::after {
+  top: 50%;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 6px);
+  transform: translateY(-50%);
+}
+
+.tray-panel-footer .ui-icon-button[title]:hover::after,
+.tray-panel-footer .ui-icon-button[title]:focus-visible::after {
+  left: 0;
+  transform: none;
+}
+
+.tray-panel-provider-header,
 .tray-panel-window-top,
 .tray-panel-provider-name,
 .tray-panel-window-label {
