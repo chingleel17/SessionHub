@@ -510,6 +510,7 @@ pub fn run() {
             app_setup::setup_quota_monitoring(app, &settings)?;
             app_setup::spawn_quota_poller_thread(app.handle().clone());
             commands::activity_snapshot::spawn_snapshot_heartbeat_thread(app.handle().clone());
+            provider::spawn_bridge_prune_thread();
             app_setup::build_tray_icon(app)?;
 
             // 啟動時依設定初始化 tray icon 與 overlay
@@ -2980,6 +2981,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("copilot.jsonl")
             );
             assert_eq!(
@@ -2987,6 +2989,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("opencode.jsonl")
             );
             assert_eq!(
@@ -2994,6 +2997,7 @@ mod tests {
                 appdata_dir
                     .join("SessionHub")
                     .join("provider-bridge")
+                    .join("locked-v1")
                     .join("codex.jsonl")
             );
         });

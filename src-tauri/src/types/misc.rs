@@ -61,6 +61,10 @@ pub(crate) const OPENCODE_DEBOUNCE_MS: u64 = 500;
 pub(crate) const PROJECT_FILES_DEBOUNCE_MS: u64 = 400;
 /// Provider bridge watcher 防抖時間（毫秒）
 pub(crate) const PROVIDER_BRIDGE_DEBOUNCE_MS: u64 = 250;
+/// Provider bridge 檔保留天數；app 只處理啟動後的事件，舊記錄僅供診斷
+pub(crate) const PROVIDER_BRIDGE_RETENTION_DAYS: i64 = 3;
+/// Provider bridge 檔清理間隔（秒）
+pub(crate) const PROVIDER_BRIDGE_PRUNE_INTERVAL_SECS: u64 = 24 * 60 * 60;
 /// 短時間內同 provider refresh 去重視窗（毫秒）
 pub(crate) const PROVIDER_REFRESH_DEDUP_MS: u64 = 1_500;
 /// 觸發全掃描的閾值（秒），超過此值自動執行全掃

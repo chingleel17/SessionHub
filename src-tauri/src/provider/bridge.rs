@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager};
 
 use crate::db::DbState;
 use crate::sessions::find_session_by_cwd_internal;
-use crate::settings::{resolve_copilot_root, resolve_provider_bridge_path};
+use crate::settings::{provider_bridge_dir, resolve_copilot_root, resolve_provider_bridge_path};
 use crate::types::*;
 
 static EVENT_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -915,6 +915,88 @@ pub(crate) fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnosti
     diagnostics
 }
 
+
+/// 啟動時清理一次 bridge 檔，之後每隔固定間隔再清理，避免 jsonl 無限增長。
+pub(crate) fn spawn_bridge_prune_thread() {
+    std::thread::spawn(|| loop {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(PROVIDER_BRIDGE_RETENTION_DAYS);
+        if let Err(error) = prune_provider_bridge_files(cutoff) {
+            eprintln!("[bridge] 清理 bridge 檔失敗: {error}");
+        }
+        std::thread::sleep(Duration::from_secs(PROVIDER_BRIDGE_PRUNE_INTERVAL_SECS));
+    });
+}
+
+fn prune_provider_bridge_files(cutoff: chrono::DateTime<chrono::Utc>) -> Result<(), String> {
+    let dir = provider_bridge_dir()?;
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(());
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if path.extension().is_some_and(|ext| ext == "jsonl") {
+            if let Err(error) = prune_bridge_file(&path, cutoff) {
+                eprintln!("[bridge] 清理 {} 失敗: {error}", path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 移除 `cutoff` 之前的記錄並回傳移除筆數。
+/// 一律保留最後一筆（診斷資訊的最後事件時間來源）；無法解析時間的行視為保留。
+/// 與所有新版 hook 共用目錄鎖；鎖涵蓋讀取到替換，忙碌時略過本輪清理。
+fn prune_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Result<usize, String> {
+    let lock_path = path.with_extension("jsonl.lock");
+    match fs::create_dir(&lock_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    }
+    let _lock = BridgeFileLock(lock_path);
+    prune_locked_bridge_file(path, cutoff)
+}
+
+struct BridgeFileLock(PathBuf);
+
+impl Drop for BridgeFileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+fn prune_locked_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Result<usize, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let lines: Vec<&str> = content.lines().filter(|line| !line.trim().is_empty()).collect();
+    let last_index = lines.len().saturating_sub(1);
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| *index == last_index || !is_bridge_line_before(line, cutoff))
+        .map(|(_, line)| *line)
+        .collect();
+    let removed = lines.len() - kept.len();
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let pruned: String = kept.iter().map(|line| format!("{line}\n")).collect();
+    fs::write(&temp_path, pruned).map_err(|e| e.to_string())?;
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        e.to_string()
+    })?;
+    Ok(removed)
+}
+
+fn is_bridge_line_before(line: &str, cutoff: chrono::DateTime<chrono::Utc>) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("timestamp")?.as_str().map(str::to_string))
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(&timestamp).ok())
+        .is_some_and(|timestamp| timestamp < cutoff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,5 +1064,99 @@ mod tests {
         assert_eq!(rotated.len(), 1);
         assert_eq!(rotated[0].event_type, "session.created");
         fs::remove_file(path).expect("remove test bridge file");
+    }
+
+    #[test]
+    fn prune_bridge_file_keeps_recent_and_last_records() {
+        let path = std::env::temp_dir().join(format!(
+            "sessionhub-bridge-prune-{}-{}.jsonl",
+            std::process::id(),
+            EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let line = |event_type: &str, timestamp: &str| {
+            format!("{{\"provider\":\"claude\",\"eventType\":\"{event_type}\",\"timestamp\":\"{timestamp}\"}}\n")
+        };
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-01-05T00:00:00Z")
+            .expect("parse cutoff")
+            .with_timezone(&chrono::Utc);
+
+        let old = line("old", "2026-01-01T00:00:00Z");
+        let recent = line("recent", "2026-01-10T00:00:00Z");
+        let unparsable = line("unparsable", "not-a-time");
+        fs::write(&path, format!("{old}{recent}{unparsable}")).expect("write bridge file");
+        assert_eq!(prune_bridge_file(&path, cutoff).expect("prune"), 1);
+        assert_eq!(fs::read_to_string(&path).expect("read"), format!("{recent}{unparsable}"));
+
+        // 全部過期時仍保留最後一筆
+        let stale = line("stale", "2026-01-02T00:00:00Z");
+        fs::write(&path, format!("{old}{stale}")).expect("write stale file");
+        assert_eq!(prune_bridge_file(&path, cutoff).expect("prune stale"), 1);
+        assert_eq!(fs::read_to_string(&path).expect("read"), stale);
+        fs::remove_file(path).expect("remove test bridge file");
+    }
+
+    #[test]
+    fn prune_skips_busy_file_and_releases_lock_on_error() {
+        let path = std::env::temp_dir().join(format!("sessionhub-prune-lock-{}-{}.jsonl",
+            std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+        let lock_path = path.with_extension("jsonl.lock");
+        fs::create_dir(&lock_path).expect("writer lock");
+        assert_eq!(prune_bridge_file(&path, chrono::Utc::now()).expect("skip busy"), 0);
+        assert!(lock_path.exists(), "must not remove another owner's lock");
+        fs::remove_dir(&lock_path).expect("unlock writer");
+        assert!(prune_bridge_file(&path, chrono::Utc::now()).is_err());
+        assert!(!lock_path.exists(), "read failure must release lock");
+    }
+
+    #[test]
+    fn hook_append_waits_until_prune_replaces_file() {
+        use std::process::{Command, Stdio};
+
+        for module in ["hooks/codex", "hooks/copilot", ".claude/hooks"] {
+            let path = std::env::temp_dir().join(format!("sessionhub-prune-append-{}-{}.jsonl",
+                std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+            let old = "{\"timestamp\":\"2000-01-01T00:00:00Z\",\"eventType\":\"old\"}\n";
+            let last = "{\"timestamp\":\"2000-01-02T00:00:00Z\",\"eventType\":\"last\"}\n";
+            fs::write(&path, format!("{old}{last}")).expect("seed bridge");
+            let lock_path = path.with_extension("jsonl.lock");
+            fs::create_dir(&lock_path).expect("prune lock");
+            let lock = BridgeFileLock(lock_path);
+            let module_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent().expect("repo root").join(module).join("modules/record-event.cjs");
+            // 寫入端第一次遇到鎖時通知父程序，固定重現 append 與替換重疊的時序。
+            let script = r#"
+const fs = require('fs');
+const mkdir = fs.mkdirSync;
+let signaled = false;
+fs.mkdirSync = function (...args) {
+  try { return mkdir.apply(this, args); }
+  catch (error) {
+    if (error.code === 'EEXIST' && !signaled) {
+      signaled = true;
+      fs.writeSync(1, 'waiting\n');
+    }
+    throw error;
+  }
+};
+require(process.argv[1]).writeBridgeEventRecord({
+  bridgePath: process.argv[2], provider: 'codex', eventType: 'permission.requested',
+  payload: { session_id: 'new-session' }
+});
+"#;
+            let mut child = Command::new("node").args(["-e", script])
+                .arg(module_path).arg(&path).stdout(Stdio::piped()).spawn().expect("node hook");
+            let mut signal = String::new();
+            BufReader::new(child.stdout.take().expect("stdout"))
+                .read_line(&mut signal).expect("read lock signal");
+            assert_eq!(signal.trim(), "waiting");
+            assert_eq!(prune_locked_bridge_file(&path, chrono::Utc::now()).expect("prune"), 1);
+            drop(lock);
+            assert!(child.wait().expect("hook exit").success());
+            let result = fs::read_to_string(&path).expect("read result");
+            assert_eq!(result.lines().count(), 2);
+            assert!(result.starts_with(last));
+            assert!(result.contains("new-session"));
+            fs::remove_file(path).expect("cleanup");
+        }
     }
 }

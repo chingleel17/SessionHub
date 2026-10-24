@@ -38,14 +38,29 @@ pub(crate) fn render_opencode_integration(bridge_path: &std::path::Path) -> Resu
 /// OpenCode plugin 範本。2.x 讀取 default export 的 `id` + `setup`，
 /// 1.x 讀取 `server()`；兩者互不影響，因此同一份檔案可相容兩個版本。
 const OPENCODE_PLUGIN_TEMPLATE: &str = r#"__METADATA_PREFIX____METADATA__
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, rmdir } from "node:fs/promises";
 
 const BRIDGE_PATH = __BRIDGE_PATH__;
 const BRIDGE_DIR = __BRIDGE_DIR__;
 
 async function appendRecord(record: object) {
   await mkdir(BRIDGE_DIR, { recursive: true });
-  await appendFile(BRIDGE_PATH, `${JSON.stringify(record)}\n`, "utf8");
+  const lockPath = `${BRIDGE_PATH}.lock`;
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try {
+      await mkdir(lockPath);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    await appendFile(BRIDGE_PATH, `${JSON.stringify(record)}\n`, "utf8");
+  } finally {
+    await rmdir(lockPath);
+  }
 }
 
 function buildRecord(eventType: string, timestamp: string, fields: Record<string, unknown>) {
