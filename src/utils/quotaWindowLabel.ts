@@ -22,5 +22,10 @@ export function localizedWindowLabel(
 ): string {
   if (provider === "copilot") return rawLabel;
   const messageKey = WINDOW_KEY_MAP[windowKey];
-  return messageKey ? t(messageKey) : rawLabel;
+  if (messageKey) return t(messageKey);
+  // 後端對非固定視窗產生 "30d" / "12h" 這類動態標籤，依語系換成對應單位
+  const match = /^(\d+)([dh])$/.exec(rawLabel);
+  if (!match) return rawLabel;
+  const unit = t(match[2] === "d" ? "quota.unit.day" : "quota.unit.hour").trim();
+  return `${match[1]}${unit}`;
 }
