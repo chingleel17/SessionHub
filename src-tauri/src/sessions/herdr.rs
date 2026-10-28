@@ -415,10 +415,7 @@ pub(crate) fn parse_herdr_agent_list(stdout: &str) -> Vec<HerdrAgentState> {
     let Ok(value) = serde_json::from_str::<Value>(stdout) else {
         return Vec::new();
     };
-    let Some(agents) = value
-        .pointer("/result/agents")
-        .and_then(Value::as_array)
-    else {
+    let Some(agents) = value.pointer("/result/agents").and_then(Value::as_array) else {
         return Vec::new();
     };
     agents
@@ -436,10 +433,7 @@ pub(crate) fn parse_herdr_agent_list(stdout: &str) -> Vec<HerdrAgentState> {
                 Some("done") => HerdrAgentStatus::Done,
                 _ => HerdrAgentStatus::Unknown,
             };
-            let cwd = agent
-                .get("cwd")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let cwd = agent.get("cwd").and_then(Value::as_str).map(str::to_string);
             Some(HerdrAgentState {
                 session_id,
                 status,

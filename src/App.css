@@ -6285,6 +6285,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   overflow: hidden;
 }
 
+.explorer-load-status {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .explorer-panel-heading {
   display: flex;
   align-items: center;

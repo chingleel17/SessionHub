@@ -53,6 +53,7 @@ describe("buildOpenSpecTree", () => {
         hasTasks: true,
         taskProgress: { done: 1, total: 2, status: "in_progress" },
         specsCount: 1,
+        extraFiles: [],
         specs: [{ name: "feature", path: "C:/project/openspec/specs/feature/spec.md" }],
         createdAt: null,
       }],

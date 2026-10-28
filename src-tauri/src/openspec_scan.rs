@@ -233,6 +233,13 @@ pub(crate) fn scan_openspec_change(change_dir: &Path) -> OpenSpecChange {
 }
 
 pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
+    scan_openspec_section_internal(project_dir, OpenSpecScanSection::All)
+}
+
+pub(crate) fn scan_openspec_section_internal(
+    project_dir: &Path,
+    section: OpenSpecScanSection,
+) -> OpenSpecData {
     let openspec_dir = project_dir.join("openspec");
 
     if !openspec_dir.is_dir() {
@@ -244,7 +251,10 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
         };
     }
 
-    let schema = {
+    let schema = if matches!(
+        section,
+        OpenSpecScanSection::Active | OpenSpecScanSection::All
+    ) {
         let config_path = openspec_dir.join("config.yaml");
         if config_path.is_file() {
             fs::read_to_string(&config_path)
@@ -259,9 +269,14 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
         } else {
             None
         }
+    } else {
+        None
     };
 
-    let active_changes = {
+    let active_changes = if matches!(
+        section,
+        OpenSpecScanSection::Active | OpenSpecScanSection::All
+    ) {
         let changes_dir = openspec_dir.join("changes");
         if changes_dir.is_dir() {
             let mut result = Vec::new();
@@ -281,9 +296,14 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
         } else {
             Vec::new()
         }
+    } else {
+        Vec::new()
     };
 
-    let archived_changes = {
+    let archived_changes = if matches!(
+        section,
+        OpenSpecScanSection::Archived | OpenSpecScanSection::All
+    ) {
         let archive_dir = openspec_dir.join("changes").join("archive");
         if archive_dir.is_dir() {
             let mut result = Vec::new();
@@ -300,11 +320,18 @@ pub(crate) fn scan_openspec_internal(project_dir: &Path) -> OpenSpecData {
         } else {
             Vec::new()
         }
+    } else {
+        Vec::new()
     };
 
-    let specs = {
+    let specs = if matches!(
+        section,
+        OpenSpecScanSection::Specs | OpenSpecScanSection::All
+    ) {
         let specs_dir = openspec_dir.join("specs");
         scan_openspec_specs(&specs_dir)
+    } else {
+        Vec::new()
     };
 
     OpenSpecData {

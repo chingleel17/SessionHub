@@ -86,7 +86,12 @@ struct ClaudeCredentials {
 #[cfg(target_os = "macos")]
 fn read_keychain_credentials() -> Option<String> {
     let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -211,14 +216,13 @@ fn parse_auth_status_plan(body: &serde_json::Value) -> Option<String> {
 
 fn claude_cli_executable() -> PathBuf {
     if let Ok(profile) = crate::settings::user_profile_env() {
-        let native_cli = PathBuf::from(profile)
-            .join(".local")
-            .join("bin")
-            .join(if cfg!(target_os = "windows") {
+        let native_cli = PathBuf::from(profile).join(".local").join("bin").join(
+            if cfg!(target_os = "windows") {
                 "claude.exe"
             } else {
                 "claude"
-            });
+            },
+        );
         if native_cli.is_file() {
             return native_cli;
         }

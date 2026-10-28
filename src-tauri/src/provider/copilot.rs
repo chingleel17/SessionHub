@@ -310,7 +310,8 @@ pub(crate) fn detect_copilot_integration_status(
     let integration_status =
         validate_managed_metadata(&metadata, COPILOT_PROVIDER, &expected_bridge_path).and_then(
             |_| {
-                if content.contains("on-notification.cjs") && content.contains("on-agent-stop.cjs") {
+                if content.contains("on-notification.cjs") && content.contains("on-agent-stop.cjs")
+                {
                     Ok(())
                 } else {
                     Err("Copilot bridge 缺少等待介入或完成事件，請更新整合。".to_string())

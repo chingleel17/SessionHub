@@ -11,6 +11,8 @@ type Props = {
   openspecData: OpenSpecData | undefined;
   isLoading: boolean;
   isRefreshing: boolean;
+  loadingMessage?: string;
+  error?: string;
   onReadFileContent: (filePath: string) => Promise<string>;
   onReadOpenspecFile: (projectCwd: string, relativePath: string) => Promise<string>;
   onWriteOpenspecFile: (projectCwd: string, relativePath: string, content: string) => Promise<void>;
@@ -191,6 +193,8 @@ export function PlansSpecsView({
   openspecData,
   isLoading,
   isRefreshing,
+  loadingMessage,
+  error,
   onReadFileContent,
   onReadOpenspecFile,
   onWriteOpenspecFile,
@@ -266,6 +270,9 @@ export function PlansSpecsView({
   const cleanupDragRef = useRef<(() => void) | null>(null);
   const lastHandledRefreshTokenRef = useRef(refreshToken);
   const selfWrittenFilesRef = useRef<Set<string>>(new Set());
+  const initializedSourcesRef = useRef<Set<string>>(new Set());
+  const initializedGroupsRef = useRef<Set<string>>(new Set());
+  const expandedSelectionRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -447,24 +454,32 @@ export function PlansSpecsView({
   );
 
   useEffect(() => {
-    setExpandedSources(new Set(sourceSections.map(({ sourceNode }) => sourceNode.id)));
+    const newSources = sourceSections.filter(({ sourceNode }) => !initializedSourcesRef.current.has(sourceNode.id));
+    if (!newSources.length) return;
+    newSources.forEach(({ sourceNode }) => initializedSourcesRef.current.add(sourceNode.id));
+    setExpandedSources((prev) => new Set([...prev, ...newSources.map(({ sourceNode }) => sourceNode.id)]));
   }, [sourceSections]);
 
   useEffect(() => {
     const groups = sourceSections.flatMap(({ groups }) => groups);
-    if (!groups.length) {
-      setColumnsOpenGroups(new Set());
-      return;
-    }
-    const preferred = groups.find((group) => group.id === "openspec:active-changes") ?? groups[0];
-    setColumnsOpenGroups(new Set([preferred.id]));
+    const newGroups = groups.filter((group) => !initializedGroupsRef.current.has(group.id));
+    if (!newGroups.length) return;
+    newGroups.forEach((group) => initializedGroupsRef.current.add(group.id));
+    setColumnsOpenGroups((prev) => {
+      // 背景層加入時保留使用者正在操作的群組。
+      if (prev.size) return prev;
+      const preferred = newGroups.find((group) => group.defaultOpen) ?? (initializedGroupsRef.current.size === newGroups.length ? newGroups[0] : null);
+      return preferred ? new Set([preferred.id]) : prev;
+    });
   }, [sourceSections]);
 
   // 同步 selectedNode → 展開對應群組 + 選中對應 change
   useEffect(() => {
     if (!selectedNode?.id) return;
+    if (expandedSelectionRef.current === selectedNode.id) return;
     const path = findNodePath(rootNodes, selectedNode.id);
     if (!path) return;
+    expandedSelectionRef.current = selectedNode.id;
     const sourceNode = path.find((node) => sourceSections.some(({ sourceNode: source }) => source.id === node.id));
     const statusGroupIndex = path.findIndex((node) => sourceSections.some(({ groups }) => groups.some((group) => group.id === node.id)));
     const statusGroup = statusGroupIndex >= 0 ? path[statusGroupIndex] : null;
@@ -508,15 +523,17 @@ export function PlansSpecsView({
   useEffect(() => {
     if (!selectedNode?.id) return;
     if (lastHandledRefreshTokenRef.current === refreshToken) return;
+
+    const matchedPath = findNodePath(rootNodes, selectedNode.id);
+    const matchedNode = matchedPath?.[matchedPath.length - 1] ?? null;
+    // 分層重掃期間，檔案可能正由 active 移至 archive，等背景層完成再判斷是否移除。
+    if (!matchedNode?.filePath && isRefreshing) return;
     lastHandledRefreshTokenRef.current = refreshToken;
 
     if (contentFilePath && selfWrittenFilesRef.current.has(contentFilePath)) {
       selfWrittenFilesRef.current.delete(contentFilePath);
       return;
     }
-
-    const matchedPath = findNodePath(rootNodes, selectedNode.id);
-    const matchedNode = matchedPath?.[matchedPath.length - 1] ?? null;
 
     if (!matchedNode?.filePath) {
       setSelectedNode(null);
@@ -535,7 +552,7 @@ export function PlansSpecsView({
     }
 
     void loadNodeContent(matchedNode, false);
-  }, [contentFilePath, loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
+  }, [contentFilePath, isRefreshing, loadNodeContent, refreshToken, rootNodes, selectedNode?.filePath, selectedNode?.filePathType, selectedNode?.id]);
 
   const renderListChangeRow = (item: TreeNode) => {
     const isOpenSpecItem = item.sourceKind === "openspec";
@@ -785,13 +802,13 @@ export function PlansSpecsView({
     );
   };
 
-  if (isLoading) {
+  if (isLoading && !hasSisyphus && !hasOpenSpec) {
     return (
-      <div className="plans-specs-empty">{t("plansSpecs.loading")}</div>
+      <div className="plans-specs-empty" role="status">{loadingMessage ?? t("plansSpecs.loading")}</div>
     );
   }
 
-  if (!hasSisyphus && !hasOpenSpec) {
+  if (!hasSisyphus && !hasOpenSpec && !loadingMessage && !error) {
     return (
       <div className="plans-specs-empty">{t("plansSpecs.empty")}</div>
     );
@@ -859,6 +876,12 @@ export function PlansSpecsView({
             {isCollapsed ? "»" : "«"}
           </button>
         </div>
+        {!isCollapsed && loadingMessage ? (
+          <div className="explorer-load-status" role="status">{loadingMessage}</div>
+        ) : null}
+        {!isCollapsed && error ? (
+          <div className="explorer-load-status" role="alert">{t("plansSpecs.loadFailed")}: {error}</div>
+        ) : null}
         {!isCollapsed ? (
           viewMode === "tree" ? (
             <ExplorerTree

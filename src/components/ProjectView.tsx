@@ -118,6 +118,8 @@ type Props = {
   projectAgentsPrefs: ProjectAgentsPrefs;
   plansSpecsLoading: boolean;
   plansSpecsRefreshing: boolean;
+  plansSpecsLoadingMessage?: string;
+  plansSpecsError?: string;
   agentsMdLoading: boolean;
   skillsLoading: boolean;
   commandsLoading: boolean;
@@ -265,6 +267,8 @@ export function ProjectView({
   projectAgentsPrefs,
   plansSpecsLoading,
   plansSpecsRefreshing,
+  plansSpecsLoadingMessage,
+  plansSpecsError,
   agentsMdLoading,
   skillsLoading,
   commandsLoading,
@@ -919,10 +923,13 @@ export function ProjectView({
         />
       ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView
+          key={project.pathLabel}
           sisyphusData={sisyphusData}
           openspecData={openspecData}
           isLoading={plansSpecsLoading}
           isRefreshing={plansSpecsRefreshing}
+          loadingMessage={plansSpecsLoadingMessage}
+          error={plansSpecsError}
           onReadFileContent={onReadFileContent}
           onReadOpenspecFile={onReadOpenspecFile}
           onWriteOpenspecFile={onWriteOpenspecFile}

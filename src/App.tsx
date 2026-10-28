@@ -1001,6 +1001,11 @@ function App() {
   // invalidate sisyphus 快取，不碰 openspec 快取。超過時間後下一次 watcher 事件
   // 才會正常重整 openspec，以真實掃描結果覆蓋樂觀值。
   const openspecOptimisticUntilRef = useRef<number>(0);
+  const refreshProjectSpecLayers = useCallback(async (projectDir: string) => {
+    // 先標記所有層過期，僅立即重掃 active；其餘層由相依查詢依序接手。
+    await queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir], refetchType: "none" });
+    await queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir, "active"], exact: true });
+  }, [queryClient]);
   const refreshProjectPlansSpecs = useCallback(
     async (projectDir: string) => {
       // 清除之前的計時器，實現去抖動
@@ -1014,13 +1019,13 @@ function App() {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
           ...(!suppressOpenspec
-            ? [queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] })]
+            ? [refreshProjectSpecLayers(projectDir)]
             : []),
         ]);
         planSpecsRefreshTimerRef.current = null;
       }, 100);
     },
-    [queryClient],
+    [queryClient, refreshProjectSpecLayers],
   );
 
   useEffect(() => {
@@ -1127,12 +1132,45 @@ function App() {
     staleTime: 30_000,
   });
 
-  const openspecQuery = useQuery({
-    queryKey: ["project_specs", activeProject?.pathLabel ?? ""],
+  const openspecActiveQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "active"],
     enabled: Boolean(activeProject?.pathLabel),
-    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel }),
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "active" }),
     staleTime: 30_000,
   });
+
+  const openspecSpecsQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "specs"],
+    enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching,
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "specs" }),
+    staleTime: 30_000,
+  });
+
+  const openspecArchivedQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "archived"],
+    enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching
+      && openspecSpecsQuery.isSuccess && !openspecSpecsQuery.isFetching,
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "archived" }),
+    staleTime: 30_000,
+  });
+
+  const openspecData = useMemo<OpenSpecData | undefined>(() => {
+    if (!openspecActiveQuery.data && !openspecSpecsQuery.data && !openspecArchivedQuery.data) return undefined;
+    return {
+      schema: openspecActiveQuery.data?.schema ?? null,
+      activeChanges: openspecActiveQuery.data?.activeChanges ?? [],
+      specs: openspecSpecsQuery.data?.specs ?? [],
+      archivedChanges: openspecArchivedQuery.data?.archivedChanges ?? [],
+    };
+  }, [openspecActiveQuery.data, openspecSpecsQuery.data, openspecArchivedQuery.data]);
+  const openspecLoadingMessage = openspecActiveQuery.isPending || openspecActiveQuery.isFetching
+    ? t("plansSpecs.loadingActive")
+    : openspecActiveQuery.isSuccess && (openspecSpecsQuery.isPending || openspecSpecsQuery.isFetching)
+      ? t("plansSpecs.loadingSpecs")
+      : openspecSpecsQuery.isSuccess && (openspecArchivedQuery.isPending || openspecArchivedQuery.isFetching)
+        ? t("plansSpecs.loadingArchived")
+        : undefined;
+  const openspecError = openspecActiveQuery.error ?? openspecSpecsQuery.error ?? openspecArchivedQuery.error;
 
   // 專案 agents sub-tab 啟用時，除專案 scope queries 外也啟用 global queries，
   // 供專案分頁的「全域」分區使用（雙分區，見 agents-config-view-ux spec）。
@@ -1514,23 +1552,25 @@ function App() {
     content: string,
   ): Promise<void> => {
     // 樂觀更新：若寫入的是某個 change 的 tasks.md，立即以前端解析的進度更新
-    // openspecQuery 快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
+    // 對應層快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
     // 真實數字覆蓋此處的樂觀值。
-    const projectKey = activeProject?.pathLabel ?? "";
+    const projectKey = projectCwd;
     const normalizedPath = relativePath.replace(/\\/g, "/");
     const tasksMatch = /^changes\/(?:archive\/)?([^/]+)\/tasks\.md$/.exec(normalizedPath);
+    const specsQueryKey = ["project_specs", projectKey, normalizedPath.startsWith("changes/archive/") ? "archived" : "active"];
     let previousData: OpenSpecData | undefined;
     if (projectKey && tasksMatch) {
       const changeName = tasksMatch[1];
       const nextProgress = parseTaskProgress(content);
-      const snapshot = queryClient.getQueryData<OpenSpecData>(["project_specs", projectKey]);
+      await queryClient.cancelQueries({ queryKey: specsQueryKey, exact: true });
+      const snapshot = queryClient.getQueryData<OpenSpecData>(specsQueryKey);
       if (snapshot) {
         previousData = snapshot;
         const applyProgress = (changes: OpenSpecData["activeChanges"]) =>
           changes.map((change) =>
             change.name === changeName ? { ...change, taskProgress: nextProgress } : change,
           );
-        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], {
+        queryClient.setQueryData<OpenSpecData>(specsQueryKey, {
           ...snapshot,
           activeChanges: applyProgress(snapshot.activeChanges),
           archivedChanges: applyProgress(snapshot.archivedChanges),
@@ -1546,7 +1586,7 @@ function App() {
     } catch (error) {
       // 寫入失敗：回滾樂觀更新
       if (projectKey && previousData) {
-        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], previousData);
+        queryClient.setQueryData<OpenSpecData>(specsQueryKey, previousData);
       }
       showToast(resolveErrorMessage(error, t("toast.openspecWriteFailed")));
       throw error;
@@ -1555,7 +1595,7 @@ function App() {
 
   const handleRefreshPlansSpecs = async (): Promise<void> => {
     if (!activeProject?.pathLabel) return;
-    await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
+    await Promise.all([sisyphusQuery.refetch(), refreshProjectSpecLayers(activeProject.pathLabel)]);
     setRealtimeStatus("active");
     setLastRealtimeSyncAt(getRealtimeSyncLabel());
   };
@@ -2478,15 +2518,17 @@ function App() {
               sessionTodosLoading={sessionTodosLoadingMap}
               sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
-              openspecData={openspecQuery.data}
+              openspecData={openspecData}
               agentsMdData={projectAgentsMdQuery.data}
               skillsData={projectAgentsSkillsQuery.data}
                commandsData={projectAgentsCommandsQuery.data}
                skillsError={projectAgentsSkillsQuery.error ? resolveErrorMessage(projectAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined}
                commandsError={projectAgentsCommandsQuery.error ? resolveErrorMessage(projectAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined}
               projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
-              plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
-              plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
+              plansSpecsLoading={sisyphusQuery.isLoading || openspecActiveQuery.isLoading}
+              plansSpecsRefreshing={sisyphusQuery.isFetching || Boolean(openspecLoadingMessage)}
+              plansSpecsLoadingMessage={openspecLoadingMessage}
+              plansSpecsError={openspecError ? resolveErrorMessage(openspecError, t("plansSpecs.loadFailed")) : undefined}
               agentsMdLoading={projectAgentsMdQuery.isFetching}
               skillsLoading={projectAgentsSkillsQuery.isFetching}
               commandsLoading={projectAgentsCommandsQuery.isFetching}
@@ -2499,7 +2541,7 @@ function App() {
               onRefreshAgentsMd={handleRefreshProjectAgents}
                onRefreshAgentsSkills={() => handleRefreshResource("skills", activeProject.pathLabel)}
                onRefreshAgentsCommands={() => handleRefreshResource("commands", activeProject.pathLabel)}
-              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecActiveQuery.dataUpdatedAt}:${openspecSpecsQuery.dataUpdatedAt}:${openspecArchivedQuery.dataUpdatedAt}`}
               onOpenPlansSpecsFileExternal={handleOpenPathExternal}
               onOpenAgentsExternal={(path) => {
                 openPath(path).catch((error) => {

@@ -192,7 +192,10 @@ mod overlay_activity_tests {
         let merged = merge_activity(
             vec![item("a")],
             vec!["b".to_string()],
-            &[state("a", HerdrAgentStatus::Idle), state("b", HerdrAgentStatus::Done)],
+            &[
+                state("a", HerdrAgentStatus::Idle),
+                state("b", HerdrAgentStatus::Done),
+            ],
         );
         assert!(merged.items.is_empty());
         assert_eq!(merged.active_count, 0);
@@ -200,10 +203,17 @@ mod overlay_activity_tests {
 
     #[test]
     fn herdr_blocked_adds_waiting_even_without_hook_event() {
-        let merged = merge_activity(vec![], vec!["a".to_string()], &[state("a", HerdrAgentStatus::Blocked)]);
+        let merged = merge_activity(
+            vec![],
+            vec!["a".to_string()],
+            &[state("a", HerdrAgentStatus::Blocked)],
+        );
         assert_eq!(merged.items.len(), 1);
         assert_eq!(merged.items[0].project_name, "demo");
-        assert_eq!(merged.active_count, 0, "waiting session is not counted as active");
+        assert_eq!(
+            merged.active_count, 0,
+            "waiting session is not counted as active"
+        );
     }
 
     #[test]
@@ -211,7 +221,10 @@ mod overlay_activity_tests {
         let merged = merge_activity(
             vec![item("w")],
             vec![],
-            &[state("x", HerdrAgentStatus::Working), state("w", HerdrAgentStatus::Unknown)],
+            &[
+                state("x", HerdrAgentStatus::Working),
+                state("w", HerdrAgentStatus::Unknown),
+            ],
         );
         assert_eq!(merged.active_count, 1);
         assert_eq!(merged.items.len(), 1);

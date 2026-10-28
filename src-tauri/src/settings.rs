@@ -253,7 +253,9 @@ pub(crate) fn resolve_codex_root(root_dir: Option<&str>) -> Result<PathBuf, Stri
 
 pub(crate) fn provider_bridge_dir() -> Result<PathBuf, String> {
     // 新協定使用獨立目錄，舊版未加鎖的 hook 不得與清理程序共用檔案。
-    Ok(default_app_data_dir()?.join("provider-bridge").join("locked-v1"))
+    Ok(default_app_data_dir()?
+        .join("provider-bridge")
+        .join("locked-v1"))
 }
 
 pub(crate) fn resolve_provider_bridge_path(provider: &str) -> Result<PathBuf, String> {
@@ -483,7 +485,8 @@ mod tests {
 
     #[test]
     fn hooks_only_directory_does_not_count_as_installed_provider() {
-        let dir = std::env::temp_dir().join(format!("sessionhub-hooks-only-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("sessionhub-hooks-only-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("hooks")).unwrap();
         assert!(!dir_has_user_content(&dir));
         std::fs::write(dir.join("auth.json"), "{}").unwrap();

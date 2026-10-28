@@ -189,7 +189,9 @@ fn parse_opencode_openai_entry(entry: &serde_json::Value) -> Result<CodexCredent
         .to_string();
     if let Some(expires_ms) = entry.get("expires").and_then(|v| v.as_i64()) {
         if chrono::Utc::now().timestamp_millis() >= expires_ms {
-            return Err("OpenCode 的 OpenAI token 已過期，請在 OpenCode 中使用一次以自動更新".to_string());
+            return Err(
+                "OpenCode 的 OpenAI token 已過期，請在 OpenCode 中使用一次以自動更新".to_string(),
+            );
         }
     }
     let account_id = entry

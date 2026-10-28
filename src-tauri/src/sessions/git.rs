@@ -6,9 +6,9 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+use crate::types::SessionInfo;
 #[cfg(target_os = "windows")]
 use crate::types::CREATE_NO_WINDOW;
-use crate::types::SessionInfo;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GitMetadata {

@@ -7,7 +7,8 @@ use std::os::windows::process::CommandExt;
 use tauri::{Emitter, Manager, State};
 
 use crate::openspec_scan::{
-    read_openspec_file_internal, scan_openspec_internal, write_openspec_file_internal,
+    read_openspec_file_internal, scan_openspec_internal, scan_openspec_section_internal,
+    write_openspec_file_internal,
 };
 use crate::sessions::{
     herdr_server_is_running, herdr_tab_focus, launch_terminal, project_terminal_label,
@@ -291,16 +292,20 @@ pub async fn get_project_plans(project_dir: String) -> Result<SisyphusData, Stri
 }
 
 #[tauri::command]
-pub async fn get_project_specs(project_dir: String) -> Result<OpenSpecData, String> {
-    // 在後台執行掃描，避免阻塞 UI 執行緒
-    let result =
-        std::thread::spawn(move || scan_openspec_internal(std::path::Path::new(&project_dir)))
-            .join();
-
-    match result {
-        Ok(data) => Ok(data),
-        Err(_) => Err("scan thread panicked".to_string()),
-    }
+pub async fn get_project_specs(
+    project_dir: String,
+    section: Option<OpenSpecScanSection>,
+) -> Result<OpenSpecData, String> {
+    // 同步檔案掃描交給 blocking pool，不阻塞非同步執行緒及其他 IPC。
+    tauri::async_runtime::spawn_blocking(move || {
+        let project_dir = std::path::Path::new(&project_dir);
+        match section {
+            Some(section) => scan_openspec_section_internal(project_dir, section),
+            None => scan_openspec_internal(project_dir),
+        }
+    })
+    .await
+    .map_err(|e| format!("OpenSpec scan failed: {e}"))
 }
 
 #[tauri::command]

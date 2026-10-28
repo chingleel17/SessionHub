@@ -235,16 +235,25 @@ fn remove_claude_integration_from_content(
 }
 
 fn managed_claude_events_use_bridge_path(root: &Value, path: &Path) -> bool {
-    let argument = format!("--bridge-path {} --provider", sh_single_quoted(&path.to_string_lossy()));
+    let argument = format!(
+        "--bridge-path {} --provider",
+        sh_single_quoted(&path.to_string_lossy())
+    );
     CLAUDE_MANAGED_EVENTS.iter().all(|event| {
         root["hooks"][event].as_array().is_some_and(|groups| {
-            groups.iter().filter(|group| is_sessionhub_hook_group(group)).any(|group| {
-                group["hooks"].as_array().is_some_and(|hooks| {
-                    hooks.iter().any(|hook| hook["command"].as_str().is_some_and(|command| {
-                        command.contains(SESSIONHUB_HOOK_COMMAND_MARKER) && command.contains(&argument)
-                    }))
+            groups
+                .iter()
+                .filter(|group| is_sessionhub_hook_group(group))
+                .any(|group| {
+                    group["hooks"].as_array().is_some_and(|hooks| {
+                        hooks.iter().any(|hook| {
+                            hook["command"].as_str().is_some_and(|command| {
+                                command.contains(SESSIONHUB_HOOK_COMMAND_MARKER)
+                                    && command.contains(&argument)
+                            })
+                        })
+                    })
                 })
-            })
         })
     })
 }
@@ -343,10 +352,14 @@ pub(crate) fn detect_claude_integration_status(
         }
     };
 
-    let bridge_path_is_current = diagnostics.bridge_path.as_ref()
+    let bridge_path_is_current = diagnostics
+        .bridge_path
+        .as_ref()
         .is_some_and(|path| managed_claude_events_use_bridge_path(&root, path));
-    if has_all_managed_claude_events(&root) && hook_scripts_are_current(hook_scripts_path)
-        && bridge_path_is_current {
+    if has_all_managed_claude_events(&root)
+        && hook_scripts_are_current(hook_scripts_path)
+        && bridge_path_is_current
+    {
         build_provider_integration_status(
             CLAUDE_PROVIDER,
             ProviderIntegrationState::Installed,
@@ -362,7 +375,10 @@ pub(crate) fn detect_claude_integration_status(
             status_path,
             diagnostics,
             None,
-            Some("Claude hook 事件、腳本版本或 bridge 路徑已過期，請重新安裝以套用最新整合。".to_string()),
+            Some(
+                "Claude hook 事件、腳本版本或 bridge 路徑已過期，請重新安裝以套用最新整合。"
+                    .to_string(),
+            ),
         )
     } else {
         build_provider_integration_status(
@@ -657,13 +673,27 @@ mod tests {
     #[test]
     fn managed_events_reject_legacy_bridge_directory() {
         let old_path = fake_bridge_path();
-        let new_path = old_path.parent().expect("bridge parent").join("locked-v1").join("claude.jsonl");
-        let content = render_claude_integration(&old_path, &fake_hook_root(), None, Path::new("settings.json"))
-            .expect("legacy config");
+        let new_path = old_path
+            .parent()
+            .expect("bridge parent")
+            .join("locked-v1")
+            .join("claude.jsonl");
+        let content = render_claude_integration(
+            &old_path,
+            &fake_hook_root(),
+            None,
+            Path::new("settings.json"),
+        )
+        .expect("legacy config");
         let root: Value = serde_json::from_str(&content).expect("parse legacy config");
         assert!(!managed_claude_events_use_bridge_path(&root, &new_path));
-        let updated = render_claude_integration(&new_path, &fake_hook_root(), Some(&content), Path::new("settings.json"))
-            .expect("updated config");
+        let updated = render_claude_integration(
+            &new_path,
+            &fake_hook_root(),
+            Some(&content),
+            Path::new("settings.json"),
+        )
+        .expect("updated config");
         let root: Value = serde_json::from_str(&updated).expect("parse updated config");
         assert!(managed_claude_events_use_bridge_path(&root, &new_path));
     }
