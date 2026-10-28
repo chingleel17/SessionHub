@@ -111,6 +111,7 @@ type Props = {
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
   agentsMdData?: AgentsMdScanResult;
+  agentsMdError?: string;
   skillsData?: SkillsScanResult;
   commandsData?: CommandsScanResult;
   skillsError?: string;
@@ -260,6 +261,7 @@ export function ProjectView({
   sisyphusData,
   openspecData,
   agentsMdData,
+  agentsMdError,
   skillsData,
   commandsData,
   skillsError,
@@ -942,6 +944,7 @@ export function ProjectView({
         <AgentsConfigView
           scope={{ kind: "project", projectCwd: project.pathLabel }}
           agentsMdData={agentsMdData}
+          agentsMdError={agentsMdError}
           skillsData={skillsData}
           commandsData={commandsData}
           skillsError={skillsError}

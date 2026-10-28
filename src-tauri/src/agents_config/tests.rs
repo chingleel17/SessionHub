@@ -219,6 +219,66 @@ fn provider_aware_scan_unions_roots_and_keeps_provider_identity() {
         .iter()
         .any(|item| item.message.contains("上限") && item.message.contains('2')));
 
+    let providers = vec![
+        CODEX_PROVIDER.to_string(),
+        COPILOT_PROVIDER.to_string(),
+        CLAUDE_PROVIDER.to_string(),
+    ];
+    let root_layer = scan_agents_skills_layer_internal(&scope, &providers, AgentsScanLayer::Root)
+        .expect("root layer");
+    let nested_layer =
+        scan_agents_skills_layer_internal(&scope, &providers, AgentsScanLayer::Nested)
+            .expect("nested layer");
+    assert!(root_layer
+        .skills
+        .iter()
+        .all(|skill| skill.project_relative_dir.as_deref() == Some("")));
+    assert!(nested_layer.skills.iter().all(|skill| skill
+        .project_relative_dir
+        .as_deref()
+        .is_some_and(|dir| !dir.is_empty())));
+    let mut layered_skills = root_layer.skills;
+    layered_skills.extend(nested_layer.skills);
+    let sort_skills = |skills: &mut Vec<SkillEntry>| {
+        skills.sort_by_key(|skill| {
+            (
+                skill.provider_id.clone(),
+                skill.project_relative_dir.clone(),
+                skill.name.clone(),
+            )
+        })
+    };
+    sort_skills(&mut layered_skills);
+    let mut full_skills = result.skills.clone();
+    sort_skills(&mut full_skills);
+    assert_eq!(layered_skills, full_skills);
+    assert_eq!(root_layer.targets, result.targets);
+    assert_eq!(root_layer.enabled_providers, result.enabled_providers);
+    let opencode_root = scan_agents_skills_layer_internal(
+        &scope,
+        &[OPENCODE_PROVIDER.to_string()],
+        AgentsScanLayer::Root,
+    )
+    .expect("OpenCode root without CLI probe");
+    assert!(opencode_root.cli_skills.is_empty());
+    assert!(opencode_root
+        .skills
+        .iter()
+        .all(|skill| skill.cli_state.is_none()));
+    assert!(opencode_root.diagnostics.is_empty());
+    let nested_limited = scan_agents_skills_layer_limited(
+        &scope,
+        &[CODEX_PROVIDER.to_string()],
+        2,
+        AgentsScanLayer::Nested,
+    )
+    .expect("nested limited");
+    assert!(nested_limited
+        .skills
+        .iter()
+        .all(|skill| skill.name != "shared"));
+    assert_eq!(nested_limited.diagnostics, limited.diagnostics);
+
     #[cfg(target_os = "windows")]
     {
         let external = unique_test_dir("external-skills");
@@ -463,6 +523,42 @@ fn scan_agents_md_respects_ignore_and_depth_limits() {
         .iter()
         .all(|entry| !entry.dir.contains("\\i") && !entry.dir.ends_with("/i")));
 
+    let root_layer =
+        scan_agents_md_root_layer(&root, &ProjectAgentsPrefs::default(), AgentsScanLayer::Root)
+            .expect("root layer");
+    let nested_layer = scan_agents_md_root_layer(
+        &root,
+        &ProjectAgentsPrefs::default(),
+        AgentsScanLayer::Nested,
+    )
+    .expect("nested layer");
+    assert_eq!(root_layer.scanned_dirs, 1);
+    assert_eq!(root_layer.entries.len(), 1);
+    assert_eq!(root_layer.entries[0].rel_dir, "");
+    assert!(nested_layer
+        .entries
+        .iter()
+        .all(|entry| !entry.rel_dir.is_empty()));
+    assert_eq!(
+        root_layer.scanned_dirs + nested_layer.scanned_dirs,
+        result.scanned_dirs
+    );
+    let mut combined = root_layer.entries;
+    combined.extend(nested_layer.entries);
+    combined.sort_by(|a, b| a.dir.cmp(&b.dir));
+    assert_eq!(combined, result.entries);
+
+    let prefs = ProjectAgentsPrefs {
+        ignored_paths: vec!["feature".to_string()],
+        ..Default::default()
+    };
+    assert!(
+        scan_agents_md_root_layer(&root, &prefs, AgentsScanLayer::Nested)
+            .expect("ignored nested")
+            .entries
+            .is_empty()
+    );
+
     fs::remove_dir_all(&root).expect("cleanup");
 }
 
@@ -534,6 +630,13 @@ fn scan_agents_md_keeps_sync_status_when_content_metrics_are_unavailable() {
     assert!(entry.source.exists);
     assert!(entry.source.hash.is_some());
     assert_eq!(entry.source_metrics, None);
+    assert_eq!(entry.source, fingerprint_file(&path));
+    for content in ["繁體中文 mixed text\n", "", "first\r\nsecond"] {
+        fs::write(&path, content).expect("write UTF-8");
+        let (fingerprint, metrics) = fingerprint_file_with_metrics(&path);
+        assert_eq!(fingerprint, fingerprint_file(&path));
+        assert_eq!(metrics, Some(estimate_mixed_text(content)));
+    }
 
     fs::remove_dir_all(&root).expect("cleanup");
 }
@@ -549,6 +652,14 @@ fn scan_agents_md_sets_truncated_when_limit_exceeded() {
 
     let result = scan_agents_md_root(&root, &ProjectAgentsPrefs::default()).expect("scan");
     assert!(result.truncated);
+    let nested = scan_agents_md_root_layer(
+        &root,
+        &ProjectAgentsPrefs::default(),
+        AgentsScanLayer::Nested,
+    )
+    .expect("nested scan");
+    assert!(nested.truncated);
+    assert_eq!(nested.scanned_dirs + 1, result.scanned_dirs);
 
     fs::remove_dir_all(&root).expect("cleanup");
 }

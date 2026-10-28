@@ -54,7 +54,7 @@ export function resourceCanLoad(client: QueryClient, key: QueryKey): boolean {
 export async function refreshResource<T>(
   client: QueryClient,
   key: QueryKey,
-  queryFn: () => Promise<T>,
+  queryFn: (context: { signal: AbortSignal }) => Promise<T>,
   afterWrite = false,
 ): Promise<T> {
   const wasFetching = client.getQueryState(key)?.fetchStatus === "fetching";
@@ -78,7 +78,7 @@ export async function updateResourceAfterWrite<T>(
   key: QueryKey,
   activeKeys: ReadonlySet<string>,
   dirtyKeys: Set<string>,
-  queryFn: () => Promise<T>,
+  queryFn: (context: { signal: AbortSignal }) => Promise<T>,
 ): Promise<void> {
   if (!client.getQueryState(key)) return;
   const id = resourceKeyId(key);

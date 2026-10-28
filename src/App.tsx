@@ -51,6 +51,7 @@ import { resolveErrorMessage } from "./utils/resolveErrorMessage";
 import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
 import { RESOURCE_QUERY_OPTIONS, resourceCanLoad, resourceKeyId, resourceQueryKey, refreshResource, updateResourceAfterWrite, writtenSyncKinds } from "./utils/agentsResourceCache";
+import { canLoadGlobalAgents, mergeAgentsMdLayers, mergeSkillsLayers, scanAgentsInLayers } from "./utils/agentsLayeredScan";
 import {
   createDashboardAnalyticsQuery,
   createDefaultAnalyticsQuery,
@@ -1172,8 +1173,7 @@ function App() {
         : undefined;
   const openspecError = openspecActiveQuery.error ?? openspecSpecsQuery.error ?? openspecArchivedQuery.error;
 
-  // 專案 agents sub-tab 啟用時，除專案 scope queries 外也啟用 global queries，
-  // 供專案分頁的「全域」分區使用（雙分區，見 agents-config-view-ux spec）。
+  // 專案先完成分層掃描，再載入附帶全域資料；已存在的全域快取仍可直接顯示。
   const projectAgentsSubTabActive =
     Boolean(activeProject?.pathLabel) &&
     (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false);
@@ -1181,6 +1181,20 @@ function App() {
   const projectAgentsSkillsActive = projectAgentsTab === "skills";
   const projectAgentsCommandsActive = projectAgentsTab === "commands";
   const projectAgentsMcpActive = projectAgentsTab === "mcp";
+
+  const scanProjectAgentsMd = (projectCwd: string, signal: AbortSignal) => scanAgentsInLayers(
+    queryClient, ["agents-md", projectCwd],
+    (layer) => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd, layer }),
+    mergeAgentsMdLayers, signal,
+  );
+
+  const scanProjectSkills = (projectCwd: string, key: readonly unknown[], signal: AbortSignal) => scanAgentsInLayers(
+    queryClient, key,
+    (layer) => invoke<SkillsScanResult>("scan_agents_skills", {
+      scope: { kind: "project", projectCwd }, enabledProviders: settingsQuery.data?.enabledProviders ?? [], layer,
+    }),
+    mergeSkillsLayers, signal,
+  );
 
   const projectAgentsPrefsQuery = useQuery({
     queryKey: ["agents-prefs", normalizePath(activeProject?.pathLabel ?? "")],
@@ -1191,11 +1205,11 @@ function App() {
 
   const projectAgentsMdQuery = useQuery({
     queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive && projectAgentsTab === "agents-md",
+    enabled: projectAgentsSubTabActive && projectAgentsTab === "agents-md" && resourceCanLoad(queryClient, ["agents-md", activeProject?.pathLabel ?? ""]),
+    ...RESOURCE_QUERY_OPTIONS,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
-    queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
+    queryFn: ({ signal }) => scanProjectAgentsMd(activeProject?.pathLabel ?? "", signal),
   });
 
   const projectScope = activeProject?.pathLabel ?? "";
@@ -1214,7 +1228,7 @@ function App() {
     queryKey: projectSkillsKey,
     enabled: projectReady && projectAgentsSubTabActive && projectAgentsSkillsActive && resourceCanLoad(queryClient, projectSkillsKey),
     ...RESOURCE_QUERY_OPTIONS,
-      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
+    queryFn: ({ signal }) => scanProjectSkills(projectScope, projectSkillsKey, signal),
    });
 
   const projectAgentsCommandsQuery = useQuery({
@@ -1226,16 +1240,22 @@ function App() {
 
   const globalAgentsMdQuery = useQuery({
     queryKey: ["agents-md", "global"],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "agents-md") || (projectAgentsSubTabActive && projectAgentsTab === "agents-md"),
+    enabled: canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "agents-md", projectAgentsSubTabActive && projectAgentsTab === "agents-md", projectAgentsMdQuery)
+      && resourceCanLoad(queryClient, ["agents-md", "global"]),
+    ...RESOURCE_QUERY_OPTIONS,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
     queryFn: () => invoke<AgentsMdScanResult>("scan_global_agents_md"),
   });
 
+  const projectSkillsSettled = {
+    isFetched: projectAgentsSkillsQuery.isFetched || projectAgentsPrefsQuery.isError,
+    isFetching: projectAgentsSkillsQuery.isFetching,
+  };
   const globalAgentsSkillsQuery = useQuery({
     queryKey: globalSkillsKey,
-    enabled: Boolean(settingsQuery.data) && globalSkillsActive && resourceCanLoad(queryClient, globalSkillsKey),
+    enabled: Boolean(settingsQuery.data) && canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "skills", projectAgentsSubTabActive && projectAgentsSkillsActive, projectSkillsSettled)
+      && resourceCanLoad(queryClient, globalSkillsKey),
     ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
@@ -1251,7 +1271,8 @@ function App() {
 
   const agentsRootLinkQuery = useQuery({
     queryKey: ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""],
-    enabled: Boolean(settingsQuery.data) && globalSkillsActive && agentsSourceRootConfigured && resourceCanLoad(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""]),
+    enabled: Boolean(settingsQuery.data) && canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "skills", projectAgentsSubTabActive && projectAgentsSkillsActive, projectSkillsSettled)
+      && agentsSourceRootConfigured && resourceCanLoad(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""]),
     ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<AgentsRootLinkStatus>("check_agents_root_link"),
   });
@@ -1298,16 +1319,18 @@ function App() {
     ...(globalMcpActive ? [resourceKeyId(globalMcpKey)] : []),
   ]);
 
-  const scanResource = (kind: "skills" | "commands" | "mcp", scope: string) => {
+  const scanResource = (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[], signal: AbortSignal) => {
     const agentsScope = scope === "global" ? { kind: "global" as const } : { kind: "project" as const, projectCwd: scope };
     if (kind === "mcp") return invoke<McpProviderConfig[]>("list_mcp_configs", { scope: agentsScope });
-    if (kind === "skills") return invoke<SkillsScanResult>("scan_agents_skills", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
+    if (kind === "skills") return scope === "global"
+      ? invoke<SkillsScanResult>("scan_agents_skills", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] })
+      : scanProjectSkills(scope, key, signal);
     return invoke<CommandsScanResult>("scan_agents_commands", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
   };
 
   const refreshAgentsResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[], afterWrite = false) => {
     try {
-      await refreshResource<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, () => scanResource(kind, scope), afterWrite);
+      await refreshResource<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, ({ signal }) => scanResource(kind, scope, key, signal), afterWrite);
     } catch (error) {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     }
@@ -1316,7 +1339,7 @@ function App() {
   const updateWrittenResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[]) => {
     try {
       await updateResourceAfterWrite<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, activeAgentsResourcesRef.current,
-        dirtyAgentsResourcesRef.current, () => scanResource(kind, scope));
+        dirtyAgentsResourcesRef.current, ({ signal }) => scanResource(kind, scope, key, signal));
     } catch (error) {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     }
@@ -1635,7 +1658,7 @@ function App() {
       filePath,
       content,
     });
-    await queryClient.invalidateQueries({ queryKey: ["agents-md", activeProject.pathLabel] });
+    await refreshResource(queryClient, ["agents-md", activeProject.pathLabel], ({ signal }) => scanProjectAgentsMd(activeProject.pathLabel, signal), true);
   };
 
   const handleWriteGlobalAgentsFile = async (filePath: string, content: string): Promise<void> => {
@@ -1652,7 +1675,7 @@ function App() {
     const scope = activeProject.pathLabel;
     try {
       await Promise.all([
-        refreshResource(queryClient, ["agents-md", scope], () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: scope })),
+        refreshResource(queryClient, ["agents-md", scope], ({ signal }) => scanProjectAgentsMd(scope, signal)),
         refreshResource(queryClient, ["agents-prefs", normalizePath(scope)], () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: scope })),
       ]);
     } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
@@ -2254,13 +2277,14 @@ function App() {
   const globalAgentsData: AgentsScopeDataBundle = {
     scope: { kind: "global" },
     agentsMdData: globalAgentsMdQuery.data,
+    agentsMdError: globalAgentsMdQuery.error ? resolveErrorMessage(globalAgentsMdQuery.error, t("toast.toolOpenFailed")) : undefined,
     skillsData: globalAgentsSkillsQuery.data,
     commandsData: globalAgentsCommandsQuery.data,
     skillsError: globalAgentsSkillsQuery.error ? resolveErrorMessage(globalAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined,
     commandsError: globalAgentsCommandsQuery.error ? resolveErrorMessage(globalAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined,
     prefs: globalAgentsPrefs,
-    isAgentsMdLoading: globalAgentsMdQuery.isFetching,
-    isSkillsLoading: globalAgentsSkillsQuery.isFetching,
+    isAgentsMdLoading: globalAgentsMdQuery.isFetching || (globalAgentsMdQuery.isPending && ((activeView === "agents-global" && globalAgentsTab === "agents-md") || (projectAgentsSubTabActive && projectAgentsTab === "agents-md"))),
+    isSkillsLoading: globalAgentsSkillsQuery.isFetching || (globalSkillsActive && globalAgentsSkillsQuery.isPending),
     isCommandsLoading: globalAgentsCommandsQuery.isFetching,
     isPrefsLoading: false,
     onRefreshAgentsMd: handleRefreshGlobalAgents,
@@ -2520,9 +2544,10 @@ function App() {
               sisyphusData={sisyphusQuery.data}
               openspecData={openspecData}
               agentsMdData={projectAgentsMdQuery.data}
+              agentsMdError={projectAgentsMdQuery.error ? resolveErrorMessage(projectAgentsMdQuery.error, t("toast.toolOpenFailed")) : undefined}
               skillsData={projectAgentsSkillsQuery.data}
                commandsData={projectAgentsCommandsQuery.data}
-               skillsError={projectAgentsSkillsQuery.error ? resolveErrorMessage(projectAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined}
+               skillsError={(projectAgentsSkillsQuery.error ?? projectAgentsPrefsQuery.error) ? resolveErrorMessage(projectAgentsSkillsQuery.error ?? projectAgentsPrefsQuery.error, t("toast.toolOpenFailed")) : undefined}
                commandsError={projectAgentsCommandsQuery.error ? resolveErrorMessage(projectAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined}
               projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
               plansSpecsLoading={sisyphusQuery.isLoading || openspecActiveQuery.isLoading}
@@ -2530,7 +2555,7 @@ function App() {
               plansSpecsLoadingMessage={openspecLoadingMessage}
               plansSpecsError={openspecError ? resolveErrorMessage(openspecError, t("plansSpecs.loadFailed")) : undefined}
               agentsMdLoading={projectAgentsMdQuery.isFetching}
-              skillsLoading={projectAgentsSkillsQuery.isFetching}
+              skillsLoading={projectAgentsSkillsQuery.isFetching || (projectAgentsSubTabActive && projectAgentsSkillsActive && projectAgentsSkillsQuery.isPending && !projectAgentsPrefsQuery.isError)}
               commandsLoading={projectAgentsCommandsQuery.isFetching}
               agentsPrefsLoading={projectAgentsPrefsQuery.isLoading}
               onReadFileContent={handleReadFileContent}

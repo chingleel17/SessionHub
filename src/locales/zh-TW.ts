@@ -421,6 +421,8 @@ export const zhTwMessages = {
   "agents.prefs.targetsHint": "欄位勾選控制此 scope 的同步目標。",
   "agents.skills.compatNote": ".agents 原生相容：codex / opencode / copilot（無需同步）；僅 Claude Code 需同步至 .claude。列上狀態分開顯示檔案可見性與 CLI 結果。",
   "agents.skills.scanIncomplete": "掃描結果不完整：",
+  "agents.scan.loadingNested": "正在背景補齊子目錄資料，已載入項目可繼續使用…",
+  "agents.scan.partial": "子目錄資料尚未載入完成，請重新整理以重試。",
   "agents.skills.openDirTitle": "點擊以在檔案總管開啟 {path}",
   "agents.skills.openDirUnavailable": "目錄不存在",
   "agents.rootLink.notLinked.title": "~/.agents 尚未連結至自訂正本位置",
