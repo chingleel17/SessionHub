@@ -630,7 +630,14 @@ fn scan_agents_md_keeps_sync_status_when_content_metrics_are_unavailable() {
     assert!(entry.source.exists);
     assert!(entry.source.hash.is_some());
     assert_eq!(entry.source_metrics, None);
-    assert_eq!(entry.source, fingerprint_file(&path));
+    assert_eq!(
+        fs::canonicalize(&entry.source.path).expect("source path"),
+        fs::canonicalize(&path).expect("expected path")
+    );
+    assert_eq!(
+        entry.source,
+        fingerprint_file(Path::new(&entry.source.path))
+    );
     for content in ["繁體中文 mixed text\n", "", "first\r\nsecond"] {
         fs::write(&path, content).expect("write UTF-8");
         let (fingerprint, metrics) = fingerprint_file_with_metrics(&path);
