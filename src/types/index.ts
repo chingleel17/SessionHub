@@ -139,6 +139,8 @@ export type AgentsMdEntry = {
 };
 
 export type AgentsMdScanResult = {
+    /** false 表示根層已可用，子目錄結果仍待補齊。 */
+    scanComplete?: boolean;
     root: string;
     entries: AgentsMdEntry[];
     truncated: boolean;
@@ -176,12 +178,16 @@ export type SkillEntry = {
 };
 
 export type SkillsScanResult = {
+    /** false 表示根層已可用，子目錄結果仍待補齊。 */
+    scanComplete?: boolean;
     sourceRoot: string;
     skills: SkillEntry[];
   targets: TargetInfo[];
   enabledProviders: string[];
   discoveries: ResourceDiscovery[];
   diagnostics: DiscoveryDiagnostic[];
+  /** 背景探索確認的 OpenCode 技能，用於補齊根層的 CLI 資訊。 */
+  cliSkills?: { name: string; effectivePath: string | null; source: string | null; enabled: boolean | null }[];
 };
 
 export type CommandEntry = {

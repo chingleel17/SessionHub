@@ -52,6 +52,7 @@ type AgentsTab = "agents-md" | "skills" | "commands" | "mcp";
 export type AgentsScopeDataBundle = {
   scope: AgentsScope;
   agentsMdData?: AgentsMdScanResult;
+  agentsMdError?: string;
   skillsData?: SkillsScanResult;
   commandsData?: CommandsScanResult;
   skillsError?: string;
@@ -325,7 +326,7 @@ export function AgentsConfigView(props: Props) {
 
     const mdActions = (
       <div className="settings-actions agents-toolbar-actions">
-        <IconButton label={t("app.actions.refresh")} className="agents-icon-button" onClick={() => void data.onRefreshAgentsMd()}>
+        <IconButton label={t("app.actions.refresh")} className="agents-icon-button" disabled={data.isAgentsMdLoading} onClick={() => void data.onRefreshAgentsMd()}>
           <RefreshIcon size={15} />
         </IconButton>
         <IconButton label={t("agents.action.openExternal")} className="agents-icon-button" disabled={!groupSelectedNode?.filePath} onClick={() => groupSelectedNode?.filePath && onOpenExternal(groupSelectedNode.filePath)}>
@@ -363,7 +364,14 @@ export function AgentsConfigView(props: Props) {
 
     const body = (
       <div className="agents-md-layout">
-        {treeNodes.length === 0 && !data.isAgentsMdLoading ? (
+        {data.isAgentsMdLoading ? (
+          <div className="explorer-load-status" role="status">{t(data.agentsMdData ? "agents.scan.loadingNested" : "plansSpecs.loading")}</div>
+        ) : data.agentsMdData?.scanComplete === false ? (
+          <div className="explorer-load-status" role="status">{t("agents.scan.partial")}</div>
+        ) : null}
+        {data.agentsMdError ? <div className="mcp-provider-error" role="alert">{data.agentsMdError}</div> : null}
+        {data.agentsMdData?.truncated ? <div className="explorer-load-status" role="status">{t("agents.report.truncated")}</div> : null}
+        {treeNodes.length === 0 && !data.isAgentsMdLoading && data.agentsMdData?.scanComplete !== false && !data.agentsMdError ? (
           <div className="explorer-content-empty">{t("agents.empty.agentsMd")}</div>
         ) : (
           <div className="explorer-layout" style={{ ["--explorer-width" as string]: "320px" }}>
@@ -407,7 +415,7 @@ export function AgentsConfigView(props: Props) {
                   content={groupSelectedNode ? content : null}
                   filePath={groupSelectedNode?.filePath ?? null}
                   filePathType="absolute"
-                  isLoading={contentLoading || data.isAgentsMdLoading}
+                    isLoading={contentLoading}
                   error={contentError}
                   isTaskSaving={false}
                   onToggleTask={async () => {}}
@@ -432,7 +440,7 @@ export function AgentsConfigView(props: Props) {
 
   function groupIsSelectedNodeOwner(data: AgentsScopeDataBundle, node: TreeNode | null, treeNodes: TreeNode[]): boolean {
     if (!node) return false;
-    return treeContainsNodeId(treeNodes, node.id) || !data.agentsMdData;
+    return Boolean(data.agentsMdData) && treeContainsNodeId(treeNodes, node.id);
   }
 
   const buildAgentsMdSyncRequest = (entry: AgentsMdEntry, dryRun: boolean): SyncRequest => ({
@@ -514,6 +522,11 @@ export function AgentsConfigView(props: Props) {
           </div>
         ))}
         {error ? <div className="mcp-provider-error" role="alert">{error}</div> : null}
+        {tab === "skills" && hasData && isLoading ? (
+          <div className="explorer-load-status" role="status">{t(data.scope.kind === "project" ? "agents.scan.loadingNested" : "plansSpecs.loading")}</div>
+        ) : tab === "skills" && data.skillsData?.scanComplete === false ? (
+          <div className="explorer-load-status" role="status">{t("agents.scan.partial")}</div>
+        ) : null}
 
         {tab === "skills" && data.agentsRootLinkStatus && data.agentsRootLinkStatus.status !== "linked" ? (
           <div className={`agents-root-link-banner agents-root-link-banner--${data.agentsRootLinkStatus.status}`}>
@@ -551,7 +564,7 @@ export function AgentsConfigView(props: Props) {
             {t("plansSpecs.loading")}
           </div>
         ) : null}
-        {!isLoading && allEntries.length === 0 ? <div className="explorer-content-empty">{t(`agents.empty.${tab}` as never)}</div> : null}
+        {!isLoading && allEntries.length === 0 && !error && (tab !== "skills" || data.skillsData?.scanComplete !== false) ? <div className="explorer-content-empty">{t(`agents.empty.${tab}` as never)}</div> : null}
         {hasData && allEntries.length > 0 && entries.length === 0 ? <div className="explorer-content-empty">{t("agents.list.noSearchResults")}</div> : null}
 
         {entries.length > 0 ? (

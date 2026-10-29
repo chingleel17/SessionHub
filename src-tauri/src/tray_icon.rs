@@ -273,9 +273,23 @@ fn render_template_icon(pct: f64, mode: TrayQuotaMode) -> RgbaImage {
             let (outer_w, outer_h, border) = (w - 4 * scale, 6 * scale, scale);
             set_rect(&mut img, x0, y0, outer_w, outer_h, TEMPLATE_INK);
             let (inner_w, inner_h) = (outer_w - 2 * border, outer_h - 2 * border);
-            set_rect(&mut img, x0 + border, y0 + border, inner_w, inner_h, TEMPLATE_CLEAR);
+            set_rect(
+                &mut img,
+                x0 + border,
+                y0 + border,
+                inner_w,
+                inner_h,
+                TEMPLATE_CLEAR,
+            );
             let fill_w = (inner_w as f64 * clamped).round() as u32;
-            set_rect(&mut img, x0 + border, y0 + border, fill_w, inner_h, TEMPLATE_INK);
+            set_rect(
+                &mut img,
+                x0 + border,
+                y0 + border,
+                fill_w,
+                inner_h,
+                TEMPLATE_INK,
+            );
             img
         }
         TrayQuotaMode::Percentage => {
@@ -618,10 +632,7 @@ mod tests {
         let (a, b, c) = (count_opaque(&low), count_opaque(&mid), count_opaque(&high));
         assert!(a < b && b < c, "填充量需隨等級遞增：{a} < {b} < {c}");
         // 門檻邊界：0.49 與 0.5、0.79 與 0.8 必須落在不同等級
-        assert_eq!(
-            render_template_icon(0.49, TrayQuotaMode::IconOnly),
-            low
-        );
+        assert_eq!(render_template_icon(0.49, TrayQuotaMode::IconOnly), low);
         assert_ne!(
             render_template_icon(0.49, TrayQuotaMode::IconOnly),
             render_template_icon(0.5, TrayQuotaMode::IconOnly)

@@ -132,7 +132,10 @@ mod tests {
     fn active_tracking_counts_and_clears_sessions() {
         let registry = InterventionRegistry::default();
         assert!(registry.mark_active("s1"));
-        assert!(!registry.mark_active("s1"), "refresh must not report change");
+        assert!(
+            !registry.mark_active("s1"),
+            "refresh must not report change"
+        );
         assert!(registry.mark_active("s2"));
         assert_eq!(registry.active_count(), 2);
         assert!(registry.clear_active("s1"));

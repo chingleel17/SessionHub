@@ -111,6 +111,7 @@ type Props = {
   sisyphusData: SisyphusData | undefined;
   openspecData: OpenSpecData | undefined;
   agentsMdData?: AgentsMdScanResult;
+  agentsMdError?: string;
   skillsData?: SkillsScanResult;
   commandsData?: CommandsScanResult;
   skillsError?: string;
@@ -118,6 +119,9 @@ type Props = {
   projectAgentsPrefs: ProjectAgentsPrefs;
   plansSpecsLoading: boolean;
   plansSpecsRefreshing: boolean;
+  plansSpecsLoadingMessage?: string;
+  plansSpecsLoadingSection?: "active" | "specs" | "archived";
+  plansSpecsError?: string;
   agentsMdLoading: boolean;
   skillsLoading: boolean;
   commandsLoading: boolean;
@@ -258,6 +262,7 @@ export function ProjectView({
   sisyphusData,
   openspecData,
   agentsMdData,
+  agentsMdError,
   skillsData,
   commandsData,
   skillsError,
@@ -265,6 +270,9 @@ export function ProjectView({
   projectAgentsPrefs,
   plansSpecsLoading,
   plansSpecsRefreshing,
+  plansSpecsLoadingMessage,
+  plansSpecsLoadingSection,
+  plansSpecsError,
   agentsMdLoading,
   skillsLoading,
   commandsLoading,
@@ -919,10 +927,14 @@ export function ProjectView({
         />
       ) : activeSubTab === "plans-specs" ? (
         <PlansSpecsView
+          key={project.pathLabel}
           sisyphusData={sisyphusData}
           openspecData={openspecData}
           isLoading={plansSpecsLoading}
           isRefreshing={plansSpecsRefreshing}
+          loadingMessage={plansSpecsLoadingMessage}
+          loadingSection={plansSpecsLoadingSection}
+          error={plansSpecsError}
           onReadFileContent={onReadFileContent}
           onReadOpenspecFile={onReadOpenspecFile}
           onWriteOpenspecFile={onWriteOpenspecFile}
@@ -935,6 +947,7 @@ export function ProjectView({
         <AgentsConfigView
           scope={{ kind: "project", projectCwd: project.pathLabel }}
           agentsMdData={agentsMdData}
+          agentsMdError={agentsMdError}
           skillsData={skillsData}
           commandsData={commandsData}
           skillsError={skillsError}

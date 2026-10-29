@@ -44,6 +44,15 @@ pub(crate) struct SisyphusData {
 
 // ── OpenSpec 型別 ────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum OpenSpecScanSection {
+    Active,
+    Specs,
+    Archived,
+    All,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OpenSpecTaskProgress {

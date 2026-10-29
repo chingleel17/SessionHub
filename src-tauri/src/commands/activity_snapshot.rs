@@ -387,7 +387,10 @@ mod tests {
     fn file_status_follows_waiting_then_active_then_idle() {
         let make = |items: Vec<InterventionItem>, active_count| {
             to_snapshot_file(&build_activity_snapshot(
-                OverlayActivity { items, active_count },
+                OverlayActivity {
+                    items,
+                    active_count,
+                },
                 vec![],
                 &[],
                 "t".to_string(),

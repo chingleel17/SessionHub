@@ -378,12 +378,23 @@ fn sync_intervention_registry(
         "waiting" => {
             let project_name = derive_project_name(cwd, Some(session_id), provider);
             (
-                registry.upsert(session_id, project_name, tool_label, current_timestamp_iso()),
+                registry.upsert(
+                    session_id,
+                    project_name,
+                    tool_label,
+                    current_timestamp_iso(),
+                ),
                 registry.clear_active(session_id),
             )
         }
-        "active" => (registry.remove(session_id), registry.mark_active(session_id)),
-        _ => (registry.remove(session_id), registry.clear_active(session_id)),
+        "active" => (
+            registry.remove(session_id),
+            registry.mark_active(session_id),
+        ),
+        _ => (
+            registry.remove(session_id),
+            registry.clear_active(session_id),
+        ),
     };
     // 僅在清單確有變動時廣播，避免每個 tool.pre 對已離開 waiting 的 session 重複 emit
     if let Some(items) = changed {
@@ -541,7 +552,8 @@ fn process_provider_bridge_record(
         return Ok(false);
     }
 
-    if let Some(status) = overlay_hook_status(provider, &record.event_type, record.title.as_deref()) {
+    if let Some(status) = overlay_hook_status(provider, &record.event_type, record.title.as_deref())
+    {
         let tool_label = if provider == CODEX_PROVIDER && status == "waiting" {
             record.title.clone()
         } else {
@@ -923,7 +935,6 @@ pub(crate) fn read_bridge_diagnostics(provider: &str) -> ProviderBridgeDiagnosti
     diagnostics
 }
 
-
 /// 啟動時清理一次 bridge 檔，之後每隔固定間隔再清理，避免 jsonl 無限增長。
 pub(crate) fn spawn_bridge_prune_thread() {
     std::thread::spawn(|| loop {
@@ -972,9 +983,15 @@ impl Drop for BridgeFileLock {
     }
 }
 
-fn prune_locked_bridge_file(path: &Path, cutoff: chrono::DateTime<chrono::Utc>) -> Result<usize, String> {
+fn prune_locked_bridge_file(
+    path: &Path,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Result<usize, String> {
     let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let lines: Vec<&str> = content.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let last_index = lines.len().saturating_sub(1);
     let kept: Vec<&str> = lines
         .iter()
@@ -1012,12 +1029,32 @@ mod tests {
     #[test]
     fn codex_and_copilot_only_wait_for_real_intervention_events() {
         for (provider, event, title, expected) in [
-            (CODEX_PROVIDER, "permission.requested", Some("Bash"), Some("waiting")),
+            (
+                CODEX_PROVIDER,
+                "permission.requested",
+                Some("Bash"),
+                Some("waiting"),
+            ),
             (CODEX_PROVIDER, "tool.pre", None, Some("active")),
-            (CODEX_PROVIDER, "session.stop", Some("end_turn"), Some("idle")),
+            (
+                CODEX_PROVIDER,
+                "session.stop",
+                Some("end_turn"),
+                Some("idle"),
+            ),
             (CODEX_PROVIDER, "session.ended", None, Some("idle")),
-            (COPILOT_PROVIDER, "notification", Some("permission_prompt"), Some("waiting")),
-            (COPILOT_PROVIDER, "notification", Some("elicitation_dialog"), Some("waiting")),
+            (
+                COPILOT_PROVIDER,
+                "notification",
+                Some("permission_prompt"),
+                Some("waiting"),
+            ),
+            (
+                COPILOT_PROVIDER,
+                "notification",
+                Some("elicitation_dialog"),
+                Some("waiting"),
+            ),
             (COPILOT_PROVIDER, "notification", Some("agent_idle"), None),
             (COPILOT_PROVIDER, "tool.pre", None, Some("active")),
             (COPILOT_PROVIDER, "session.idle", None, Some("idle")),
@@ -1093,7 +1130,10 @@ mod tests {
         let unparsable = line("unparsable", "not-a-time");
         fs::write(&path, format!("{old}{recent}{unparsable}")).expect("write bridge file");
         assert_eq!(prune_bridge_file(&path, cutoff).expect("prune"), 1);
-        assert_eq!(fs::read_to_string(&path).expect("read"), format!("{recent}{unparsable}"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read"),
+            format!("{recent}{unparsable}")
+        );
 
         // 全部過期時仍保留最後一筆
         let stale = line("stale", "2026-01-02T00:00:00Z");
@@ -1105,11 +1145,17 @@ mod tests {
 
     #[test]
     fn prune_skips_busy_file_and_releases_lock_on_error() {
-        let path = std::env::temp_dir().join(format!("sessionhub-prune-lock-{}-{}.jsonl",
-            std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+        let path = std::env::temp_dir().join(format!(
+            "sessionhub-prune-lock-{}-{}.jsonl",
+            std::process::id(),
+            EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
         let lock_path = path.with_extension("jsonl.lock");
         fs::create_dir(&lock_path).expect("writer lock");
-        assert_eq!(prune_bridge_file(&path, chrono::Utc::now()).expect("skip busy"), 0);
+        assert_eq!(
+            prune_bridge_file(&path, chrono::Utc::now()).expect("skip busy"),
+            0
+        );
         assert!(lock_path.exists(), "must not remove another owner's lock");
         fs::remove_dir(&lock_path).expect("unlock writer");
         assert!(prune_bridge_file(&path, chrono::Utc::now()).is_err());
@@ -1121,8 +1167,11 @@ mod tests {
         use std::process::{Command, Stdio};
 
         for module in ["hooks/codex", "hooks/copilot", ".claude/hooks"] {
-            let path = std::env::temp_dir().join(format!("sessionhub-prune-append-{}-{}.jsonl",
-                std::process::id(), EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)));
+            let path = std::env::temp_dir().join(format!(
+                "sessionhub-prune-append-{}-{}.jsonl",
+                std::process::id(),
+                EVENT_LOG_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
             let old = "{\"timestamp\":\"2000-01-01T00:00:00Z\",\"eventType\":\"old\"}\n";
             let last = "{\"timestamp\":\"2000-01-02T00:00:00Z\",\"eventType\":\"last\"}\n";
             fs::write(&path, format!("{old}{last}")).expect("seed bridge");
@@ -1130,7 +1179,10 @@ mod tests {
             fs::create_dir(&lock_path).expect("prune lock");
             let lock = BridgeFileLock(lock_path);
             let module_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent().expect("repo root").join(module).join("modules/record-event.cjs");
+                .parent()
+                .expect("repo root")
+                .join(module)
+                .join("modules/record-event.cjs");
             // 寫入端第一次遇到鎖時通知父程序，固定重現 append 與替換重疊的時序。
             let script = r#"
 const fs = require('fs');
@@ -1151,13 +1203,22 @@ require(process.argv[1]).writeBridgeEventRecord({
   payload: { session_id: 'new-session' }
 });
 "#;
-            let mut child = Command::new("node").args(["-e", script])
-                .arg(module_path).arg(&path).stdout(Stdio::piped()).spawn().expect("node hook");
+            let mut child = Command::new("node")
+                .args(["-e", script])
+                .arg(module_path)
+                .arg(&path)
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("node hook");
             let mut signal = String::new();
             BufReader::new(child.stdout.take().expect("stdout"))
-                .read_line(&mut signal).expect("read lock signal");
+                .read_line(&mut signal)
+                .expect("read lock signal");
             assert_eq!(signal.trim(), "waiting");
-            assert_eq!(prune_locked_bridge_file(&path, chrono::Utc::now()).expect("prune"), 1);
+            assert_eq!(
+                prune_locked_bridge_file(&path, chrono::Utc::now()).expect("prune"),
+                1
+            );
             drop(lock);
             assert!(child.wait().expect("hook exit").success());
             let result = fs::read_to_string(&path).expect("read result");

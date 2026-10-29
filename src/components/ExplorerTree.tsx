@@ -5,6 +5,7 @@ type Props = {
   nodes: TreeNode[];
   selectedId: string | null;
   onSelect: (node: TreeNode) => void;
+  loadingMessages?: Record<string, string>;
 };
 
 function getNodeIconLabel(icon: TreeNode["icon"]): string {
@@ -79,11 +80,13 @@ function TreeGroup({
   selectedId,
   onSelect,
   depth,
+  loadingMessages,
 }: {
   node: TreeNode;
   selectedId: string | null;
   onSelect: (node: TreeNode) => void;
   depth: number;
+  loadingMessages?: Record<string, string>;
 }) {
   const [isOpen, setIsOpen] = useState(node.defaultOpen ?? false);
   const paddingLeft = 4 + depth * 12;
@@ -107,6 +110,11 @@ function TreeGroup({
       </button>
       {isOpen && node.children ? (
         <div>
+          {loadingMessages?.[node.id] ? (
+            <div className="explorer-load-status" role="status" style={{ paddingLeft: paddingLeft + 24 }}>
+              {loadingMessages[node.id]}
+            </div>
+          ) : null}
           {node.children.map((child) => (
             <TreeNodeItem
               key={child.id}
@@ -114,6 +122,7 @@ function TreeGroup({
               selectedId={selectedId}
               onSelect={onSelect}
               depth={depth + 1}
+              loadingMessages={loadingMessages}
             />
           ))}
         </div>
@@ -127,11 +136,13 @@ function TreeNodeItem({
   selectedId,
   onSelect,
   depth,
+  loadingMessages,
 }: {
   node: TreeNode;
   selectedId: string | null;
   onSelect: (node: TreeNode) => void;
   depth: number;
+  loadingMessages?: Record<string, string>;
 }) {
   if (node.children !== undefined) {
     return (
@@ -140,6 +151,7 @@ function TreeNodeItem({
         selectedId={selectedId}
         onSelect={onSelect}
         depth={depth}
+        loadingMessages={loadingMessages}
       />
     );
   }
@@ -153,7 +165,7 @@ function TreeNodeItem({
   );
 }
 
-export function ExplorerTree({ nodes, selectedId, onSelect }: Props) {
+export function ExplorerTree({ nodes, selectedId, onSelect, loadingMessages }: Props) {
   return (
     <div className="explorer-tree">
       {nodes.map((node) => (
@@ -163,6 +175,7 @@ export function ExplorerTree({ nodes, selectedId, onSelect }: Props) {
           selectedId={selectedId}
           onSelect={onSelect}
           depth={0}
+          loadingMessages={loadingMessages}
         />
       ))}
     </div>

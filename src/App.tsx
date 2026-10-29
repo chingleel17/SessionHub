@@ -51,6 +51,7 @@ import { resolveErrorMessage } from "./utils/resolveErrorMessage";
 import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
 import { RESOURCE_QUERY_OPTIONS, resourceCanLoad, resourceKeyId, resourceQueryKey, refreshResource, updateResourceAfterWrite, writtenSyncKinds } from "./utils/agentsResourceCache";
+import { canLoadGlobalAgents, mergeAgentsMdLayers, mergeSkillsLayers, scanAgentsInLayers } from "./utils/agentsLayeredScan";
 import {
   createDashboardAnalyticsQuery,
   createDefaultAnalyticsQuery,
@@ -1001,6 +1002,11 @@ function App() {
   // invalidate sisyphus 快取，不碰 openspec 快取。超過時間後下一次 watcher 事件
   // 才會正常重整 openspec，以真實掃描結果覆蓋樂觀值。
   const openspecOptimisticUntilRef = useRef<number>(0);
+  const refreshProjectSpecLayers = useCallback(async (projectDir: string) => {
+    // 先標記所有層過期，僅立即重掃 active；其餘層由相依查詢依序接手。
+    await queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir], refetchType: "none" });
+    await queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir, "active"], exact: true });
+  }, [queryClient]);
   const refreshProjectPlansSpecs = useCallback(
     async (projectDir: string) => {
       // 清除之前的計時器，實現去抖動
@@ -1014,13 +1020,13 @@ function App() {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["project_plans", projectDir] }),
           ...(!suppressOpenspec
-            ? [queryClient.invalidateQueries({ queryKey: ["project_specs", projectDir] })]
+            ? [refreshProjectSpecLayers(projectDir)]
             : []),
         ]);
         planSpecsRefreshTimerRef.current = null;
       }, 100);
     },
-    [queryClient],
+    [queryClient, refreshProjectSpecLayers],
   );
 
   useEffect(() => {
@@ -1127,15 +1133,50 @@ function App() {
     staleTime: 30_000,
   });
 
-  const openspecQuery = useQuery({
-    queryKey: ["project_specs", activeProject?.pathLabel ?? ""],
+  const openspecActiveQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "active"],
     enabled: Boolean(activeProject?.pathLabel),
-    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel }),
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "active" }),
     staleTime: 30_000,
   });
 
-  // 專案 agents sub-tab 啟用時，除專案 scope queries 外也啟用 global queries，
-  // 供專案分頁的「全域」分區使用（雙分區，見 agents-config-view-ux spec）。
+  const openspecSpecsQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "specs"],
+    enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching,
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "specs" }),
+    staleTime: 30_000,
+  });
+
+  const openspecArchivedQuery = useQuery({
+    queryKey: ["project_specs", activeProject?.pathLabel ?? "", "archived"],
+    enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching
+      && openspecSpecsQuery.isSuccess && !openspecSpecsQuery.isFetching,
+    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "archived" }),
+    staleTime: 30_000,
+  });
+
+  const openspecData = useMemo<OpenSpecData | undefined>(() => {
+    if (!openspecActiveQuery.data && !openspecSpecsQuery.data && !openspecArchivedQuery.data) return undefined;
+    return {
+      schema: openspecActiveQuery.data?.schema ?? null,
+      activeChanges: openspecActiveQuery.data?.activeChanges ?? [],
+      specs: openspecSpecsQuery.data?.specs ?? [],
+      archivedChanges: openspecArchivedQuery.data?.archivedChanges ?? [],
+    };
+  }, [openspecActiveQuery.data, openspecSpecsQuery.data, openspecArchivedQuery.data]);
+  const openspecLoadingSection = openspecActiveQuery.isPending || openspecActiveQuery.isFetching
+    ? "active" as const
+    : openspecActiveQuery.isSuccess && (openspecSpecsQuery.isPending || openspecSpecsQuery.isFetching)
+      ? "specs" as const
+      : openspecSpecsQuery.isSuccess && (openspecArchivedQuery.isPending || openspecArchivedQuery.isFetching)
+        ? "archived" as const
+        : undefined;
+  const openspecLoadingMessage = openspecLoadingSection === "active" ? t("plansSpecs.loadingActive")
+    : openspecLoadingSection === "specs" ? t("plansSpecs.loadingSpecs")
+      : openspecLoadingSection === "archived" ? t("plansSpecs.loadingArchived") : undefined;
+  const openspecError = openspecActiveQuery.error ?? openspecSpecsQuery.error ?? openspecArchivedQuery.error;
+
+  // 專案先完成分層掃描，再載入附帶全域資料；已存在的全域快取仍可直接顯示。
   const projectAgentsSubTabActive =
     Boolean(activeProject?.pathLabel) &&
     (activeProject ? getProjectSubTabState(activeProject.key).activeSubTab === "agents" : false);
@@ -1143,6 +1184,20 @@ function App() {
   const projectAgentsSkillsActive = projectAgentsTab === "skills";
   const projectAgentsCommandsActive = projectAgentsTab === "commands";
   const projectAgentsMcpActive = projectAgentsTab === "mcp";
+
+  const scanProjectAgentsMd = (projectCwd: string, signal: AbortSignal) => scanAgentsInLayers(
+    queryClient, ["agents-md", projectCwd],
+    (layer) => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd, layer }),
+    mergeAgentsMdLayers, signal,
+  );
+
+  const scanProjectSkills = (projectCwd: string, key: readonly unknown[], signal: AbortSignal) => scanAgentsInLayers(
+    queryClient, key,
+    (layer) => invoke<SkillsScanResult>("scan_agents_skills", {
+      scope: { kind: "project", projectCwd }, enabledProviders: settingsQuery.data?.enabledProviders ?? [], layer,
+    }),
+    mergeSkillsLayers, signal,
+  );
 
   const projectAgentsPrefsQuery = useQuery({
     queryKey: ["agents-prefs", normalizePath(activeProject?.pathLabel ?? "")],
@@ -1153,11 +1208,11 @@ function App() {
 
   const projectAgentsMdQuery = useQuery({
     queryKey: ["agents-md", activeProject?.pathLabel ?? ""],
-    enabled: projectAgentsSubTabActive && projectAgentsTab === "agents-md",
+    enabled: projectAgentsSubTabActive && projectAgentsTab === "agents-md" && resourceCanLoad(queryClient, ["agents-md", activeProject?.pathLabel ?? ""]),
+    ...RESOURCE_QUERY_OPTIONS,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
-    queryFn: () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: activeProject?.pathLabel }),
+    queryFn: ({ signal }) => scanProjectAgentsMd(activeProject?.pathLabel ?? "", signal),
   });
 
   const projectScope = activeProject?.pathLabel ?? "";
@@ -1176,7 +1231,7 @@ function App() {
     queryKey: projectSkillsKey,
     enabled: projectReady && projectAgentsSubTabActive && projectAgentsSkillsActive && resourceCanLoad(queryClient, projectSkillsKey),
     ...RESOURCE_QUERY_OPTIONS,
-      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "project", projectCwd: activeProject?.pathLabel }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
+    queryFn: ({ signal }) => scanProjectSkills(projectScope, projectSkillsKey, signal),
    });
 
   const projectAgentsCommandsQuery = useQuery({
@@ -1188,16 +1243,22 @@ function App() {
 
   const globalAgentsMdQuery = useQuery({
     queryKey: ["agents-md", "global"],
-    enabled: (activeView === "agents-global" && globalAgentsTab === "agents-md") || (projectAgentsSubTabActive && projectAgentsTab === "agents-md"),
+    enabled: canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "agents-md", projectAgentsSubTabActive && projectAgentsTab === "agents-md", projectAgentsMdQuery)
+      && resourceCanLoad(queryClient, ["agents-md", "global"]),
+    ...RESOURCE_QUERY_OPTIONS,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous,
     queryFn: () => invoke<AgentsMdScanResult>("scan_global_agents_md"),
   });
 
+  const projectSkillsSettled = {
+    isFetched: projectAgentsSkillsQuery.isFetched || projectAgentsPrefsQuery.isError,
+    isFetching: projectAgentsSkillsQuery.isFetching,
+  };
   const globalAgentsSkillsQuery = useQuery({
     queryKey: globalSkillsKey,
-    enabled: Boolean(settingsQuery.data) && globalSkillsActive && resourceCanLoad(queryClient, globalSkillsKey),
+    enabled: Boolean(settingsQuery.data) && canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "skills", projectAgentsSubTabActive && projectAgentsSkillsActive, projectSkillsSettled)
+      && resourceCanLoad(queryClient, globalSkillsKey),
     ...RESOURCE_QUERY_OPTIONS,
      queryFn: () => invoke<SkillsScanResult>("scan_agents_skills", { scope: { kind: "global" }, enabledProviders: settingsQuery.data?.enabledProviders ?? [] }),
   });
@@ -1213,7 +1274,8 @@ function App() {
 
   const agentsRootLinkQuery = useQuery({
     queryKey: ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""],
-    enabled: Boolean(settingsQuery.data) && globalSkillsActive && agentsSourceRootConfigured && resourceCanLoad(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""]),
+    enabled: Boolean(settingsQuery.data) && canLoadGlobalAgents(activeView === "agents-global" && globalAgentsTab === "skills", projectAgentsSubTabActive && projectAgentsSkillsActive, projectSkillsSettled)
+      && agentsSourceRootConfigured && resourceCanLoad(queryClient, ["agents-root-link", settingsQuery.data?.agentsSourceRoot ?? ""]),
     ...RESOURCE_QUERY_OPTIONS,
     queryFn: () => invoke<AgentsRootLinkStatus>("check_agents_root_link"),
   });
@@ -1260,16 +1322,18 @@ function App() {
     ...(globalMcpActive ? [resourceKeyId(globalMcpKey)] : []),
   ]);
 
-  const scanResource = (kind: "skills" | "commands" | "mcp", scope: string) => {
+  const scanResource = (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[], signal: AbortSignal) => {
     const agentsScope = scope === "global" ? { kind: "global" as const } : { kind: "project" as const, projectCwd: scope };
     if (kind === "mcp") return invoke<McpProviderConfig[]>("list_mcp_configs", { scope: agentsScope });
-    if (kind === "skills") return invoke<SkillsScanResult>("scan_agents_skills", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
+    if (kind === "skills") return scope === "global"
+      ? invoke<SkillsScanResult>("scan_agents_skills", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] })
+      : scanProjectSkills(scope, key, signal);
     return invoke<CommandsScanResult>("scan_agents_commands", { scope: agentsScope, enabledProviders: settingsQuery.data?.enabledProviders ?? [] });
   };
 
   const refreshAgentsResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[], afterWrite = false) => {
     try {
-      await refreshResource<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, () => scanResource(kind, scope), afterWrite);
+      await refreshResource<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, ({ signal }) => scanResource(kind, scope, key, signal), afterWrite);
     } catch (error) {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     }
@@ -1278,7 +1342,7 @@ function App() {
   const updateWrittenResource = async (kind: "skills" | "commands" | "mcp", scope: string, key: readonly unknown[]) => {
     try {
       await updateResourceAfterWrite<SkillsScanResult | CommandsScanResult | McpProviderConfig[]>(queryClient, key, activeAgentsResourcesRef.current,
-        dirtyAgentsResourcesRef.current, () => scanResource(kind, scope));
+        dirtyAgentsResourcesRef.current, ({ signal }) => scanResource(kind, scope, key, signal));
     } catch (error) {
       showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
     }
@@ -1514,23 +1578,25 @@ function App() {
     content: string,
   ): Promise<void> => {
     // 樂觀更新：若寫入的是某個 change 的 tasks.md，立即以前端解析的進度更新
-    // openspecQuery 快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
+    // 對應層快取，避免等待後端 watcher 掃描造成的延遲。後端掃描完成後會以
     // 真實數字覆蓋此處的樂觀值。
-    const projectKey = activeProject?.pathLabel ?? "";
+    const projectKey = projectCwd;
     const normalizedPath = relativePath.replace(/\\/g, "/");
     const tasksMatch = /^changes\/(?:archive\/)?([^/]+)\/tasks\.md$/.exec(normalizedPath);
+    const specsQueryKey = ["project_specs", projectKey, normalizedPath.startsWith("changes/archive/") ? "archived" : "active"];
     let previousData: OpenSpecData | undefined;
     if (projectKey && tasksMatch) {
       const changeName = tasksMatch[1];
       const nextProgress = parseTaskProgress(content);
-      const snapshot = queryClient.getQueryData<OpenSpecData>(["project_specs", projectKey]);
+      await queryClient.cancelQueries({ queryKey: specsQueryKey, exact: true });
+      const snapshot = queryClient.getQueryData<OpenSpecData>(specsQueryKey);
       if (snapshot) {
         previousData = snapshot;
         const applyProgress = (changes: OpenSpecData["activeChanges"]) =>
           changes.map((change) =>
             change.name === changeName ? { ...change, taskProgress: nextProgress } : change,
           );
-        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], {
+        queryClient.setQueryData<OpenSpecData>(specsQueryKey, {
           ...snapshot,
           activeChanges: applyProgress(snapshot.activeChanges),
           archivedChanges: applyProgress(snapshot.archivedChanges),
@@ -1546,7 +1612,7 @@ function App() {
     } catch (error) {
       // 寫入失敗：回滾樂觀更新
       if (projectKey && previousData) {
-        queryClient.setQueryData<OpenSpecData>(["project_specs", projectKey], previousData);
+        queryClient.setQueryData<OpenSpecData>(specsQueryKey, previousData);
       }
       showToast(resolveErrorMessage(error, t("toast.openspecWriteFailed")));
       throw error;
@@ -1555,7 +1621,7 @@ function App() {
 
   const handleRefreshPlansSpecs = async (): Promise<void> => {
     if (!activeProject?.pathLabel) return;
-    await Promise.all([sisyphusQuery.refetch(), openspecQuery.refetch()]);
+    await Promise.all([sisyphusQuery.refetch(), refreshProjectSpecLayers(activeProject.pathLabel)]);
     setRealtimeStatus("active");
     setLastRealtimeSyncAt(getRealtimeSyncLabel());
   };
@@ -1595,7 +1661,7 @@ function App() {
       filePath,
       content,
     });
-    await queryClient.invalidateQueries({ queryKey: ["agents-md", activeProject.pathLabel] });
+    await refreshResource(queryClient, ["agents-md", activeProject.pathLabel], ({ signal }) => scanProjectAgentsMd(activeProject.pathLabel, signal), true);
   };
 
   const handleWriteGlobalAgentsFile = async (filePath: string, content: string): Promise<void> => {
@@ -1612,7 +1678,7 @@ function App() {
     const scope = activeProject.pathLabel;
     try {
       await Promise.all([
-        refreshResource(queryClient, ["agents-md", scope], () => invoke<AgentsMdScanResult>("scan_agents_md", { projectCwd: scope })),
+        refreshResource(queryClient, ["agents-md", scope], ({ signal }) => scanProjectAgentsMd(scope, signal)),
         refreshResource(queryClient, ["agents-prefs", normalizePath(scope)], () => invoke<ProjectAgentsPrefs>("load_project_agents_prefs", { projectCwd: scope })),
       ]);
     } catch (error) { showToast(resolveErrorMessage(error, t("toast.toolOpenFailed"))); }
@@ -2214,13 +2280,14 @@ function App() {
   const globalAgentsData: AgentsScopeDataBundle = {
     scope: { kind: "global" },
     agentsMdData: globalAgentsMdQuery.data,
+    agentsMdError: globalAgentsMdQuery.error ? resolveErrorMessage(globalAgentsMdQuery.error, t("toast.toolOpenFailed")) : undefined,
     skillsData: globalAgentsSkillsQuery.data,
     commandsData: globalAgentsCommandsQuery.data,
     skillsError: globalAgentsSkillsQuery.error ? resolveErrorMessage(globalAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined,
     commandsError: globalAgentsCommandsQuery.error ? resolveErrorMessage(globalAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined,
     prefs: globalAgentsPrefs,
-    isAgentsMdLoading: globalAgentsMdQuery.isFetching,
-    isSkillsLoading: globalAgentsSkillsQuery.isFetching,
+    isAgentsMdLoading: globalAgentsMdQuery.isFetching || (globalAgentsMdQuery.isPending && ((activeView === "agents-global" && globalAgentsTab === "agents-md") || (projectAgentsSubTabActive && projectAgentsTab === "agents-md"))),
+    isSkillsLoading: globalAgentsSkillsQuery.isFetching || (globalSkillsActive && globalAgentsSkillsQuery.isPending),
     isCommandsLoading: globalAgentsCommandsQuery.isFetching,
     isPrefsLoading: false,
     onRefreshAgentsMd: handleRefreshGlobalAgents,
@@ -2478,17 +2545,21 @@ function App() {
               sessionTodosLoading={sessionTodosLoadingMap}
               sessionsLoading={sessionsQuery.isLoading}
               sisyphusData={sisyphusQuery.data}
-              openspecData={openspecQuery.data}
+              openspecData={openspecData}
               agentsMdData={projectAgentsMdQuery.data}
+              agentsMdError={projectAgentsMdQuery.error ? resolveErrorMessage(projectAgentsMdQuery.error, t("toast.toolOpenFailed")) : undefined}
               skillsData={projectAgentsSkillsQuery.data}
                commandsData={projectAgentsCommandsQuery.data}
-               skillsError={projectAgentsSkillsQuery.error ? resolveErrorMessage(projectAgentsSkillsQuery.error, t("toast.toolOpenFailed")) : undefined}
+               skillsError={(projectAgentsSkillsQuery.error ?? projectAgentsPrefsQuery.error) ? resolveErrorMessage(projectAgentsSkillsQuery.error ?? projectAgentsPrefsQuery.error, t("toast.toolOpenFailed")) : undefined}
                commandsError={projectAgentsCommandsQuery.error ? resolveErrorMessage(projectAgentsCommandsQuery.error, t("toast.toolOpenFailed")) : undefined}
               projectAgentsPrefs={projectAgentsPrefsQuery.data ?? DEFAULT_PROJECT_AGENTS_PREFS}
-              plansSpecsLoading={sisyphusQuery.isLoading || openspecQuery.isLoading}
-              plansSpecsRefreshing={sisyphusQuery.isFetching || openspecQuery.isFetching}
+              plansSpecsLoading={sisyphusQuery.isLoading || openspecActiveQuery.isLoading}
+              plansSpecsRefreshing={sisyphusQuery.isFetching || Boolean(openspecLoadingMessage)}
+              plansSpecsLoadingMessage={openspecLoadingMessage}
+              plansSpecsLoadingSection={openspecLoadingSection}
+              plansSpecsError={openspecError ? resolveErrorMessage(openspecError, t("plansSpecs.loadFailed")) : undefined}
               agentsMdLoading={projectAgentsMdQuery.isFetching}
-              skillsLoading={projectAgentsSkillsQuery.isFetching}
+              skillsLoading={projectAgentsSkillsQuery.isFetching || (projectAgentsSubTabActive && projectAgentsSkillsActive && projectAgentsSkillsQuery.isPending && !projectAgentsPrefsQuery.isError)}
               commandsLoading={projectAgentsCommandsQuery.isFetching}
               agentsPrefsLoading={projectAgentsPrefsQuery.isLoading}
               onReadFileContent={handleReadFileContent}
@@ -2499,7 +2570,7 @@ function App() {
               onRefreshAgentsMd={handleRefreshProjectAgents}
                onRefreshAgentsSkills={() => handleRefreshResource("skills", activeProject.pathLabel)}
                onRefreshAgentsCommands={() => handleRefreshResource("commands", activeProject.pathLabel)}
-              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecQuery.dataUpdatedAt}`}
+              plansSpecsRefreshToken={`${sisyphusQuery.dataUpdatedAt}:${openspecActiveQuery.dataUpdatedAt}:${openspecSpecsQuery.dataUpdatedAt}:${openspecArchivedQuery.dataUpdatedAt}`}
               onOpenPlansSpecsFileExternal={handleOpenPathExternal}
               onOpenAgentsExternal={(path) => {
                 openPath(path).catch((error) => {

@@ -19,8 +19,8 @@ fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
 use crate::db::ensure_parent_dir;
 use crate::resource_discovery::{
     command_roots as discovery_command_roots, discover_cli, normalize_enabled_providers,
-    skill_roots as discovery_skill_roots, DiscoveryDiagnostic, DiscoveryScope, DiscoverySource,
-    ResourceDiscovery, ResourceKind, ResourceLocation, ResourceState,
+    skill_roots as discovery_skill_roots, CliResource, DiscoveryDiagnostic, DiscoveryScope,
+    DiscoverySource, ResourceDiscovery, ResourceKind, ResourceLocation, ResourceState,
 };
 use crate::settings::{
     default_agents_root, default_app_data_dir, default_opencode_config_root,
@@ -51,6 +51,15 @@ const FIXED_IGNORED_DIRS: &[&str] = &[
     "target",
     ".sessionhub",
 ];
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AgentsScanLayer {
+    Root,
+    Nested,
+    #[default]
+    All,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -150,6 +159,9 @@ pub(crate) struct SkillsScanResult {
     pub(crate) enabled_providers: Vec<String>,
     pub(crate) discoveries: Vec<ResourceDiscovery>,
     pub(crate) diagnostics: Vec<DiscoveryDiagnostic>,
+    /// 背景 CLI 探索結果，用於補齊已先顯示的根層技能，不必重讀根層檔案。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) cli_skills: Vec<CliResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -351,6 +363,14 @@ pub(crate) fn scan_agents_md_internal(project_cwd: &str) -> Result<AgentsMdScanR
     scan_agents_md_root(&root, &prefs)
 }
 
+pub(crate) fn scan_agents_md_layer_internal(
+    project_cwd: &str,
+    layer: AgentsScanLayer,
+) -> Result<AgentsMdScanResult, String> {
+    let prefs = load_project_agents_prefs_internal(project_cwd)?;
+    scan_agents_md_root_layer(Path::new(project_cwd), &prefs, layer)
+}
+
 pub(crate) fn scan_global_agents_md_internal() -> Result<AgentsMdScanResult, String> {
     let settings = load_agents_settings()?;
     let mut entries = Vec::new();
@@ -358,13 +378,11 @@ pub(crate) fn scan_global_agents_md_internal() -> Result<AgentsMdScanResult, Str
     roots.sort_by(|left, right| left.0.cmp(&right.0));
 
     for (_, root) in roots {
-        let source = fingerprint_file(&root.join(AGENTS_FILE_NAME));
-        let target = fingerprint_file(&root.join(CLAUDE_FILE_NAME));
+        let (source, source_metrics) = fingerprint_file_with_metrics(&root.join(AGENTS_FILE_NAME));
+        let (target, target_metrics) = fingerprint_file_with_metrics(&root.join(CLAUDE_FILE_NAME));
         if !source.exists && !target.exists {
             continue;
         }
-        let source_metrics = content_metrics_for_file(&source);
-        let target_metrics = content_metrics_for_file(&target);
         let (status, target_newer) = classify_file_status(&source, &target);
         entries.push(AgentsMdEntry {
             dir: normalize_display_path(&root),
@@ -465,6 +483,7 @@ pub(crate) fn scan_agents_skills_internal(scope: &AgentsScope) -> Result<SkillsS
         enabled_providers: vec![CLAUDE_PROVIDER.to_string()],
         discoveries: Vec::new(),
         diagnostics: Vec::new(),
+        cli_skills: Vec::new(),
     })
 }
 
@@ -480,6 +499,28 @@ fn scan_agents_skills_with_providers_limited(
     enabled_providers: &[String],
     budget: u64,
 ) -> Result<SkillsScanResult, String> {
+    scan_agents_skills_layer_limited(scope, enabled_providers, budget, AgentsScanLayer::All)
+}
+
+pub(crate) fn scan_agents_skills_layer_internal(
+    scope: &AgentsScope,
+    enabled_providers: &[String],
+    layer: AgentsScanLayer,
+) -> Result<SkillsScanResult, String> {
+    scan_agents_skills_layer_limited(scope, enabled_providers, MAX_SCANNED_DIRS, layer)
+}
+
+fn scan_agents_skills_layer_limited(
+    scope: &AgentsScope,
+    enabled_providers: &[String],
+    budget: u64,
+    layer: AgentsScanLayer,
+) -> Result<SkillsScanResult, String> {
+    let layer = if matches!(scope, AgentsScope::Global) {
+        AgentsScanLayer::All
+    } else {
+        layer
+    };
     let (enabled_providers, unknown_providers) = normalize_enabled_providers(enabled_providers);
     let settings = load_agents_settings()?;
     let project_cwd = match scope {
@@ -532,7 +573,7 @@ fn scan_agents_skills_with_providers_limited(
         Some(root) => {
             let prefs = load_project_agents_prefs_internal(&root.to_string_lossy())?;
             let (contexts, errors) =
-                collect_project_skill_contexts(root, &prefs.ignored_paths, budget)?;
+                collect_project_skill_contexts_layer(root, &prefs.ignored_paths, budget, layer)?;
             for message in errors {
                 for provider in &enabled_providers {
                     diagnostics.push(DiscoveryDiagnostic {
@@ -549,8 +590,10 @@ fn scan_agents_skills_with_providers_limited(
     };
     // 同一上下文的共用入口只遍歷一次，provider 的入口順序仍由 skill_roots 決定。
     let mut root_cache = BTreeMap::<String, (BTreeMap<String, PathBuf>, Vec<String>)>::new();
+    let mut cli_skills = Vec::new();
     for provider in &enabled_providers {
-        let cli_resources = if provider == OPENCODE_PROVIDER {
+        // 根層只做檔案判定；CLI 確認放到 nested 階段且僅執行一次。
+        let cli_resources = if provider == OPENCODE_PROVIDER && layer != AgentsScanLayer::Root {
             match discover_cli(
                 provider,
                 ResourceKind::Skill,
@@ -569,6 +612,9 @@ fn scan_agents_skills_with_providers_limited(
         } else {
             Vec::new()
         };
+        if provider == OPENCODE_PROVIDER {
+            cli_skills = cli_resources.clone();
+        }
         for (relative_dir, context) in &contexts {
             let context_roots = if project_cwd.is_some() {
                 discovery_skill_roots(
@@ -778,6 +824,7 @@ fn scan_agents_skills_with_providers_limited(
         enabled_providers,
         discoveries,
         diagnostics,
+        cli_skills,
     });
 
     /*
@@ -1691,6 +1738,14 @@ fn scan_agents_md_root(
     root: &Path,
     prefs: &ProjectAgentsPrefs,
 ) -> Result<AgentsMdScanResult, String> {
+    scan_agents_md_root_layer(root, prefs, AgentsScanLayer::All)
+}
+
+fn scan_agents_md_root_layer(
+    root: &Path,
+    prefs: &ProjectAgentsPrefs,
+    layer: AgentsScanLayer,
+) -> Result<AgentsMdScanResult, String> {
     let root = root
         .canonicalize()
         .map_err(|error| format!("failed to resolve project root {}: {error}", root.display()))?;
@@ -1699,7 +1754,12 @@ fn scan_agents_md_root(
     let mut truncated = false;
 
     let mut walker = WalkDir::new(&root)
-        .max_depth(MAX_SCAN_DEPTH)
+        .min_depth(usize::from(layer == AgentsScanLayer::Nested))
+        .max_depth(if layer == AgentsScanLayer::Root {
+            0
+        } else {
+            MAX_SCAN_DEPTH
+        })
         .follow_links(false)
         .sort_by_file_name()
         .into_iter();
@@ -1723,14 +1783,17 @@ fn scan_agents_md_root(
             continue;
         }
         scanned_dirs += 1;
-        if scanned_dirs > MAX_SCANNED_DIRS {
+        // nested 沿用完整掃描的預算，根目錄已由 root 階段占用一個名額。
+        if scanned_dirs + u64::from(layer == AgentsScanLayer::Nested) > MAX_SCANNED_DIRS {
             truncated = true;
             break;
         }
 
         let dir_path = entry.path();
-        let source = fingerprint_file(&dir_path.join(AGENTS_FILE_NAME));
-        let target = fingerprint_file(&dir_path.join(CLAUDE_FILE_NAME));
+        let (source, source_metrics) =
+            fingerprint_file_with_metrics(&dir_path.join(AGENTS_FILE_NAME));
+        let (target, target_metrics) =
+            fingerprint_file_with_metrics(&dir_path.join(CLAUDE_FILE_NAME));
         if !source.exists && !target.exists {
             continue;
         }
@@ -1740,8 +1803,6 @@ fn scan_agents_md_root(
             .unwrap_or(dir_path)
             .to_string_lossy()
             .replace('\\', "/");
-        let source_metrics = content_metrics_for_file(&source);
-        let target_metrics = content_metrics_for_file(&target);
         let (status, target_newer) = classify_file_status(&source, &target);
         entries.push(AgentsMdEntry {
             dir: normalize_display_path(dir_path),
@@ -1779,17 +1840,33 @@ fn collect_skill_dirs(root: &Path, discovered: &mut BTreeMap<String, PathBuf>) {
     let _ = collect_skill_dirs_with_diagnostics(root, discovered);
 }
 
+#[cfg(test)]
 fn collect_project_skill_contexts(
     root: &Path,
     ignored_paths: &[String],
     budget: u64,
+) -> Result<(Vec<(String, PathBuf)>, Vec<String>), String> {
+    collect_project_skill_contexts_layer(root, ignored_paths, budget, AgentsScanLayer::All)
+}
+
+fn collect_project_skill_contexts_layer(
+    root: &Path,
+    ignored_paths: &[String],
+    budget: u64,
+    layer: AgentsScanLayer,
 ) -> Result<(Vec<(String, PathBuf)>, Vec<String>), String> {
     let root = root
         .canonicalize()
         .map_err(|error| format!("failed to resolve project root {}: {error}", root.display()))?;
     let mut contexts = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut scanned_dirs = 0;
     let mut walker = WalkDir::new(&root)
+        .max_depth(if layer == AgentsScanLayer::Root {
+            0
+        } else {
+            usize::MAX
+        })
         .follow_links(false)
         .sort_by_file_name()
         .into_iter();
@@ -1831,12 +1908,16 @@ fn collect_project_skill_contexts(
             walker.skip_current_dir();
             continue;
         }
-        if contexts.len() as u64 >= budget {
+        if scanned_dirs >= budget {
             diagnostics.push(format!(
                 "掃描結果不完整：超過 {budget} 個目錄，上限位置 {}",
                 entry.path().display()
             ));
             break;
+        }
+        scanned_dirs += 1;
+        if layer == AgentsScanLayer::Nested && entry.depth() == 0 {
+            continue;
         }
         let relative = entry
             .path()
@@ -2368,6 +2449,29 @@ fn fingerprint_path_for_sync(path: &Path, kind: &SyncItemKind) -> Result<FileFin
         SyncItemKind::File => Ok(fingerprint_file(path)),
         SyncItemKind::Directory => Ok(fingerprint_directory(path, Some(path), &[])?.fingerprint),
     }
+}
+
+/// 掃描指示檔時以同一份 bytes 計算雜湊與文字指標，避免重複讀取內容。
+fn fingerprint_file_with_metrics(path: &Path) -> (FileFingerprint, Option<FileContentMetrics>) {
+    let mut fingerprint = FileFingerprint {
+        path: normalize_display_path(path),
+        exists: false,
+        hash: None,
+        mtime_ms: None,
+        size: None,
+    };
+    let Ok(metadata) = fs::metadata(path) else {
+        return (fingerprint, None);
+    };
+    let Ok(content) = fs::read(path) else {
+        return (fingerprint, None);
+    };
+    fingerprint.exists = true;
+    fingerprint.hash = Some(hex_encode(Sha256::digest(&content)));
+    fingerprint.mtime_ms = metadata.modified().ok().and_then(system_time_to_millis);
+    fingerprint.size = Some(metadata.len());
+    let metrics = std::str::from_utf8(&content).ok().map(estimate_mixed_text);
+    (fingerprint, metrics)
 }
 
 fn fingerprint_file(path: &Path) -> FileFingerprint {

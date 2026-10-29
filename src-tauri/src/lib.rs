@@ -2423,6 +2423,94 @@ mod tests {
     }
 
     #[test]
+    fn scan_openspec_layers_preserve_full_results_with_large_archive() {
+        use crate::openspec_scan::scan_openspec_section_internal;
+
+        let project_dir = unique_test_dir("openspec-layered");
+        let openspec_dir = project_dir.join("openspec");
+        let active_dir = openspec_dir.join("changes").join("current");
+        fs::create_dir_all(active_dir.join("specs").join("current-spec")).expect("create active");
+        fs::write(openspec_dir.join("config.yaml"), "schema: spec-driven\n").expect("write config");
+        fs::write(active_dir.join("tasks.md"), "- [x] first\n- [ ] second\n").expect("write tasks");
+        fs::write(active_dir.join("review.md"), "# Review").expect("write extra file");
+        for index in 0..120 {
+            let archived = openspec_dir
+                .join("changes")
+                .join("archive")
+                .join(format!("old-{index:03}"));
+            fs::create_dir_all(archived.join("notes")).expect("create archived change");
+            fs::write(archived.join("tasks.md"), "- [x] done\n").expect("write archived tasks");
+            fs::write(archived.join("notes").join("review.md"), "# Review")
+                .expect("write archived note");
+        }
+        for index in 0..80 {
+            let spec_dir = openspec_dir.join("specs").join(format!("spec-{index:03}"));
+            fs::create_dir_all(&spec_dir).expect("create main spec");
+            fs::write(spec_dir.join("spec.md"), "# Spec").expect("write main spec");
+        }
+
+        let started = std::time::Instant::now();
+        let active = scan_openspec_section_internal(&project_dir, OpenSpecScanSection::Active);
+        let active_elapsed = started.elapsed();
+        assert_eq!(active.schema.as_deref(), Some("spec-driven"));
+        assert_eq!(active.active_changes.len(), 1);
+        assert_eq!(active.active_changes[0].name, "current");
+        assert_eq!(
+            active.active_changes[0]
+                .task_progress
+                .as_ref()
+                .map(|p| (p.done, p.total)),
+            Some((1, 2))
+        );
+        assert_eq!(active.active_changes[0].extra_files, vec!["review.md"]);
+        assert_eq!(active.active_changes[0].specs_count, 1);
+        assert!(active.archived_changes.is_empty());
+        assert!(active.specs.is_empty());
+
+        let specs = scan_openspec_section_internal(&project_dir, OpenSpecScanSection::Specs);
+        assert!(specs.active_changes.is_empty());
+        assert!(specs.archived_changes.is_empty());
+        assert_eq!(specs.specs.len(), 80);
+        let archived = scan_openspec_section_internal(&project_dir, OpenSpecScanSection::Archived);
+        assert!(archived.active_changes.is_empty());
+        assert!(archived.specs.is_empty());
+        assert_eq!(archived.archived_changes.len(), 120);
+        assert_eq!(archived.archived_changes[0].name, "old-000");
+        assert_eq!(
+            archived.archived_changes[0].extra_files,
+            vec!["notes/review.md"]
+        );
+
+        let combined = OpenSpecData {
+            schema: active.schema,
+            active_changes: active.active_changes,
+            specs: specs.specs,
+            archived_changes: archived.archived_changes,
+        };
+        let started = std::time::Instant::now();
+        let full = scan_openspec_internal(&project_dir);
+        let full_elapsed = started.elapsed();
+        assert_eq!(
+            serde_json::to_value(combined).expect("serialize layers"),
+            serde_json::to_value(full).expect("serialize full scan")
+        );
+        println!("OpenSpec fixture (1 active, 80 specs, 120 archived): active={active_elapsed:?}, full={full_elapsed:?}");
+
+        fs::remove_dir_all(&project_dir).expect("cleanup project dir");
+        for section in [
+            OpenSpecScanSection::Active,
+            OpenSpecScanSection::Specs,
+            OpenSpecScanSection::Archived,
+        ] {
+            let empty = scan_openspec_section_internal(&project_dir, section);
+            assert!(empty.schema.is_none());
+            assert!(empty.active_changes.is_empty());
+            assert!(empty.archived_changes.is_empty());
+            assert!(empty.specs.is_empty());
+        }
+    }
+
+    #[test]
     fn scan_openspec_change_lists_extra_markdown_files() {
         let _guard = test_lock().lock().expect("lock");
         let project_dir = unique_test_dir("openspec-extra-files");
@@ -2439,14 +2527,16 @@ mod tests {
         fs::write(change_dir.join("review.md"), "# Review").expect("write review");
         fs::write(change_dir.join("README.MD"), "# Readme").expect("write readme");
         fs::write(change_dir.join("notes.txt"), "plain").expect("write txt");
-        fs::write(change_dir.join(".openspec.yaml"), "created: 2026-10-21\n")
-            .expect("write yaml");
+        fs::write(change_dir.join(".openspec.yaml"), "created: 2026-10-21\n").expect("write yaml");
         fs::write(change_dir.join("notes").join("decision.md"), "# Decision")
             .expect("write nested note");
         fs::write(change_dir.join(".hidden").join("secret.md"), "# Hidden")
             .expect("write hidden md");
-        fs::write(change_dir.join("specs").join("auth").join("spec.md"), "# Auth")
-            .expect("write spec");
+        fs::write(
+            change_dir.join("specs").join("auth").join("spec.md"),
+            "# Auth",
+        )
+        .expect("write spec");
         fs::write(change_dir.join("specs").join("NO-SPEC-CHANGES.md"), "none")
             .expect("write no spec changes");
 
@@ -3060,9 +3150,15 @@ mod tests {
             let root_string = copilot_root.to_string_lossy().to_string();
             let status = detect_copilot_integration_status(Some(root_string.as_str()));
             let old_config = fs::read_to_string(&config_path).expect("read copilot config");
-            fs::write(&config_path, old_config.replace("on-notification.cjs", "old-hook.cjs"))
-                .expect("write old copilot config");
-            (status, detect_copilot_integration_status(Some(root_string.as_str())))
+            fs::write(
+                &config_path,
+                old_config.replace("on-notification.cjs", "old-hook.cjs"),
+            )
+            .expect("write old copilot config");
+            (
+                status,
+                detect_copilot_integration_status(Some(root_string.as_str())),
+            )
         });
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);
@@ -3422,9 +3518,15 @@ mod tests {
             let root_string = codex_root.to_string_lossy().to_string();
             let status = detect_codex_integration_status(Some(root_string.as_str()));
             let old_config = fs::read_to_string(&config_path).expect("read codex config");
-            fs::write(&config_path, old_config.replace("\"PermissionRequest\"", "\"OldEvent\""))
-                .expect("write old codex config");
-            (status, detect_codex_integration_status(Some(root_string.as_str())))
+            fs::write(
+                &config_path,
+                old_config.replace("\"PermissionRequest\"", "\"OldEvent\""),
+            )
+            .expect("write old codex config");
+            (
+                status,
+                detect_codex_integration_status(Some(root_string.as_str())),
+            )
         });
 
         assert_eq!(status.status, ProviderIntegrationState::Installed);

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import DOMPurify from "dompurify";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { Window } from "happy-dom";
@@ -19,6 +20,8 @@ test("sibling skills stay separate in list, preview and sync request", async () 
     Object.defineProperty(globalThis, key, { configurable: true, value });
   }
   const container = document.createElement("div");
+  const originalSanitize = DOMPurify.sanitize;
+  DOMPurify.sanitize = DOMPurify(browserWindow as unknown as Parameters<typeof DOMPurify>[0]).sanitize;
   document.body.append(container);
   const root = createRoot(container);
   const { AgentsConfigView } = await import("../src/components/AgentsConfigView");
@@ -73,6 +76,7 @@ test("sibling skills stay separate in list, preview and sync request", async () 
     expect(container.querySelector(".agents-resource-diagnostic")).toBeNull();
   } finally {
     await act(async () => root.unmount());
+    DOMPurify.sanitize = originalSanitize;
     container.remove();
     for (const [key, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
