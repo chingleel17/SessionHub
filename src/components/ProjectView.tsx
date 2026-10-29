@@ -120,6 +120,7 @@ type Props = {
   plansSpecsLoading: boolean;
   plansSpecsRefreshing: boolean;
   plansSpecsLoadingMessage?: string;
+  plansSpecsLoadingSection?: "active" | "specs" | "archived";
   plansSpecsError?: string;
   agentsMdLoading: boolean;
   skillsLoading: boolean;
@@ -270,6 +271,7 @@ export function ProjectView({
   plansSpecsLoading,
   plansSpecsRefreshing,
   plansSpecsLoadingMessage,
+  plansSpecsLoadingSection,
   plansSpecsError,
   agentsMdLoading,
   skillsLoading,
@@ -931,6 +933,7 @@ export function ProjectView({
           isLoading={plansSpecsLoading}
           isRefreshing={plansSpecsRefreshing}
           loadingMessage={plansSpecsLoadingMessage}
+          loadingSection={plansSpecsLoadingSection}
           error={plansSpecsError}
           onReadFileContent={onReadFileContent}
           onReadOpenspecFile={onReadOpenspecFile}

@@ -1164,13 +1164,16 @@ function App() {
       archivedChanges: openspecArchivedQuery.data?.archivedChanges ?? [],
     };
   }, [openspecActiveQuery.data, openspecSpecsQuery.data, openspecArchivedQuery.data]);
-  const openspecLoadingMessage = openspecActiveQuery.isPending || openspecActiveQuery.isFetching
-    ? t("plansSpecs.loadingActive")
+  const openspecLoadingSection = openspecActiveQuery.isPending || openspecActiveQuery.isFetching
+    ? "active" as const
     : openspecActiveQuery.isSuccess && (openspecSpecsQuery.isPending || openspecSpecsQuery.isFetching)
-      ? t("plansSpecs.loadingSpecs")
+      ? "specs" as const
       : openspecSpecsQuery.isSuccess && (openspecArchivedQuery.isPending || openspecArchivedQuery.isFetching)
-        ? t("plansSpecs.loadingArchived")
+        ? "archived" as const
         : undefined;
+  const openspecLoadingMessage = openspecLoadingSection === "active" ? t("plansSpecs.loadingActive")
+    : openspecLoadingSection === "specs" ? t("plansSpecs.loadingSpecs")
+      : openspecLoadingSection === "archived" ? t("plansSpecs.loadingArchived") : undefined;
   const openspecError = openspecActiveQuery.error ?? openspecSpecsQuery.error ?? openspecArchivedQuery.error;
 
   // 專案先完成分層掃描，再載入附帶全域資料；已存在的全域快取仍可直接顯示。
@@ -2553,6 +2556,7 @@ function App() {
               plansSpecsLoading={sisyphusQuery.isLoading || openspecActiveQuery.isLoading}
               plansSpecsRefreshing={sisyphusQuery.isFetching || Boolean(openspecLoadingMessage)}
               plansSpecsLoadingMessage={openspecLoadingMessage}
+              plansSpecsLoadingSection={openspecLoadingSection}
               plansSpecsError={openspecError ? resolveErrorMessage(openspecError, t("plansSpecs.loadFailed")) : undefined}
               agentsMdLoading={projectAgentsMdQuery.isFetching}
               skillsLoading={projectAgentsSkillsQuery.isFetching || (projectAgentsSubTabActive && projectAgentsSkillsActive && projectAgentsSkillsQuery.isPending && !projectAgentsPrefsQuery.isError)}
