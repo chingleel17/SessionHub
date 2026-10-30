@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node scripts/sync-version.mjs && bun run build",
+    "beforeBuildCommand": "node scripts/sync-version.mjs && node scripts/mark-no-index.mjs && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
