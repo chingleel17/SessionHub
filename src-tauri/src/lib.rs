@@ -72,6 +72,7 @@ pub(crate) fn emit_overlay_settings_changed(app: &tauri::AppHandle, settings: &A
 
 /// 同時廣播並定向通知 overlay 與 tray panel，讓動態建立的 webview 不會錯過快照更新。
 pub(crate) fn emit_quota_snapshots_updated(app: &tauri::AppHandle) {
+    quota::reset_credit_automation::quota_updated(app);
     let _ = app.emit("quota-snapshots-updated", ());
     emit_to_dynamic_webviews(app, "quota-snapshots-updated", ());
     commands::activity_snapshot::request_snapshot_write(app);
@@ -611,6 +612,9 @@ pub fn run() {
             get_quota_snapshots,
             refresh_quota,
             consume_codex_reset_credit,
+            get_reset_credit_automation_status,
+            set_reset_credit_notification_locale,
+            request_refresh_reset_credit_automation,
             scan_agents_md,
             scan_global_agents_md,
             scan_agents_skills,

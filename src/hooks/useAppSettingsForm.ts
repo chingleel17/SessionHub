@@ -7,6 +7,8 @@ import type { MessageKey } from "../locales/zh-TW";
 import { DEFAULT_APP_SETTINGS, mergeAppSettings } from "../utils/appSettingsDefaults";
 import { compareProviders } from "../utils/providerOrder";
 import { resolveErrorMessage } from "../utils/resolveErrorMessage";
+import { resetCreditSettingsForSave } from "../utils/resetCreditAutomation";
+import { settingsSaveEffects, type SettingsSaveEffects } from "../utils/settingsSaveEffects";
 
 export type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 
@@ -59,7 +61,7 @@ interface UseAppSettingsFormParams {
   pinnedProjects: string[];
   showToast: (message: string) => void;
   t: (key: MessageKey, params?: Record<string, string | number>) => string;
-  onSettingsSaved: () => void;
+  onSettingsSaved: (next: AppSettings, effects: SettingsSaveEffects) => void;
 }
 
 export function useAppSettingsForm({
@@ -93,7 +95,7 @@ export function useAppSettingsForm({
     }
   }, [settingsQuery.data]);
 
-  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}): AppSettings => {
+  const buildSettingsPayload = (overrides: Partial<AppSettings> = {}, includeResetCreditDraft = false): AppSettings => {
     const merged = mergeAppSettings({ ...settingsForm, ...overrides });
     return {
       copilotRoot: (overrides.copilotRoot ?? settingsForm.copilotRoot).trim(),
@@ -102,6 +104,7 @@ export function useAppSettingsForm({
       showArchived: overrides.showArchived ?? settingsForm.showArchived,
       enabledProviders: overrides.enabledProviders ?? settingsForm.enabledProviders,
       ...merged,
+      ...resetCreditSettingsForSave({ ...settingsForm, ...overrides }, settingsQuery.data, includeResetCreditDraft),
       terminalPath: merged.terminalPath?.trim() || null,
       terminalLauncher: merged.terminalLauncher?.trim() || "shell",
       externalEditorPath: merged.externalEditorPath?.trim() || null,
@@ -118,15 +121,17 @@ export function useAppSettingsForm({
   };
 
   const settingsMutation = useMutation({
-    mutationFn: (next: AppSettings) => invoke("save_settings", { settings: next }),
-    onSuccess: async () => {
+    mutationFn: (next: AppSettings) => invoke("save_settings", { settings: next, updateResetCreditSettings: true }),
+    onSuccess: (_result, next: AppSettings) => {
+      const effects = settingsSaveEffects(queryClient.getQueryData<AppSettings>(["settings"]) ?? settingsQuery.data, next);
+      queryClient.setQueryData(["settings"], next);
       showToast(t("toast.settingsSaved"));
-      await queryClient.invalidateQueries({ queryKey: ["settings"] });
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      // 外部編輯器路徑會影響工具可用性偵測，需一併失效
-      await queryClient.invalidateQueries({ queryKey: ["tool_availability"] });
-      onSettingsSaved();
+      if (effects.restartWatchers) void queryClient.invalidateQueries({ queryKey: ["settings"] });
+      if (effects.refreshSessions) void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      if (effects.refreshTools) void queryClient.invalidateQueries({ queryKey: ["tool_availability"] });
+      onSettingsSaved(next, effects);
     },
+    onError: (error) => showToast(resolveErrorMessage(error, t("toast.settingsSaveFailed"))),
   });
 
   const detectTerminalMutation = useMutation({

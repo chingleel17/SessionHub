@@ -26,6 +26,7 @@ impl QuotaAdapter for OpenCodeAdapter {
             extra_credits: None,
             reset_credits: None,
             plan: None,
+            ..Default::default()
         }
     }
 }

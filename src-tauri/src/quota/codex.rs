@@ -1,4 +1,7 @@
 use std::env;
+use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 use crate::types::{
     AppSettings, QuotaSnapshot, QuotaWindow, ResetCreditEntry, ResetCredits, CODEX_PROVIDER,
@@ -34,6 +37,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         extra_credits: None,
         reset_credits: None,
         plan: None,
+        ..Default::default()
     }
 }
 
@@ -48,6 +52,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         extra_credits: None,
         reset_credits: None,
         plan: None,
+        ..Default::default()
     }
 }
 
@@ -74,9 +79,84 @@ fn classify_window(window_seconds: i64) -> (String, String) {
     )
 }
 
-struct CodexCredentials {
+pub(crate) struct CodexCredentials {
     access_token: String,
     account_id: Option<String>,
+}
+
+impl CodexCredentials {
+    #[cfg(test)]
+    pub(crate) fn test_credentials(token: &str) -> Self {
+        Self {
+            access_token: token.into(),
+            account_id: Some("test-account".into()),
+        }
+    }
+    pub(crate) fn credential_revision(&self) -> String {
+        let mut hash = Sha256::new();
+        hash.update(self.access_token.as_bytes());
+        hash.update(self.account_id.as_deref().unwrap_or_default().as_bytes());
+        hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+    pub(crate) fn scope(&self) -> Option<String> {
+        self.account_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| {
+                format!(
+                    "codex:{}",
+                    Sha256::digest(id.as_bytes())
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                )
+            })
+    }
+
+    pub(crate) fn revision(&self, settings: &AppSettings) -> String {
+        let mut hash = Sha256::new();
+        hash.update(self.access_token.as_bytes());
+        hash.update(self.account_id.as_deref().unwrap_or_default().as_bytes());
+        hash.update(
+            serde_json::to_vec(&(
+                &settings.codex_root,
+                &settings.opencode_root,
+                settings.codex_reset_credit_reminder_enabled,
+                &settings.codex_reset_credit_reminder_time,
+                settings.codex_reset_credit_reminder_days_before,
+                settings.codex_reset_credit_auto_use_enabled,
+            ))
+            .unwrap_or_default(),
+        );
+        hash.update(
+            crate::settings::SETTINGS_GENERATION
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .to_le_bytes(),
+        );
+        hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+pub(crate) fn resolve_credentials(settings: &AppSettings) -> Result<CodexCredentials, String> {
+    read_codex_credentials(&settings.codex_root)
+        .or_else(|_| read_opencode_openai_credentials(&settings.opencode_root))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CreditError {
+    pub(crate) code: &'static str,
+    pub(crate) retry_after: Option<i64>,
+    pub(crate) unknown: bool,
+}
+
+impl CreditError {
+    pub(crate) fn new(code: &'static str) -> Self {
+        Self {
+            code,
+            retry_after: None,
+            unknown: false,
+        }
+    }
 }
 
 /// 讀取 Codex CLI 的 auth.json（`$CODEX_HOME/auth.json` 或 `~/.codex/auth.json`）
@@ -333,56 +413,111 @@ fn parse_consume_outcome(body: &serde_json::Value) -> Result<String, String> {
     }
 }
 
-pub(crate) fn consume_reset_credit_internal(
-    codex_root: &str,
+pub(crate) fn consume_with_credentials(
+    creds: &CodexCredentials,
     request_id: &str,
-) -> Result<String, String> {
-    if request_id.trim().is_empty() {
-        return Err("缺少重置請求識別碼".to_string());
-    }
-    let creds = read_codex_credentials(codex_root)?;
-    if creds.account_id.is_none() {
-        return Err("請先以 ChatGPT 帳號登入 Codex CLI 才能使用重置額度".to_string());
-    }
-    let credits = fetch_reset_credits(&creds)?;
-    if credits.is_none_or(|credits| credits.available_count == 0) {
-        return Err("目前沒有可用的 Codex 重置額度".to_string());
-    }
+) -> Result<String, CreditError> {
+    consume_at(
+        creds,
+        request_id,
+        CONSUME_RESET_CREDIT_URL,
+        Duration::from_secs(10),
+    )
+}
 
+fn consume_at(
+    creds: &CodexCredentials,
+    request_id: &str,
+    url: &str,
+    timeout: Duration,
+) -> Result<String, CreditError> {
+    if request_id.trim().is_empty() || creds.scope().is_none() {
+        return Err(CreditError::new("no_auth"));
+    }
     let payload = serde_json::json!({ "redeem_request_id": request_id });
-    let mut request = http::post(CONSUME_RESET_CREDIT_URL, None)
+    let mut request = http::post(url, Some(timeout))
+        .config()
+        .max_redirects(0)
+        .build()
         .header("Authorization", &format!("Bearer {}", creds.access_token))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json");
     if let Some(account_id) = &creds.account_id {
         request = request.header("ChatGPT-Account-Id", account_id);
     }
-    let response = request
-        .send(payload.to_string())
-        .map_err(|error| format!("Codex 重置請求失敗，請重新整理確認結果: {error}"))?;
+    let response = request.send(payload.to_string()).map_err(|_| CreditError {
+        code: "unknown",
+        retry_after: None,
+        unknown: true,
+    })?;
     let mut response = match http::classify(response) {
         http::ApiOutcome::Success(response) => response,
-        http::ApiOutcome::Unauthorized => {
-            return Err("Codex 登入憑證已失效，請重新登入".to_string())
+        http::ApiOutcome::Unauthorized => return Err(CreditError::new("no_auth")),
+        http::ApiOutcome::RateLimited {
+            retry_after_seconds,
+        } => {
+            return Err(CreditError {
+                code: "rate_limited",
+                retry_after: Some(retry_after_seconds.unwrap_or(60).min(i64::MAX as u64) as i64),
+                unknown: false,
+            })
         }
-        http::ApiOutcome::RateLimited { .. } => {
-            return Err("Codex 請求過於頻繁，請稍後重新整理確認結果".to_string())
-        }
-        http::ApiOutcome::UnexpectedStatus(status) => {
-            return Err(format!(
-                "Codex 重置失敗 (HTTP {status})，請重新整理確認結果"
-            ));
+        http::ApiOutcome::UnexpectedStatus(_) => {
+            return Err(CreditError {
+                code: "unknown",
+                retry_after: None,
+                unknown: true,
+            });
         }
     };
-    let body: serde_json::Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|error| format!("Codex 重置回應無法解析，請重新整理確認結果: {error}"))?;
-    parse_consume_outcome(&body)
+    let body: serde_json::Value = response.body_mut().read_json().map_err(|_| CreditError {
+        code: "unknown",
+        retry_after: None,
+        unknown: true,
+    })?;
+    parse_consume_outcome(&body).map_err(|_| CreditError {
+        code: "unknown",
+        retry_after: None,
+        unknown: true,
+    })
 }
 
-fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>, String> {
-    let mut request = http::get(RESET_CREDITS_URL, None)
+fn fetch_reset_credits(
+    creds: &CodexCredentials,
+    settings: &AppSettings,
+) -> Result<Option<ResetCredits>, String> {
+    match super::reset_credit_automation::query_with_backoff(creds, settings) {
+        Ok(credits) => Ok(Some(credits)),
+        Err(error) if error.code == "unsupported" => Ok(None),
+        Err(error) => Err(error.code.to_string()),
+    }
+}
+
+pub(crate) fn parse_reset_credits_strict(
+    body: &serde_json::Value,
+) -> Result<ResetCredits, CreditError> {
+    let count = body
+        .get("available_count")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| CreditError::new("invalid_response"))?;
+    let entries = body
+        .get("credits")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| CreditError::new("invalid_response"))?;
+    if entries
+        .iter()
+        .any(|entry| entry.get("status").and_then(|v| v.as_str()).is_none())
+    {
+        return Err(CreditError::new("invalid_response"));
+    }
+    let mut credits = parse_reset_credits_response(body);
+    credits.available_count = count;
+    Ok(credits)
+}
+
+pub(crate) fn query_reset_credits(creds: &CodexCredentials) -> Result<ResetCredits, CreditError> {
+    let mut request = http::get(RESET_CREDITS_URL, Some(Duration::from_secs(10)))
         .header("Authorization", &format!("Bearer {}", creds.access_token))
         .header("Accept", "application/json");
 
@@ -390,37 +525,38 @@ fn fetch_reset_credits(creds: &CodexCredentials) -> Result<Option<ResetCredits>,
         request = request.header("ChatGPT-Account-Id", account_id);
     }
 
-    let response = match request.call() {
-        Ok(response) => response,
-        Err(error) => return Err(format!("Codex reset credits API 呼叫失敗: {error}")),
-    };
+    let response = request
+        .call()
+        .map_err(|_| CreditError::new("transient_error"))?;
 
     let mut response = match http::classify(response) {
         http::ApiOutcome::Success(response) => response,
         // 404 代表該帳號無 reset credits 功能，屬正常情形
-        http::ApiOutcome::UnexpectedStatus(404) => return Ok(None),
-        http::ApiOutcome::Unauthorized => {
-            return Err("Codex reset credits API 被拒絕: 未授權".to_string())
-        }
-        http::ApiOutcome::RateLimited { .. } => {
-            return Err("Codex reset credits API 請求過於頻繁，請稍後再試".to_string())
+        http::ApiOutcome::UnexpectedStatus(404) => return Err(CreditError::new("unsupported")),
+        http::ApiOutcome::Unauthorized => return Err(CreditError::new("no_auth")),
+        http::ApiOutcome::RateLimited {
+            retry_after_seconds,
+        } => {
+            return Err(CreditError {
+                code: "rate_limited",
+                retry_after: Some(retry_after_seconds.unwrap_or(60).min(i64::MAX as u64) as i64),
+                unknown: false,
+            })
         }
         http::ApiOutcome::UnexpectedStatus(status) => {
-            return Err(format!("Codex reset credits API 呼叫失敗: HTTP {status}"))
+            return Err(CreditError::new(if status >= 500 {
+                "transient_error"
+            } else {
+                "invalid_response"
+            }))
         }
     };
 
     let body: serde_json::Value = response
         .body_mut()
         .read_json()
-        .map_err(|error| format!("failed to parse Codex reset credits response: {error}"))?;
-    let reset_credits = parse_reset_credits_response(&body);
-
-    if reset_credits.credits.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(reset_credits))
+        .map_err(|_| CreditError::new("invalid_response"))?;
+    parse_reset_credits_strict(&body)
 }
 
 impl QuotaAdapter for CodexAdapter {
@@ -429,84 +565,92 @@ impl QuotaAdapter for CodexAdapter {
     }
 
     fn fetch_snapshot(&self, settings: &AppSettings) -> QuotaSnapshot {
-        let creds = match read_codex_credentials(&settings.codex_root) {
+        let creds = match resolve_credentials(settings) {
             Ok(c) => c,
-            Err(codex_error) => match read_opencode_openai_credentials(&settings.opencode_root) {
-                Ok(c) => c,
-                Err(opencode_error) => {
-                    return no_auth_snapshot(format!(
-                        "無法讀取 Codex 憑證: {codex_error}（OpenCode OpenAI 授權備援：{opencode_error}）"
-                    ))
-                }
-            },
+            Err(_) => return no_auth_snapshot("請登入 Codex 或 OpenCode 的 ChatGPT 帳號"),
         };
 
-        let mut request = http::get("https://chatgpt.com/backend-api/wham/usage", None)
+        let revision = creds.revision(settings);
+        let mut snapshot = (|| {
+            let mut request = http::get(
+                "https://chatgpt.com/backend-api/wham/usage",
+                Some(Duration::from_secs(10)),
+            )
             .header("Authorization", &format!("Bearer {}", creds.access_token))
             .header("Accept", "application/json");
 
-        if let Some(account_id) = &creds.account_id {
-            request = request.header("ChatGPT-Account-Id", account_id);
-        }
+            if let Some(account_id) = &creds.account_id {
+                request = request.header("ChatGPT-Account-Id", account_id);
+            }
 
-        let response = match request.call() {
-            Ok(r) => r,
-            Err(e) => {
-                return error_snapshot(format!("Codex usage API 呼叫失敗: {e}"));
-            }
-        };
+            let response = match request.call() {
+                Ok(r) => r,
+                Err(e) => {
+                    return error_snapshot(format!("Codex usage API 呼叫失敗: {e}"));
+                }
+            };
 
-        let mut response = match http::classify(response) {
-            http::ApiOutcome::Success(response) => response,
-            http::ApiOutcome::Unauthorized => {
-                return no_auth_snapshot("Codex token 被拒絕，請重新登入 Codex CLI (codex login)");
-            }
-            http::ApiOutcome::RateLimited { .. } => {
-                return error_snapshot("Codex usage API 請求過於頻繁，請稍後再試");
-            }
-            http::ApiOutcome::UnexpectedStatus(status) => {
-                return error_snapshot(format!("Codex usage API 呼叫失敗: HTTP {status}"));
-            }
-        };
+            let mut response = match http::classify(response) {
+                http::ApiOutcome::Success(response) => response,
+                http::ApiOutcome::Unauthorized => {
+                    return no_auth_snapshot(
+                        "Codex token 被拒絕，請重新登入 Codex CLI (codex login)",
+                    );
+                }
+                http::ApiOutcome::RateLimited { .. } => {
+                    return error_snapshot("Codex usage API 請求過於頻繁，請稍後再試");
+                }
+                http::ApiOutcome::UnexpectedStatus(status) => {
+                    return error_snapshot(format!("Codex usage API 呼叫失敗: HTTP {status}"));
+                }
+            };
 
-        let body: serde_json::Value = match response.body_mut().read_json() {
-            Ok(v) => v,
-            Err(e) => return error_snapshot(format!("failed to parse Codex API response: {e}")),
-        };
+            let body: serde_json::Value = match response.body_mut().read_json() {
+                Ok(v) => v,
+                Err(e) => {
+                    return error_snapshot(format!("failed to parse Codex API response: {e}"))
+                }
+            };
 
-        let mut windows = Vec::new();
-        if let Some(rate_limit) = body.get("rate_limit") {
-            if let Some(window) = rate_limit.get("primary_window").and_then(parse_window) {
-                windows.push(window);
+            let mut windows = Vec::new();
+            if let Some(rate_limit) = body.get("rate_limit") {
+                if let Some(window) = rate_limit.get("primary_window").and_then(parse_window) {
+                    windows.push(window);
+                }
+                if let Some(window) = rate_limit.get("secondary_window").and_then(parse_window) {
+                    windows.push(window);
+                }
             }
-            if let Some(window) = rate_limit.get("secondary_window").and_then(parse_window) {
-                windows.push(window);
-            }
-        }
 
-        let reset_credits = match fetch_reset_credits(&creds) {
-            Ok(reset_credits) => reset_credits,
-            Err(error) => {
-                eprintln!("[quota][codex] reset credits fetch failed: {error}");
-                None
-            }
-        };
+            let reset_credits = match fetch_reset_credits(&creds, settings) {
+                Ok(reset_credits) => reset_credits,
+                Err(error) => {
+                    eprintln!("[quota][codex] reset credits fetch failed: {error}");
+                    None
+                }
+            };
 
-        QuotaSnapshot {
-            provider: CODEX_PROVIDER.to_string(),
-            status: "ok".to_string(),
-            source: "remote_api".to_string(),
-            fetched_at: current_timestamp(),
-            error_message: None,
-            windows: if windows.is_empty() {
-                None
-            } else {
-                Some(windows)
-            },
-            extra_credits: None,
-            reset_credits,
-            plan: parse_plan(&body),
-        }
+            QuotaSnapshot {
+                provider: CODEX_PROVIDER.to_string(),
+                status: "ok".to_string(),
+                source: "remote_api".to_string(),
+                fetched_at: current_timestamp(),
+                error_message: None,
+                windows: if windows.is_empty() {
+                    None
+                } else {
+                    Some(windows)
+                },
+                extra_credits: None,
+                reset_credits,
+                plan: parse_plan(&body),
+                account_scope: creds.scope(),
+                account_revision: Some(creds.revision(settings)),
+            }
+        })();
+        snapshot.account_scope = creds.scope();
+        snapshot.account_revision = Some(revision);
+        snapshot
     }
 }
 
@@ -514,6 +658,151 @@ impl QuotaAdapter for CodexAdapter {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn reset_credit_strict_query_does_not_turn_missing_fields_into_zero() {
+        for body in [
+            json!({}),
+            json!({"available_count":0}),
+            json!({"available_count":"1","credits":[]}),
+            json!({"available_count":1,"credits":[{}]}),
+        ] {
+            assert_eq!(
+                parse_reset_credits_strict(&body).unwrap_err().code,
+                "invalid_response"
+            );
+        }
+        assert_eq!(
+            parse_reset_credits_strict(&json!({"available_count":0,"credits":[]}))
+                .unwrap()
+                .available_count,
+            0
+        );
+    }
+
+    #[test]
+    fn reset_credit_identity_is_independent_of_platform_preferences() {
+        let _env = crate::shared_env_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let creds = CodexCredentials::test_credentials("test-independent-preferences");
+        let mut settings: AppSettings =
+            serde_json::from_str(r#"{"copilotRoot":"", "showArchived":false}"#).unwrap();
+        let original = creds.revision(&settings);
+        settings.enable_quota_monitoring = !settings.enable_quota_monitoring;
+        settings.quota_enabled_providers.clear();
+        settings.enabled_providers.clear();
+        settings.pinned_projects.push("another-project".into());
+        assert_eq!(creds.revision(&settings), original);
+        settings.codex_reset_credit_reminder_enabled = true;
+        assert_ne!(creds.revision(&settings), original);
+    }
+
+    #[test]
+    fn reset_credit_resolution_preserves_fallback_identity_and_never_exposes_revision() {
+        let root = std::env::temp_dir().join(format!(
+            "sessionhub-reset-auth-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let oc = root.join("opencode");
+        let codex = root.join("codex");
+        std::fs::create_dir_all(&oc).unwrap();
+        std::fs::write(oc.join("auth.json"),json!({"openai":{"type":"oauth","access":"test-only-fallback","accountId":"account-a"}}).to_string()).unwrap();
+        let settings:AppSettings=serde_json::from_value(json!({"copilotRoot":"", "showArchived":false,"codexRoot":codex.to_string_lossy(),"opencodeRoot":oc.to_string_lossy()})).unwrap();
+        let fallback = resolve_credentials(&settings).unwrap();
+        let scope = fallback.scope().unwrap();
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::write(
+            codex.join("auth.json"),
+            json!({"tokens":{"access_token":"test-only-codex","account_id":"account-b"}})
+                .to_string(),
+        )
+        .unwrap();
+        let selected = resolve_credentials(&settings).unwrap();
+        assert_ne!(selected.scope().unwrap(), scope);
+        let snapshot = QuotaSnapshot {
+            account_scope: Some(scope),
+            account_revision: Some(fallback.revision(&settings)),
+            ..Default::default()
+        };
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("test-only"));
+        assert!(!serialized.contains("accountRevision"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reset_credit_consume_transport_does_not_redirect_or_retry() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        for case in [
+            "redirect",
+            "server_error",
+            "invalid_json",
+            "timeout",
+            "disconnect",
+            "unauthorized",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let seen = count.clone();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_millis(700);
+                while std::time::Instant::now() < deadline {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(200)))
+                            .unwrap();
+                        let mut bytes = Vec::new();
+                        let mut chunk = [0u8; 1024];
+                        while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                            match stream.read(&mut chunk) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                            }
+                        }
+                        if case == "disconnect" {
+                            continue;
+                        }
+                        if case == "timeout" {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        let response=match case {
+                            "redirect"=>format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{address}/other\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+                            "server_error"=>"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                            "unauthorized"=>"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                            _=>"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx".into(),
+                        };
+                        let _ = stream.write_all(response.as_bytes());
+                    } else {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            });
+            let creds = CodexCredentials {
+                access_token: "test-only".into(),
+                account_id: Some("test-account".into()),
+            };
+            let result = consume_at(
+                &creds,
+                "test-request",
+                &format!("http://{address}/consume"),
+                Duration::from_millis(100),
+            );
+            let error = result.expect_err(case);
+            assert_eq!(error.unknown, case != "unauthorized", "{case}");
+            server.join().unwrap();
+            assert_eq!(count.load(Ordering::SeqCst), 1, "{case} must send once");
+        }
+    }
 
     #[test]
     fn classify_window_maps_known_and_dynamic_windows() {
@@ -759,6 +1048,10 @@ mod tests {
             start_minimized_on_startup: true,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            codex_reset_credit_reminder_enabled: false,
+            codex_reset_credit_reminder_time: "09:00".into(),
+            codex_reset_credit_reminder_days_before: 0,
+            codex_reset_credit_auto_use_enabled: false,
             allow_create_project_config_dir: false,
             agents_source_root: String::new(),
             tray_quota_mode: crate::types::TrayQuotaMode::default(),

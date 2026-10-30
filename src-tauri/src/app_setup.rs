@@ -136,6 +136,8 @@ pub(crate) fn setup_quota_monitoring(
     app: &tauri::App,
     settings: &AppSettings,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    app.manage(crate::quota::reset_credit_automation::AutomationState::default());
+    crate::quota::reset_credit_automation::start(app.handle())?;
     if settings.enable_quota_monitoring {
         let db_state = app.state::<DbState>();
         let quota_cache = app.state::<QuotaCache>();

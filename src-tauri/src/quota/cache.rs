@@ -14,7 +14,11 @@ pub(crate) fn load_cache_from_db(
         .snapshots
         .lock()
         .map_err(|_| "failed to lock quota cache".to_string())?;
-    for snapshot in snapshots {
+    for mut snapshot in snapshots {
+        if snapshot.provider == "codex" {
+            snapshot.account_scope = None;
+            snapshot.account_revision = None;
+        }
         if enabled_providers.contains(&snapshot.provider) {
             cache.insert(snapshot.provider.clone(), snapshot);
         }
