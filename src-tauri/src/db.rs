@@ -10,6 +10,8 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use crate::settings::{legacy_session_cache_path, metadata_db_path};
 use crate::types::*;
 
+pub(crate) mod reset_credits;
+
 /// 將 SQLite 讀出的 i64 轉為應用層 u64；負值視為 0
 ///
 /// rusqlite 0.40 起移除了 u64 的 FromSql/ToSql 實作，需在 DB 邊界明確轉換
@@ -61,6 +63,7 @@ impl DbState {
 }
 
 pub(crate) fn init_db(connection: &Connection) -> Result<(), String> {
+    reset_credits::init(connection)?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("failed to configure metadata db busy timeout: {error}"))?;

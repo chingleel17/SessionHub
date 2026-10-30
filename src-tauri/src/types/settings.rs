@@ -107,6 +107,10 @@ pub(crate) fn default_overlay_intervention_enabled() -> bool {
     true
 }
 
+pub(crate) fn default_reset_credit_reminder_time() -> String {
+    "09:00".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppSettings {
@@ -156,6 +160,14 @@ pub(crate) struct AppSettings {
     pub(crate) enable_quota_monitoring: bool,
     #[serde(default = "default_enabled_providers_all")]
     pub(crate) quota_enabled_providers: Vec<String>,
+    #[serde(default)]
+    pub(crate) codex_reset_credit_reminder_enabled: bool,
+    #[serde(default = "default_reset_credit_reminder_time")]
+    pub(crate) codex_reset_credit_reminder_time: String,
+    #[serde(default)]
+    pub(crate) codex_reset_credit_reminder_days_before: u32,
+    #[serde(default)]
+    pub(crate) codex_reset_credit_auto_use_enabled: bool,
     #[serde(default = "default_false")]
     pub(crate) allow_create_project_config_dir: bool,
     #[serde(default)]

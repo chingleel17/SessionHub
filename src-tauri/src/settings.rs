@@ -461,6 +461,10 @@ impl AppSettings {
             analytics_panel_collapsed: false,
             enable_quota_monitoring: true,
             quota_enabled_providers,
+            codex_reset_credit_reminder_enabled: false,
+            codex_reset_credit_reminder_time: "09:00".to_string(),
+            codex_reset_credit_reminder_days_before: 0,
+            codex_reset_credit_auto_use_enabled: false,
             allow_create_project_config_dir: false,
             agents_source_root: String::new(),
             tray_quota_mode: crate::types::TrayQuotaMode::default(),
@@ -578,6 +582,13 @@ pub(crate) fn collect_provider_integration_statuses(
 }
 
 pub(crate) fn load_settings_internal() -> Result<AppSettings, String> {
+    let mut settings = load_settings_file_internal()?;
+    prune_unavailable_providers(&mut settings);
+    Ok(settings)
+}
+
+/// 輕量讀取已儲存的設定；背景排程與儲存比對不需要探查平台授權或安裝目錄。
+pub(crate) fn load_settings_file_internal() -> Result<AppSettings, String> {
     let settings_path = settings_file_path()?;
 
     if !settings_path.exists() {
@@ -587,11 +598,9 @@ pub(crate) fn load_settings_internal() -> Result<AppSettings, String> {
     let content = std::fs::read_to_string(&settings_path)
         .map_err(|error| format!("failed to read settings file: {error}"))?;
 
-    let mut settings = serde_json::from_str::<AppSettings>(&content)
-        .map_err(|error| format!("failed to parse settings file: {error}"))?;
+    let mut settings = parse_settings_content(&content)?;
     settings.terminal_launcher =
         Some(resolve_terminal_launcher(settings.terminal_launcher.as_deref()).to_string());
-    prune_unavailable_providers(&mut settings);
     Ok(settings)
 }
 
@@ -627,16 +636,188 @@ fn prune_unavailable_providers(settings: &mut AppSettings) {
 }
 
 pub(crate) fn save_settings_internal(settings: &AppSettings) -> Result<(), String> {
+    save_settings_with_reset_credit_mode(settings, true)
+}
+
+/// 背景保存其他偏好時，在同一設定閘門內沿用伺服端目前有效的自動化設定。
+pub(crate) fn save_settings_with_reset_credit_mode(
+    settings: &AppSettings,
+    update_reset_credits: bool,
+) -> Result<(), String> {
+    let _gate = SETTINGS_WRITE_GATE
+        .lock()
+        .map_err(|_| "無法鎖定設定".to_string())?;
+    let mut settings = settings.clone();
+    let previous = load_settings_file_internal()?;
+    if !update_reset_credits {
+        let saved = &previous;
+        settings.codex_reset_credit_reminder_enabled = saved.codex_reset_credit_reminder_enabled;
+        settings.codex_reset_credit_reminder_time = saved.codex_reset_credit_reminder_time.clone();
+        settings.codex_reset_credit_reminder_days_before =
+            saved.codex_reset_credit_reminder_days_before;
+        settings.codex_reset_credit_auto_use_enabled = saved.codex_reset_credit_auto_use_enabled;
+    }
+    validate_reset_credit_settings(&settings)?;
     let settings_path = settings_file_path()?;
     crate::db::ensure_parent_dir(&settings_path)?;
 
-    let content = serde_json::to_string_pretty(settings)
+    let content = serde_json::to_string_pretty(&settings)
         .map_err(|error| format!("failed to serialize settings: {error}"))?;
 
-    std::fs::write(&settings_path, content)
+    let temporary_path = settings_path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&temporary_path, content)
         .map_err(|error| format!("failed to write settings file: {error}"))?;
+    if let Err(error) = std::fs::rename(&temporary_path, &settings_path) {
+        let _ = std::fs::remove_file(&temporary_path);
+        return Err(format!("failed to replace settings file: {error}"));
+    }
+    if reset_credit_settings_changed(&previous, &settings) {
+        SETTINGS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 
     Ok(())
+}
+
+pub(crate) fn reset_credit_settings_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    previous.codex_root != next.codex_root
+        || previous.opencode_root != next.opencode_root
+        || previous.codex_reset_credit_reminder_enabled != next.codex_reset_credit_reminder_enabled
+        || previous.codex_reset_credit_reminder_time != next.codex_reset_credit_reminder_time
+        || previous.codex_reset_credit_reminder_days_before
+            != next.codex_reset_credit_reminder_days_before
+        || previous.codex_reset_credit_auto_use_enabled != next.codex_reset_credit_auto_use_enabled
+}
+
+/// 與背景工作核發副作用執行權共用，鎖定期間不得執行網路呼叫。
+pub(crate) static SETTINGS_WRITE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static SETTINGS_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn valid_reminder_time(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 5
+        && bytes[2] == b':'
+        && [bytes[0], bytes[1], bytes[3], bytes[4]]
+            .iter()
+            .all(u8::is_ascii_digit)
+        && &value[..2] <= "23"
+        && &value[3..] <= "59"
+}
+
+pub(crate) fn validate_reset_credit_settings(settings: &AppSettings) -> Result<(), String> {
+    if !valid_reminder_time(&settings.codex_reset_credit_reminder_time) {
+        return Err("提醒時間必須為 00:00–23:59 的 HH:mm 格式".to_string());
+    }
+    if settings.codex_reset_credit_reminder_days_before > 30 {
+        return Err("提前提醒天數必須為 0–30 的整數".to_string());
+    }
+    Ok(())
+}
+
+fn parse_settings_content(content: &str) -> Result<AppSettings, String> {
+    let mut value: serde_json::Value = serde_json::from_str(content)
+        .map_err(|error| format!("failed to parse settings file: {error}"))?;
+    if let Some(object) = value.as_object_mut() {
+        if !object
+            .get("codexResetCreditReminderTime")
+            .and_then(|v| v.as_str())
+            .is_some_and(valid_reminder_time)
+        {
+            object.insert("codexResetCreditReminderTime".into(), "09:00".into());
+        }
+        if !object
+            .get("codexResetCreditReminderDaysBefore")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n <= 30)
+        {
+            object.insert("codexResetCreditReminderDaysBefore".into(), 0.into());
+        }
+        for key in [
+            "codexResetCreditReminderEnabled",
+            "codexResetCreditAutoUseEnabled",
+        ] {
+            if !object.get(key).is_some_and(serde_json::Value::is_boolean) {
+                object.insert(key.into(), false.into());
+            }
+        }
+    }
+    serde_json::from_value(value).map_err(|error| format!("failed to parse settings file: {error}"))
+}
+
+#[cfg(test)]
+mod reset_credit_settings_tests {
+    use super::*;
+
+    #[test]
+    fn reset_credit_load_normalizes_only_invalid_fields() {
+        let base = serde_json::json!({"copilotRoot":"", "showArchived":true,
+            "codexResetCreditReminderEnabled":true, "codexResetCreditAutoUseEnabled":true});
+        for bad in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(31),
+            serde_json::json!("3"),
+        ] {
+            let mut value = base.clone();
+            value["codexResetCreditReminderDaysBefore"] = bad;
+            value["codexResetCreditReminderTime"] = "25:00".into();
+            let settings = parse_settings_content(&value.to_string()).expect("load");
+            assert_eq!(settings.codex_reset_credit_reminder_days_before, 0);
+            assert_eq!(settings.codex_reset_credit_reminder_time, "09:00");
+            assert!(
+                settings.show_archived
+                    && settings.codex_reset_credit_auto_use_enabled
+                    && settings.codex_reset_credit_reminder_enabled
+            );
+        }
+        let old =
+            parse_settings_content(r#"{"copilotRoot":"", "showArchived":false}"#).expect("old");
+        assert!(
+            !old.codex_reset_credit_auto_use_enabled && !old.codex_reset_credit_reminder_enabled
+        );
+        for bad in ["9:00", "24:00", "23:60", "ab:cd", "０９:00"] {
+            assert!(!valid_reminder_time(bad));
+        }
+        assert!(valid_reminder_time("00:00") && valid_reminder_time("23:59"));
+    }
+
+    #[test]
+    fn reset_credit_invalid_save_does_not_touch_existing_settings() {
+        let _guard = crate::shared_env_test_lock().lock().expect("env lock");
+        let root =
+            std::env::temp_dir().join(format!("sessionhub-reset-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let previous = std::env::var_os("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE");
+        std::env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", &root);
+        let mut settings =
+            parse_settings_content(r#"{"copilotRoot":"", "showArchived":true}"#).expect("parse");
+        save_settings_internal(&settings).expect("save");
+        let before = std::fs::read(settings_file_path().expect("path")).expect("before");
+        settings.codex_reset_credit_auto_use_enabled = true;
+        save_settings_internal(&settings).expect("explicit enable");
+        let mut stale_background = settings.clone();
+        stale_background.codex_reset_credit_auto_use_enabled = false;
+        stale_background.codex_reset_credit_reminder_time = "25:00".into();
+        stale_background.show_archived = false;
+        save_settings_with_reset_credit_mode(&stale_background, false)
+            .expect("background preserves current automation");
+        let saved = load_settings_internal().expect("saved");
+        assert!(saved.codex_reset_credit_auto_use_enabled);
+        assert!(!saved.show_archived);
+        settings.codex_reset_credit_auto_use_enabled = false;
+        save_settings_internal(&settings).expect("restore baseline");
+        settings.codex_reset_credit_reminder_time = "9:00".into();
+        assert!(save_settings_internal(&settings).is_err());
+        assert_eq!(
+            std::fs::read(settings_file_path().expect("path")).expect("after"),
+            before
+        );
+        match previous {
+            Some(v) => std::env::set_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE", v),
+            None => std::env::remove_var("COPILOT_SESSION_MANAGER_APPDATA_OVERRIDE"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 /// 合法終端機可執行檔名稱白名單（不區分大小寫）

@@ -40,7 +40,7 @@ pub(crate) struct ResetCredits {
     pub(crate) credits: Vec<ResetCreditEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct QuotaSnapshot {
     pub(crate) provider: String,
@@ -56,6 +56,11 @@ pub(crate) struct QuotaSnapshot {
     pub(crate) reset_credits: Option<ResetCredits>,
     #[serde(default)]
     pub(crate) plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) account_scope: Option<String>,
+    /// 憑證／設定世代僅存記憶體，禁止持久化或傳給前端。
+    #[serde(skip)]
+    pub(crate) account_revision: Option<String>,
 }
 
 pub(crate) struct QuotaCache {

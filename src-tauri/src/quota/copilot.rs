@@ -30,6 +30,7 @@ fn no_auth_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         extra_credits: None,
         reset_credits: None,
         plan: None,
+        ..Default::default()
     }
 }
 
@@ -44,6 +45,7 @@ fn error_snapshot(error_message: impl Into<String>) -> QuotaSnapshot {
         extra_credits: None,
         reset_credits: None,
         plan: None,
+        ..Default::default()
     }
 }
 
@@ -238,6 +240,7 @@ impl QuotaAdapter for CopilotAdapter {
                     extra_credits: None,
                     reset_credits: None,
                     plan: None,
+                    ..Default::default()
                 };
             }
             http::ApiOutcome::RateLimited { .. } => {
@@ -318,6 +321,7 @@ impl QuotaAdapter for CopilotAdapter {
                 extra_credits: None,
                 reset_credits: None,
                 plan: None,
+                ..Default::default()
             };
         }
 
@@ -335,6 +339,7 @@ impl QuotaAdapter for CopilotAdapter {
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string),
+            ..Default::default()
         }
     }
 }
@@ -372,6 +377,10 @@ mod tests {
             start_minimized_on_startup: true,
             enable_quota_monitoring: true,
             quota_enabled_providers: crate::types::default_enabled_providers_all(),
+            codex_reset_credit_reminder_enabled: false,
+            codex_reset_credit_reminder_time: "09:00".into(),
+            codex_reset_credit_reminder_days_before: 0,
+            codex_reset_credit_auto_use_enabled: false,
             allow_create_project_config_dir: false,
             agents_source_root: String::new(),
             tray_quota_mode: crate::types::TrayQuotaMode::default(),

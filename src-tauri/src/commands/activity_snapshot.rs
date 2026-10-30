@@ -345,6 +345,7 @@ mod tests {
             extra_credits: None,
             reset_credits: None,
             plan: Some("pro".to_string()),
+            ..Default::default()
         }
     }
 
