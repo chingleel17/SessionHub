@@ -42,3 +42,6 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# OpenCode 自動產生的相依檔，專案未使用自訂 plugin
+.opencode/package-lock.json
