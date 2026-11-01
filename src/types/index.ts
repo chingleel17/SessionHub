@@ -67,6 +67,10 @@ export type AppSettings = {
     claudeMonthlyLimitUsd?: number | null;
     enableQuotaMonitoring?: boolean;
     quotaEnabledProviders?: string[];
+    codexResetCreditReminderEnabled?: boolean;
+    codexResetCreditReminderTime?: string;
+    codexResetCreditReminderDaysBefore?: number;
+    codexResetCreditAutoUseEnabled?: boolean;
     allowCreateProjectConfigDir?: boolean;
     agentsSourceRoot?: string;
     trayQuotaMode?: TrayQuotaMode;
@@ -793,6 +797,22 @@ export type QuotaSnapshot = {
     extraCredits?: ExtraCredits | null;
     resetCredits?: ResetCredits | null;
     plan?: string | null;
+    accountScope?: string | null;
+};
+
+export type ResetCreditAutomationStatus = {
+    accountScope: string | null;
+    generation: number;
+    reminderState: string;
+    autoUseState: string;
+    reason: string | null;
+    reminderReason?: string | null;
+    autoUseReason?: string | null;
+    notificationStatus: string | null;
+    notificationError: string | null;
+    nextReminderAt: string | null;
+    lastAttemptAt: string | null;
+    lastResult: string | null;
 };
 
 export type ClaudeUsageBlock = {

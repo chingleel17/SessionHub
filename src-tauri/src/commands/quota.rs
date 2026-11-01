@@ -1,14 +1,10 @@
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::db::{
     billing_period_for, get_provider_quota_from_db, get_provider_quota_settings_from_db,
     next_reset_date_for, set_provider_quota_settings_in_db, upsert_provider_quota,
 };
-use crate::quota::cache::{
-    prune_disabled_provider_quota, read_snapshots_from_cache, write_snapshot_to_cache_and_db,
-};
-use crate::quota::codex::consume_reset_credit_internal;
-use crate::quota::QuotaManager;
+use crate::quota::cache::{prune_disabled_provider_quota, read_snapshots_from_cache};
 use crate::settings::{load_settings_internal, resolve_claude_root};
 use crate::stats::{build_claude_usage_blocks, compute_claude_stats, is_claude_session_file};
 use crate::types::*;
@@ -117,68 +113,110 @@ pub fn get_claude_usage_blocks(session_dir: String) -> Result<Vec<ClaudeUsageBlo
 }
 
 #[tauri::command]
-pub fn get_quota_snapshots(
-    quota_cache: State<'_, QuotaCache>,
+pub async fn get_quota_snapshots(app: tauri::AppHandle) -> Result<Vec<QuotaSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_current_quota_snapshots_internal(&app.state::<QuotaCache>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn get_current_quota_snapshots_internal(
+    quota_cache: &QuotaCache,
 ) -> Result<Vec<QuotaSnapshot>, String> {
-    read_snapshots_from_cache(&quota_cache)
-}
-
-#[tauri::command]
-pub fn consume_codex_reset_credit(request_id: String) -> Result<String, String> {
-    let settings = load_settings_internal().map_err(|error| format!("無法讀取設定: {error}"))?;
-    if !settings.enable_quota_monitoring
-        || !settings
-            .quota_enabled_providers
-            .iter()
-            .any(|provider| provider == CODEX_PROVIDER)
-    {
-        return Err("請先啟用 Codex 額度監控".to_string());
+    let mut snapshots = read_snapshots_from_cache(&quota_cache)?;
+    let settings = load_settings_internal()?;
+    let scope = crate::quota::codex::resolve_credentials(&settings)
+        .ok()
+        .and_then(|c| c.scope());
+    for snapshot in &mut snapshots {
+        if snapshot.provider == "codex"
+            && (snapshot.account_revision.is_none() || snapshot.account_scope != scope)
+        {
+            snapshot.account_scope = None;
+        }
     }
-    consume_reset_credit_internal(&settings.codex_root, &request_id)
+    Ok(snapshots)
 }
 
 #[tauri::command]
-pub fn refresh_quota(
+pub async fn consume_codex_reset_credit(
     app: tauri::AppHandle,
-    db_state: State<'_, DbState>,
-    quota_cache: State<'_, QuotaCache>,
+    request_id: String,
+    expected_account_scope: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::quota::reset_credit_automation::manual_consume(
+            &app,
+            &request_id,
+            &expected_account_scope,
+        )
+    })
+    .await
+    .map_err(|_| "重置工作中止".to_string())?
+}
+
+#[tauri::command]
+pub fn get_reset_credit_automation_status(
+    state: State<'_, crate::quota::reset_credit_automation::AutomationState>,
+) -> Result<crate::quota::reset_credit_automation::AutomationStatus, String> {
+    state.status()
+}
+
+#[tauri::command]
+pub fn set_reset_credit_notification_locale(
+    db: State<'_, DbState>,
+    locale: String,
+) -> Result<(), String> {
+    crate::quota::reset_credit_automation::set_locale(&db, &locale)
+}
+
+#[tauri::command]
+pub fn request_refresh_reset_credit_automation(
+    state: State<'_, crate::quota::reset_credit_automation::AutomationState>,
+) -> Result<(), String> {
+    state.request_refresh();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn refresh_quota(
+    app: tauri::AppHandle,
     provider: Option<String>,
 ) -> Result<Vec<QuotaSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_quota_command_internal(&app, provider))
+        .await
+        .map_err(|_| "用量刷新工作中止".to_string())?
+}
+
+fn refresh_quota_command_internal(
+    app: &tauri::AppHandle,
+    provider: Option<String>,
+) -> Result<Vec<QuotaSnapshot>, String> {
+    let db_state = app.state::<DbState>();
+    let quota_cache = app.state::<QuotaCache>();
     let settings = load_settings_internal().map_err(|e| format!("failed to load settings: {e}"))?;
 
     if !settings.enable_quota_monitoring {
         return read_snapshots_from_cache(&quota_cache);
     }
 
-    let conn = db_state
-        .conn
-        .lock()
-        .map_err(|_| "failed to lock db".to_string())?;
-
-    let manager = QuotaManager::new();
-    let snapshots = match provider.as_deref() {
-        Some(key) => manager
-            .refresh_one(key, &settings)
-            .map(|s| vec![s])
-            .unwrap_or_default(),
-        None => manager.refresh_all(&settings),
-    };
+    let snapshots =
+        crate::quota::refresh_cached_quota(&db_state, &quota_cache, &settings, provider.as_deref());
 
     // Remove snapshots for providers that are no longer enabled for quota monitoring
     if provider.is_none() {
+        let conn = db_state
+            .conn
+            .lock()
+            .map_err(|_| "failed to lock db".to_string())?;
         let _ =
             prune_disabled_provider_quota(&conn, &quota_cache, &settings.quota_enabled_providers);
     }
 
-    for snapshot in &snapshots {
-        // 429 限流時保留快取中的舊 snapshot，不用這次的暫時性錯誤覆蓋畫面
-        if snapshot.status == "rate_limited" {
-            continue;
-        }
-        let _ = write_snapshot_to_cache_and_db(&conn, &quota_cache, snapshot);
-    }
-
     crate::emit_quota_snapshots_updated(&app);
+    app.state::<crate::quota::reset_credit_automation::AutomationState>()
+        .request_refresh();
 
     // 回傳值以快取為底，但疊加本次遇到的 rate_limited 狀態，讓前端能提示使用者
     let mut result = read_snapshots_from_cache(&quota_cache)?;
@@ -201,28 +239,7 @@ pub(crate) fn refresh_quota_internal(
     settings: &AppSettings,
     provider: Option<&str>,
 ) -> Vec<QuotaSnapshot> {
-    let conn = match db_state.conn.lock() {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    let manager = QuotaManager::new();
-    let snapshots = match provider {
-        Some(key) => manager
-            .refresh_one(key, settings)
-            .map(|s| vec![s])
-            .unwrap_or_default(),
-        None => manager.refresh_all(settings),
-    };
-
-    for snapshot in &snapshots {
-        if snapshot.status == "rate_limited" {
-            continue;
-        }
-        let _ = write_snapshot_to_cache_and_db(&conn, quota_cache, snapshot);
-    }
-
-    snapshots
+    crate::quota::refresh_cached_quota(db_state, quota_cache, settings, provider)
 }
 
 #[tauri::command]

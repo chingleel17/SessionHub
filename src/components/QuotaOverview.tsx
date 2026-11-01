@@ -205,7 +205,7 @@ function ProviderPanel({ snap, onConsumeResetCredit, resetBusy }: {
             <div className="qo-reset-credits-actions">
               {snap.provider === "codex" && onConsumeResetCredit ? (
                 <Button variant="secondary" className="qo-reset-credits-button"
-                  disabled={resetBusy || resetCredits.availableCount === 0}
+                  disabled={resetBusy || resetCredits.availableCount === 0 || !snap.accountScope}
                   onClick={(event) => { event.stopPropagation(); onConsumeResetCredit(); }}>
                   {resetBusy ? t("quota.resetCredits.busy") : t("quota.resetCredits.use")}
                 </Button>

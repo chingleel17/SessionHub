@@ -82,7 +82,15 @@ pub(crate) fn classify(response: Response<Body>) -> ApiOutcome {
                 .headers()
                 .get("Retry-After")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok());
+                .and_then(|value| {
+                    value.parse::<u64>().ok().or_else(|| {
+                        chrono::DateTime::parse_from_rfc2822(value).ok().map(|at| {
+                            at.timestamp()
+                                .saturating_sub(chrono::Utc::now().timestamp())
+                                .max(0) as u64
+                        })
+                    })
+                });
             ApiOutcome::RateLimited {
                 retry_after_seconds,
             }

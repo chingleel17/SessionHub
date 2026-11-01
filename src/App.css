@@ -2969,6 +2969,20 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-weight: normal;
 }
 
+.reset-credit-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.reset-credit-settings .section-heading { margin: 0; }
+.reset-credit-settings h3, .reset-credit-settings p { margin: 0; }
+.reset-credit-settings-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.reset-credit-settings-inputs input { width: 100%; box-sizing: border-box; }
+.reset-credit-status dl { display: grid; gap: 8px; margin-block: 12px; font-size: 12px; }
+.reset-credit-status dl > div { display: flex; justify-content: space-between; gap: 16px; }
+.reset-credit-status dt { color: var(--color-text-secondary); }
+.reset-credit-status dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+
 .settings-form {
   display: grid;
   gap: 18px;

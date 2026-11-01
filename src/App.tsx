@@ -31,6 +31,7 @@ import type {
   ProviderIntegrationStatus,
   ProviderQuota,
   QuotaSnapshot,
+  ResetCreditAutomationStatus,
   SaveProjectAgentsPrefsResult,
   SessionActivityStatus,
   SessionInfo,
@@ -49,6 +50,7 @@ import { parseTaskProgress } from "./utils/parseTaskProgress";
 import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
 import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
+import { newerResetCreditStatus, resetCreditMessage, validResetCreditSettings } from "./utils/resetCreditAutomation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
 import { RESOURCE_QUERY_OPTIONS, resourceCanLoad, resourceKeyId, resourceQueryKey, refreshResource, updateResourceAfterWrite, writtenSyncKinds } from "./utils/agentsResourceCache";
 import { canLoadGlobalAgents, mergeAgentsMdLayers, mergeSkillsLayers, scanAgentsInLayers } from "./utils/agentsLayeredScan";
@@ -424,6 +426,32 @@ function App() {
     staleTime: 60_000,
   });
 
+  const resetCreditStatusQuery = useQuery({
+    queryKey: ["reset_credit_automation"],
+    queryFn: async () => {
+      const incoming = await invoke<ResetCreditAutomationStatus>("get_reset_credit_automation_status");
+      return newerResetCreditStatus(queryClient.getQueryData<ResetCreditAutomationStatus>(["reset_credit_automation"]), incoming);
+    },
+    refetchInterval: 10_000,
+    staleTime: 2_000,
+  });
+  const currentCodexScope = quotaSnapshotQuery.data?.find((snapshot) => snapshot.provider === "codex")?.accountScope;
+  const statusAccountScope = resetCreditStatusQuery.data?.accountScope;
+  const scopedResetCreditStatus = currentCodexScope && statusAccountScope && currentCodexScope !== statusAccountScope ? undefined : resetCreditStatusQuery.data;
+  const resetCreditOperationBusy = resetCreditBusy || (scopedResetCreditStatus?.accountScope === currentCodexScope && scopedResetCreditStatus?.autoUseState === "running");
+
+  useEffect(() => {
+    const listener = listen<ResetCreditAutomationStatus>("reset-credit-automation-updated", ({ payload }) => {
+      queryClient.setQueryData<ResetCreditAutomationStatus>(["reset_credit_automation"], (current) => newerResetCreditStatus(current, payload));
+      void queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
+    }).catch(() => null);
+    return () => { void listener.then((unlisten) => unlisten?.()); };
+  }, [queryClient]);
+
+  useEffect(() => {
+    void invoke("set_reset_credit_notification_locale", { locale }).catch(() => null);
+  }, [locale]);
+
   const activePlanSession = useMemo(
     () => sessionsQuery.data?.find((s) => s.id === activePlanSessionId) ?? null,
     [activePlanSessionId, sessionsQuery.data],
@@ -604,15 +632,18 @@ function App() {
     pinnedProjects,
     showToast,
     t,
-    onSettingsSaved: () => {
+    onSettingsSaved: (next, effects) => {
+      void queryClient.invalidateQueries({ queryKey: ["reset_credit_automation"] });
+      if (!effects.restartWatchers) return;
       void (async () => {
         try {
           await invoke("restart_session_watcher", {
-            copilotRoot: settingsForm.copilotRoot.trim(),
-            opencodeRoot: settingsForm.opencodeRoot.trim(),
-            codexRoot: settingsForm.codexRoot.trim(),
-            hookScriptsPath: settingsForm.hookScriptsPath?.trim() ?? "",
-            enabledProviders: settingsForm.enabledProviders,
+            copilotRoot: next.copilotRoot.trim(),
+            opencodeRoot: next.opencodeRoot.trim(),
+            codexRoot: next.codexRoot.trim(),
+            claudeRoot: next.claudeRoot?.trim() ?? "",
+            hookScriptsPath: next.hookScriptsPath?.trim() ?? "",
+            enabledProviders: next.enabledProviders,
           });
           setRealtimeStatus("active");
         } catch {
@@ -1971,7 +2002,8 @@ function App() {
   };
 
   const handleSaveSettings = async () => {
-    const next = buildSettingsPayload();
+    const next = buildSettingsPayload({}, true);
+    if (!validResetCreditSettings(next)) { showToast(t("resetCredit.invalidSettings")); return; }
 
     const requiresCopilotRoot = next.enabledProviders.includes("copilot");
     const requiresOpencodeRoot = next.enabledProviders.includes("opencode");
@@ -1992,7 +2024,7 @@ function App() {
       return;
     }
 
-    if (next.terminalPath) {
+    if (next.terminalPath && (next.terminalPath !== settingsQuery.data?.terminalPath || next.terminalLauncher !== settingsQuery.data?.terminalLauncher)) {
       const isValid = await invoke<boolean>("validate_terminal_path", {
         path: next.terminalPath,
         launcher: next.terminalLauncher ?? "shell",
@@ -2177,11 +2209,13 @@ function App() {
   }, [queryClient, showToast, t]);
 
   const handleConsumeResetCredit = () => {
-    if (resetCreditBusy) return;
+    if (resetCreditOperationBusy) return;
+    const expectedAccountScope = quotaSnapshotQuery.data?.find((snapshot) => snapshot.provider === "codex")?.accountScope;
+    if (!expectedAccountScope) { showToast(t("resetCredit.reason.accountChanged")); return; }
     setConfirmDialog(createCodexResetCreditConfirmation(t, () => {
-        if (resetCreditBusy) return;
+        if (resetCreditOperationBusy) return;
         setResetCreditBusy(true);
-        void invoke<string>("consume_codex_reset_credit", { requestId: crypto.randomUUID() })
+        void invoke<string>("consume_codex_reset_credit", { requestId: crypto.randomUUID(), expectedAccountScope })
           .then((outcome) => {
             const messages = {
               reset: "quota.resetCredits.outcome.reset",
@@ -2191,7 +2225,7 @@ function App() {
             } as const;
             showToast(t(messages[outcome as keyof typeof messages] ?? "quota.resetCredits.failed"));
           })
-          .catch((error: unknown) => showToast(resolveErrorMessage(error, t("quota.resetCredits.failed"))))
+          .catch((error: unknown) => showToast(typeof error === "string" ? resetCreditMessage(t, error) : t("quota.resetCredits.failed")))
           .finally(() => {
             setResetCreditBusy(false);
             handleRefreshQuota("codex");
@@ -2430,7 +2464,7 @@ function App() {
               quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
               onRefreshQuota={handleRefreshQuota}
               onConsumeResetCredit={handleConsumeResetCredit}
-              resetCreditBusy={resetCreditBusy}
+              resetCreditBusy={resetCreditOperationBusy}
             />
           ) : null}
 
@@ -2476,7 +2510,7 @@ function App() {
                 : null}
               onRefreshQuota={handleRefreshQuota}
               onConsumeResetCredit={handleConsumeResetCredit}
-              resetCreditBusy={resetCreditBusy}
+              resetCreditBusy={resetCreditOperationBusy}
               pricingEntries={modelPricingQuery.data ?? []}
               pricingLoading={modelPricingQuery.isLoading}
               pricingSyncing={syncModelPricingMutation.isPending}
@@ -2496,6 +2530,7 @@ function App() {
 
           {activeView === "settings" ? (
             <SettingsView
+              isSaving={settingsMutation.isPending}
               settingsForm={settingsForm}
               onFormChange={setSettingsForm}
               onSave={() => void handleSaveSettings()}
@@ -2513,6 +2548,11 @@ function App() {
               onOpenEventMonitor={() => setShowEventMonitor(true)}
               jqAvailable={jqAvailableQuery.data ?? null}
               onRefreshQuota={handleRefreshQuota}
+              resetCreditStatus={scopedResetCreditStatus}
+              onRefreshResetCredits={() => {
+                void invoke("request_refresh_reset_credit_automation").then(() => resetCreditStatusQuery.refetch()).catch(() => showToast(t("resetCredit.reason.failed")));
+                handleRefreshQuota("codex");
+              }}
             />
           ) : null}
 
@@ -2673,7 +2713,7 @@ function App() {
                   : null,
                 onRefreshQuota: handleRefreshQuota,
                 onConsumeResetCredit: handleConsumeResetCredit,
-                resetCreditBusy,
+                resetCreditBusy: resetCreditOperationBusy,
                 pricingEntries: modelPricingQuery.data ?? [],
                 pricingLoading: modelPricingQuery.isLoading,
                 pricingSyncing: syncModelPricingMutation.isPending,
@@ -2716,7 +2756,7 @@ function App() {
             quotaEnabledProviders={settingsForm.quotaEnabledProviders ?? []}
             onRefreshQuota={handleRefreshQuota}
             onConsumeResetCredit={handleConsumeResetCredit}
-            resetCreditBusy={resetCreditBusy}
+            resetCreditBusy={resetCreditOperationBusy}
           />
         ) : null}
       </section>

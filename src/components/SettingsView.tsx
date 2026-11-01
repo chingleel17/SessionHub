@@ -3,6 +3,7 @@ import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
 import type {
   AppSettings,
+  ResetCreditAutomationStatus,
   ProviderIntegrationState,
   ProviderIntegrationStatus,
   ToolAvailability,
@@ -13,6 +14,7 @@ import { CheckIcon, ChevronRightIcon, DeleteIcon, EditNotesIcon, FolderIcon, Moo
 import { Button } from "./ui/Button";
 import { IconButton } from "./ui/IconButton";
 import { Select } from "./ui/Select";
+import { ResetCreditSettings } from "./ResetCreditSettings";
 
 type ProviderIntegrationAction = "install" | "update" | "recheck" | "uninstall";
 type ProviderRootField = "copilotRoot" | "opencodeRoot" | "codexRoot" | "claudeRoot" | "antigravityRoot";
@@ -21,6 +23,7 @@ type Props = {
   settingsForm: AppSettings;
   onFormChange: (next: AppSettings) => void;
   onSave: () => void;
+  isSaving?: boolean;
   onBrowseDirectory: (field: ProviderRootField | "agentsSourceRoot") => void;
   onBrowseFile: (field: "terminalPath" | "externalEditorPath") => void;
   onDetectTerminal: () => void;
@@ -35,6 +38,8 @@ type Props = {
   onOpenEventMonitor: () => void;
   jqAvailable?: boolean | null;
   onRefreshQuota?: (provider?: string) => void;
+  resetCreditStatus?: ResetCreditAutomationStatus;
+  onRefreshResetCredits?: () => void;
 };
 
 function getProviderLabel(
@@ -163,6 +168,7 @@ export function SettingsView({
   settingsForm,
   onFormChange,
   onSave,
+  isSaving = false,
   onBrowseDirectory,
   onBrowseFile,
   onDetectTerminal,
@@ -177,6 +183,8 @@ export function SettingsView({
   onOpenEventMonitor,
   jqAvailable,
   onRefreshQuota,
+  resetCreditStatus,
+  onRefreshResetCredits,
 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const { theme, setTheme } = useTheme();
@@ -521,8 +529,8 @@ export function SettingsView({
           </details>
 
           <div className="settings-actions">
-            <Button variant="primary" onClick={onSave}>
-              {t("settings.actions.save")}
+            <Button variant="primary" onClick={onSave} disabled={isSaving} aria-busy={isSaving}>
+              {t(isSaving ? "settings.actions.saving" : "settings.actions.save")}
             </Button>
           </div>
         </div>
@@ -1068,6 +1076,7 @@ export function SettingsView({
           </div>
         </article>
 
+      <ResetCreditSettings settings={settingsForm} onChange={onFormChange} status={resetCreditStatus} onRefresh={onRefreshResetCredits} isSaving={isSaving} />
       </div>
     </section>
   );
