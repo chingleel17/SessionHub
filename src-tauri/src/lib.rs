@@ -190,7 +190,9 @@ pub(crate) fn create_quota_overlay(app: &tauri::AppHandle, settings: &AppSetting
     let _ = window.show();
     // Windows 上 show() 可能重置 taskbar 樣式（tauri#10422），顯示後重新套用
     let _ = window.set_skip_taskbar(true);
-    // 新建視窗已由 builder 的 always_on_top(true) 設定，此處不需再重申
+    // always_on_top 已由 builder 設定；macOS 仍需套用跨 Space／全螢幕行為
+    #[cfg(target_os = "macos")]
+    reassert_overlay_topmost(&window);
     spawn_overlay_topmost_watchdog(app.clone());
 }
 
@@ -204,6 +206,18 @@ pub(crate) fn reassert_overlay_topmost(window: &tauri::WebviewWindow) {
     {
         if let Ok(hwnd) = window.hwnd() {
             crate::platform::win32_topmost::reassert_topmost(hwnd.0 as isize);
+            return;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // 全螢幕 Space 需要原生 collectionBehavior，Tauri 的 always_on_top 不足以跨 Space
+        if let Ok(ns_window) = window.ns_window() {
+            let _ = window.run_on_main_thread({
+                let ptr = ns_window as usize;
+                move || crate::platform::macos_overlay::allow_over_fullscreen(ptr as *mut _)
+            });
+            // 不可再呼叫 set_always_on_top：tao 會把層級重設回 floating，蓋掉 status 層級
             return;
         }
     }
