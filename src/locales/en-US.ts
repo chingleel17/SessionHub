@@ -529,6 +529,7 @@ export const enUsMessages: Record<MessageKey, string> = {
   "mcp.empty": "No MCP servers configured yet.",
   "mcp.editor.addTitle": "Add MCP Server",
   "mcp.editor.editTitle": "Edit MCP Server",
+  "mcp.editor.providerLabel": "Platform",
   "mcp.editor.nameLabel": "Name",
   "mcp.editor.typeLabel": "Type",
   "mcp.editor.type.http": "HTTP / SSE connection",

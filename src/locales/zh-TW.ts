@@ -525,6 +525,7 @@ export const zhTwMessages = {
   "mcp.empty": "尚未設定任何 MCP server。",
   "mcp.editor.addTitle": "新增 MCP Server",
   "mcp.editor.editTitle": "編輯 MCP Server",
+  "mcp.editor.providerLabel": "平台",
   "mcp.editor.nameLabel": "名稱",
   "mcp.editor.typeLabel": "類型",
   "mcp.editor.type.http": "HTTP / SSE 連線",

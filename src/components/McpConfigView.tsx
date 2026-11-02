@@ -52,6 +52,8 @@ function emptyHeaderRow(): HeaderRow {
 
 type EditorState = {
   originalName: string | null;
+  /** 新增時選擇的目標平台；null 代表沿用目前分頁。 */
+  targetProvider: string | null;
   name: string;
   formType: McpServerFormType;
   url: string;
@@ -82,6 +84,7 @@ function groupStorageKey(scope: McpScope): string {
 function emptyEditor(): EditorState {
   return {
     originalName: null,
+    targetProvider: null,
     name: "",
     formType: "http",
     url: "",
@@ -220,7 +223,11 @@ function unwrapKnownSection(parsed: Record<string, unknown>): UnwrapResult {
   if (!sectionKey) return { kind: "notWrapped", value: parsed };
   const section = parsed[sectionKey];
   if (typeof section !== "object" || section === null || Array.isArray(section)) return { kind: "notWrapped", value: parsed };
-  const sectionMap = section as Record<string, unknown>;
+  // opencode v2 的 server 位於 mcp.servers 之下。
+  const nested = (section as Record<string, unknown>).servers;
+  const sectionMap = (sectionKey === "mcp" && typeof nested === "object" && nested !== null && !Array.isArray(nested)
+    ? nested
+    : section) as Record<string, unknown>;
   const serverNames = Object.keys(sectionMap);
   if (serverNames.length === 0) return { kind: "notWrapped", value: parsed };
   if (serverNames.length > 1) return { kind: "multipleServers" };
@@ -247,7 +254,7 @@ function parseConfigJson(configJson: string): ParsedConfigFields {
     ? { value: unwrapped.value, detectedName: unwrapped.detectedName as string | undefined }
     : { value: unwrapped.value, detectedName: undefined as string | undefined };
 
-  const knownKeys = new Set(["type", "url", "headers", "http_headers", "command", "args", "env", "environment", "enabled", "description"]);
+  const knownKeys = new Set(["type", "url", "headers", "http_headers", "command", "args", "env", "environment", "enabled", "disabled", "description"]);
   const unknownKeys = Object.keys(parsed).filter((key) => !knownKeys.has(key));
   if (unknownKeys.length > 0) {
     // 有 url 或 command 代表這看起來就是一份合法的 MCP server 設定，只是帶有結構化表單
@@ -424,11 +431,11 @@ export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
       {groups.length > 1 ? (
         <div className="agents-scope-groups">
           {groups.map((group) => (
-            <McpGroupCollapsible key={groupStorageKey(group.scope)} group={group} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} />
+            <McpGroupCollapsible key={groupStorageKey(group.scope)} group={group} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} />
           ))}
         </div>
       ) : (
-        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} inlineHeader />
+        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} inlineHeader />
       )}
     </div>
   );
@@ -482,11 +489,13 @@ function McpHeaderActions({
 function McpGroupCollapsible({
   group,
   activeProvider,
+  onActiveProviderChange,
   onOpenExternal,
   onRevealPath,
 }: {
   group: McpScopeGroup;
   activeProvider: string;
+  onActiveProviderChange: (providerId: string) => void;
   onOpenExternal: (path: string) => void;
   onRevealPath: (path: string) => void;
 }) {
@@ -530,7 +539,7 @@ function McpGroupCollapsible({
         />
       }
     >
-      <McpProviderPanel group={group} activeProvider={activeProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} addSignal={addSignal} />
+      <McpProviderPanel group={group} activeProvider={activeProvider} onActiveProviderChange={onActiveProviderChange} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} addSignal={addSignal} />
     </CollapsibleSection>
   );
 }
@@ -538,6 +547,7 @@ function McpGroupCollapsible({
 function McpProviderPanel({
   group,
   activeProvider,
+  onActiveProviderChange,
   onOpenExternal,
   onRevealPath,
   inlineHeader = false,
@@ -545,6 +555,7 @@ function McpProviderPanel({
 }: {
   group: McpScopeGroup;
   activeProvider: string;
+  onActiveProviderChange: (providerId: string) => void;
   onOpenExternal: (path: string) => void;
   onRevealPath: (path: string) => void;
   /** 單一群組（無收折標題列）情境：在內容頂部自帶一列操作按鈕。 */
@@ -592,6 +603,12 @@ function McpProviderPanel({
     [group.providers, activeProvider],
   );
 
+  const addTargetOptions = useMemo(
+    () => group.providers.filter((p) => p.enabled).sort((a, b) => compareProviders(a.providerId, b.providerId)),
+    [group.providers],
+  );
+  const editorProvider = editor?.targetProvider ?? activeProvider;
+
   useEffect(() => {
     if (!copySource) return;
     setCopyTargetProvider(copyTargetOptions[0]?.providerId ?? "");
@@ -624,14 +641,15 @@ function McpProviderPanel({
       setEditor({ ...editor, error: t("mcp.editor.errorNameEmpty") });
       return;
     }
-    const duplicate = (currentConfig?.servers ?? []).some(
+    const editorConfig = group.providers.find((p) => p.providerId === editorProvider);
+    const duplicate = (editorConfig?.servers ?? []).some(
       (server) => server.name === trimmedName && server.name !== editor.originalName,
     );
     if (duplicate) {
       setEditor({ ...editor, error: t("mcp.editor.errorDuplicateName") });
       return;
     }
-    const assembled = assembleConfig(editor, activeProvider);
+    const assembled = assembleConfig(editor, editorProvider);
     if ("errorKey" in assembled) {
       setEditor({ ...editor, error: errorKeyToMessage(assembled.errorKey) });
       return;
@@ -639,8 +657,10 @@ function McpProviderPanel({
 
     setBusy(true);
     try {
-      await group.onUpsert(activeProvider, trimmedName, editor.originalName, assembled.configJson);
+      await group.onUpsert(editorProvider, trimmedName, editor.originalName, assembled.configJson);
       setEditor(null);
+      // 切到目標平台分頁，讓使用者立即看到新增結果。
+      onActiveProviderChange(editorProvider);
     } catch (error) {
       setEditor({ ...editor, error: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -922,6 +942,21 @@ function McpProviderPanel({
           <article className="dialog-card dialog-card--solid mcp-editor-dialog">
             <h3>{editor.originalName ? t("mcp.editor.editTitle") : t("mcp.editor.addTitle")}</h3>
             <div className="mcp-editor-fields">
+              {editor.originalName ? null : (
+                <label className="field-group">
+                  <span>{t("mcp.editor.providerLabel")}</span>
+                  <Select
+                    value={editorProvider}
+                    onChange={(event) => updateEditor({ targetProvider: event.currentTarget.value })}
+                  >
+                    {addTargetOptions.map((provider) => (
+                      <option key={provider.providerId} value={provider.providerId}>
+                        {t(`mcp.provider.${provider.providerId}` as never)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              )}
               <label className="field-group">
                 <span>{t("mcp.editor.nameLabel")}</span>
                 <input

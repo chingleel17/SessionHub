@@ -37,6 +37,7 @@ tauri-plugin-window-state = "2.4.1"
 tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-autostart = "2.5.1"
 chrono-tz = "0.10.4"
+jsonc-parser = { version = "0.34.0", features = ["serde"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

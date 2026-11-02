@@ -72,7 +72,16 @@ struct ProviderSpec {
     format: ConfigFormat,
     section_key: &'static str,
     native_enabled_flag: bool,
+    /// opencode 同時存在 `mcp.<name>`（v1）與 `mcp.servers.<name>`（v2）兩種配置。
+    opencode_layout: bool,
 }
+
+/// opencode v2 存放 server 的巢狀鍵。
+const OPENCODE_SERVERS_KEY: &str = "servers";
+/// opencode `mcp` 區段內不代表 server 的保留鍵。
+const OPENCODE_RESERVED_KEYS: [&str; 2] = [OPENCODE_SERVERS_KEY, "timeout"];
+const OPENCODE_JSON_FILE: &str = "opencode.json";
+const OPENCODE_JSONC_FILE: &str = "opencode.jsonc";
 
 fn provider_spec(provider: &str) -> Result<ProviderSpec, String> {
     match provider {
@@ -80,24 +89,44 @@ fn provider_spec(provider: &str) -> Result<ProviderSpec, String> {
             format: ConfigFormat::Json,
             section_key: "mcpServers",
             native_enabled_flag: false,
+            opencode_layout: false,
         }),
         CODEX_PROVIDER => Ok(ProviderSpec {
             format: ConfigFormat::Toml,
             section_key: "mcp_servers",
             native_enabled_flag: true,
+            opencode_layout: false,
         }),
         OPENCODE_PROVIDER => Ok(ProviderSpec {
             format: ConfigFormat::Json,
             section_key: "mcp",
             native_enabled_flag: true,
+            opencode_layout: true,
         }),
         COPILOT_PROVIDER => Ok(ProviderSpec {
             format: ConfigFormat::Json,
             section_key: "mcpServers",
             native_enabled_flag: false,
+            opencode_layout: false,
         }),
         _ => Err(format!("unknown MCP provider: {provider}")),
     }
+}
+
+/// opencode 會合併兩種檔名；僅有 `.jsonc` 時使用它，其餘情況維持 `opencode.json`。
+fn opencode_config_file(dir: &Path) -> PathBuf {
+    let json_path = dir.join(OPENCODE_JSON_FILE);
+    let jsonc_path = dir.join(OPENCODE_JSONC_FILE);
+    if !json_path.is_file() && jsonc_path.is_file() {
+        jsonc_path
+    } else {
+        json_path
+    }
+}
+
+fn is_jsonc_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "jsonc")
 }
 
 fn load_mcp_settings() -> Result<AppSettings, String> {
@@ -118,7 +147,7 @@ pub(crate) fn mcp_config_path(provider: &str, scope: &McpScope) -> Result<PathBu
                 CODEX_PROVIDER => {
                     Ok(resolve_codex_root(Some(settings.codex_root.as_str()))?.join("config.toml"))
                 }
-                OPENCODE_PROVIDER => Ok(default_opencode_config_root()?.join("opencode.json")),
+                OPENCODE_PROVIDER => Ok(opencode_config_file(&default_opencode_config_root()?)),
                 COPILOT_PROVIDER => Ok(resolve_copilot_root(Some(settings.copilot_root.as_str()))?
                     .join("mcp-config.json")),
                 _ => Err(format!("unknown MCP provider: {provider}")),
@@ -129,31 +158,20 @@ pub(crate) fn mcp_config_path(provider: &str, scope: &McpScope) -> Result<PathBu
             match provider {
                 CLAUDE_PROVIDER => Ok(project_root.join(".mcp.json")),
                 CODEX_PROVIDER => Ok(project_root.join(".codex").join("config.toml")),
-                OPENCODE_PROVIDER => Ok(project_root.join("opencode.json")),
+                OPENCODE_PROVIDER => Ok(opencode_config_file(&project_root)),
                 COPILOT_PROVIDER => {
-                    let github_path = project_root.join(".github").join("mcp.json");
-                    let legacy_path = project_root.join(".mcp.json");
-                    if !github_path.exists() && legacy_path.exists() {
-                        Ok(legacy_path)
+                    // copilot 兩檔並存時只載入 `.mcp.json`，`.github/mcp.json` 整份不生效。
+                    let root_path = project_root.join(".mcp.json");
+                    if root_path.is_file() {
+                        Ok(root_path)
                     } else {
-                        Ok(github_path)
+                        Ok(project_root.join(".github").join("mcp.json"))
                     }
                 }
                 _ => Err(format!("unknown MCP provider: {provider}")),
             }
         }
     }
-}
-
-/// copilot 專案層寫入固定使用 `.github/mcp.json`，與讀取時的 fallback 邏輯不同，
-/// 因此路徑解析獨立於 `mcp_config_path`（讀取用）。
-fn mcp_config_write_path(provider: &str, scope: &McpScope) -> Result<PathBuf, String> {
-    if provider == COPILOT_PROVIDER {
-        if let McpScope::Project { project_cwd } = scope {
-            return Ok(PathBuf::from(project_cwd).join(".github").join("mcp.json"));
-        }
-    }
-    mcp_config_path(provider, scope)
 }
 
 fn scope_key(scope: &McpScope) -> String {
@@ -205,25 +223,98 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>, String> {
     if content.trim().is_empty() {
         return Ok(Map::new());
     }
-    let value: Value = serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    let value: Value = if is_jsonc_path(path) {
+        jsonc_parser::parse_to_serde_value(&content, &Default::default())
+            .map_err(|error| format!("failed to parse {}: {error}", path.display()))?
+    } else {
+        serde_json::from_str(&content)
+            .map_err(|error| format!("failed to parse {}: {error}", path.display()))?
+    };
     match value {
         Value::Object(map) => Ok(map),
         _ => Err(format!("{} does not contain a JSON object", path.display())),
     }
 }
 
+/// 改寫會遺失註解，因此含註解或尾逗號（非嚴格 JSON）的 `.jsonc` 一律拒絕覆寫。
+fn ensure_jsonc_safe_to_write(path: &Path) -> Result<(), String> {
+    if !is_jsonc_path(path) || !path.is_file() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if content.trim().is_empty() || serde_json::from_str::<Value>(&content).is_ok() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} contains comments or trailing commas; edit it manually to avoid losing them",
+        path.display()
+    ))
+}
+
 fn write_json_object(path: &Path, root: &Map<String, Value>) -> Result<(), String> {
+    ensure_jsonc_safe_to_write(path)?;
     let content = serde_json::to_vec_pretty(root)
         .map_err(|error| format!("failed to serialize {}: {error}", path.display()))?;
     atomic_write_file(path, &content)
 }
 
-fn json_section_entries(root: &Map<String, Value>, section_key: &str) -> Vec<(String, Value)> {
-    match root.get(section_key) {
-        Some(Value::Object(map)) => map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => Vec::new(),
+fn json_section_entries(root: &Map<String, Value>, spec: &ProviderSpec) -> Vec<(String, Value)> {
+    let Some(Value::Object(section)) = root.get(spec.section_key) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<(String, Value)> = section
+        .iter()
+        .filter(|(name, _)| {
+            !spec.opencode_layout || !OPENCODE_RESERVED_KEYS.contains(&name.as_str())
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    if spec.opencode_layout {
+        if let Some(Value::Object(nested)) = section.get(OPENCODE_SERVERS_KEY) {
+            // 同名時以 v2 配置為準，避免清單出現重複名稱。
+            entries.retain(|(name, _)| !nested.contains_key(name));
+            entries.extend(
+                nested
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone())),
+            );
+        }
     }
+    entries
+}
+
+/// server 位於 opencode v2 巢狀配置時回傳 true；新項目沿用檔案既有配置，都沒有時使用 v1。
+/// 實測 opencode 1.19.5 與 2.2.5 皆可讀取 v1 配置，因此不需偵測安裝版本。
+fn opencode_uses_nested(section: &Map<String, Value>, name: &str) -> bool {
+    match section.get(OPENCODE_SERVERS_KEY) {
+        Some(Value::Object(nested)) => nested.contains_key(name) || !section.contains_key(name),
+        _ => false,
+    }
+}
+
+/// 取得實際存放指定 server 的 JSON 物件；區段不存在時建立，由呼叫端決定是否寫回。
+fn json_servers_map_mut<'a>(
+    root: &'a mut Map<String, Value>,
+    spec: &ProviderSpec,
+    name: &str,
+) -> Result<&'a mut Map<String, Value>, String> {
+    let section = root
+        .entry(spec.section_key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Value::Object(section_map) = section else {
+        return Err(format!("{} is not a JSON object", spec.section_key));
+    };
+    if spec.opencode_layout && opencode_uses_nested(section_map, name) {
+        let Some(Value::Object(nested)) = section_map.get_mut(OPENCODE_SERVERS_KEY) else {
+            return Err(format!(
+                "{}.{OPENCODE_SERVERS_KEY} is not a JSON object",
+                spec.section_key
+            ));
+        };
+        return Ok(nested);
+    }
+    Ok(section_map)
 }
 
 // ---------- TOML 讀寫 ----------
@@ -412,7 +503,7 @@ fn list_one_provider_inner(
     let raw_entries: Vec<(String, Value)> = match spec.format {
         ConfigFormat::Json => {
             let root = read_json_object(&path)?;
-            json_section_entries(&root, spec.section_key)
+            json_section_entries(&root, &spec)
         }
         ConfigFormat::Toml => {
             let document = read_toml_document(&path)?;
@@ -423,7 +514,7 @@ fn list_one_provider_inner(
     let mut servers = Vec::new();
     for (name, mut value) in raw_entries {
         let enabled = if spec.native_enabled_flag {
-            extract_native_enabled(&mut value)
+            extract_native_enabled(&mut value, spec.opencode_layout)
         } else {
             true
         };
@@ -530,15 +621,15 @@ fn list_one_provider_inner(
     })
 }
 
-/// 讀取並移除原生 `enabled` 旗標（codex/opencode）；旗標不存在時視為啟用（D4：預設即啟用）。
-fn extract_native_enabled(value: &mut Value) -> bool {
+/// 讀取並移除原生 `enabled`（codex/opencode v1）與 `disabled`（opencode v2）旗標；
+/// 旗標不存在時視為啟用（D4：預設即啟用）。
+fn extract_native_enabled(value: &mut Value, opencode_layout: bool) -> bool {
     let Value::Object(map) = value else {
         return true;
     };
-    match map.remove("enabled") {
-        Some(Value::Bool(b)) => b,
-        _ => true,
-    }
+    let enabled = !matches!(map.remove("enabled"), Some(Value::Bool(false)));
+    let disabled = opencode_layout && matches!(map.remove("disabled"), Some(Value::Bool(true)));
+    enabled && !disabled
 }
 
 // ---------- Upsert ----------
@@ -555,6 +646,11 @@ pub(crate) fn upsert_mcp_server_internal(
         return Err("server name must not be empty".to_string());
     }
     let spec = provider_spec(provider)?;
+    if spec.opencode_layout && OPENCODE_RESERVED_KEYS.contains(&name) {
+        return Err(format!(
+            "{name} is a reserved name in the OpenCode MCP config"
+        ));
+    }
     let parsed: Value = serde_json::from_str(config_json)
         .map_err(|error| format!("invalid JSON config: {error}"))?;
     if !parsed.is_object() {
@@ -579,20 +675,16 @@ pub(crate) fn upsert_mcp_server_internal(
         }
     }
 
-    let write_path = mcp_config_write_path(provider, scope)?;
+    let write_path = mcp_config_path(provider, scope)?;
     match spec.format {
         ConfigFormat::Json => {
             let mut root = read_json_object(&write_path)?;
-            let section = root
-                .entry(spec.section_key.to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            let Value::Object(section_map) = section else {
-                return Err(format!("{} is not a JSON object", spec.section_key));
-            };
+            // 改名時留在舊名稱所在的配置，v1/v2 項目不會因編輯而搬移。
+            let servers = json_servers_map_mut(&mut root, &spec, rename_from.unwrap_or(name))?;
             if let Some(old_name) = rename_from {
-                section_map.remove(old_name);
+                servers.remove(old_name);
             }
-            section_map.insert(name.to_string(), parsed);
+            servers.insert(name.to_string(), parsed);
             write_json_object(&write_path, &root)?;
         }
         ConfigFormat::Toml => {
@@ -641,14 +733,15 @@ pub(crate) fn delete_mcp_server_internal(
         }
     }
 
-    let write_path = mcp_config_write_path(provider, scope)?;
+    let write_path = mcp_config_path(provider, scope)?;
     match spec.format {
         ConfigFormat::Json => {
             let mut root = read_json_object(&write_path)?;
-            if let Some(Value::Object(section_map)) = root.get_mut(spec.section_key) {
-                if section_map.remove(name).is_some() {
-                    write_json_object(&write_path, &root)?;
-                }
+            let removed = json_servers_map_mut(&mut root, &spec, name)?
+                .remove(name)
+                .is_some();
+            if removed {
+                write_json_object(&write_path, &root)?;
             }
         }
         ConfigFormat::Toml => {
@@ -690,20 +783,28 @@ fn set_native_enabled(
     name: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    let write_path = mcp_config_write_path(provider, scope)?;
+    let write_path = mcp_config_path(provider, scope)?;
     match spec.format {
         ConfigFormat::Json => {
             let mut root = read_json_object(&write_path)?;
-            let Some(Value::Object(section_map)) = root.get_mut(spec.section_key) else {
+            // opencode v2 會忽略 mcp.servers 內的 enabled（實測 2.2.5 仍會連線），必須寫 disabled。
+            let uses_disabled_flag = spec.opencode_layout
+                && matches!(
+                    root.get(spec.section_key),
+                    Some(Value::Object(section)) if opencode_uses_nested(section, name)
+                );
+            let servers = json_servers_map_mut(&mut root, spec, name)?;
+            let Some(Value::Object(entry)) = servers.get_mut(name) else {
                 return Err(format!("server {name} not found"));
             };
-            let Some(Value::Object(entry)) = section_map.get_mut(name) else {
-                return Err(format!("server {name} not found"));
-            };
-            if enabled {
-                entry.remove("enabled");
-            } else {
-                entry.insert("enabled".to_string(), Value::Bool(false));
+            entry.remove("enabled");
+            entry.remove("disabled");
+            if !enabled {
+                if uses_disabled_flag {
+                    entry.insert("disabled".to_string(), Value::Bool(true));
+                } else {
+                    entry.insert("enabled".to_string(), Value::Bool(false));
+                }
             }
             write_json_object(&write_path, &root)?;
         }
@@ -735,7 +836,7 @@ fn set_store_backed_enabled(
     name: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    let write_path = mcp_config_write_path(provider, scope)?;
+    let write_path = mcp_config_path(provider, scope)?;
     let bucket_key = disabled_bucket_key(provider, scope);
 
     if enabled {
@@ -1114,6 +1215,173 @@ mod tests {
         assert_eq!(entry.get("enabled"), Some(&Value::Bool(false)));
     }
 
+    fn opencode_project(env: &EnvGuard, content: &str) -> (McpScope, PathBuf) {
+        let project_dir = env.project_dir();
+        let path = project_dir.join(OPENCODE_JSON_FILE);
+        fs::write(&path, content).unwrap();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        (scope, path)
+    }
+
+    fn list_opencode(scope: &McpScope) -> McpProviderConfig {
+        list_mcp_configs_internal(scope)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.provider_id == OPENCODE_PROVIDER)
+            .unwrap()
+    }
+
+    fn read_value(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn opencode_lists_v1_and_v2_servers_without_reserved_keys() {
+        let env = EnvGuard::new("opencode-layouts");
+        let (scope, _) = opencode_project(
+            &env,
+            r#"{"mcp": {
+                "timeout": {"startup": 1000},
+                "old": {"type": "local", "command": ["a"], "enabled": false},
+                "servers": {"new": {"type": "remote", "url": "http://x", "disabled": true}}
+            }}"#,
+        );
+
+        let listed = list_opencode(&scope);
+        let names: Vec<&str> = listed.servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["new", "old"]);
+        assert!(listed.servers.iter().all(|server| !server.enabled));
+        let new_server = &listed.servers[0];
+        assert!(!new_server.config_json.contains("disabled"));
+    }
+
+    #[test]
+    fn opencode_writes_follow_existing_layout() {
+        let env = EnvGuard::new("opencode-v2-write");
+        let (scope, path) = opencode_project(
+            &env,
+            r#"{"mcp": {"old": {"type": "local", "command": ["a"]},
+                "servers": {"existing": {"type": "local", "command": ["b"]}}}}"#,
+        );
+        let config = r#"{"type": "remote", "url": "http://x"}"#;
+
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "added", None, config).unwrap();
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "renamed", Some("old"), config)
+            .unwrap();
+        let value = read_value(&path);
+        assert!(value["mcp"]["servers"]["added"].is_object());
+        assert!(value["mcp"]["renamed"].is_object());
+        assert!(value["mcp"].get("old").is_none());
+
+        set_mcp_server_enabled_internal(&scope, OPENCODE_PROVIDER, "added", false).unwrap();
+        set_mcp_server_enabled_internal(&scope, OPENCODE_PROVIDER, "renamed", false).unwrap();
+        let value = read_value(&path);
+        assert_eq!(
+            value["mcp"]["servers"]["added"]["disabled"],
+            Value::Bool(true)
+        );
+        assert!(value["mcp"]["servers"]["added"].get("enabled").is_none());
+        assert_eq!(value["mcp"]["renamed"]["enabled"], Value::Bool(false));
+
+        set_mcp_server_enabled_internal(&scope, OPENCODE_PROVIDER, "added", true).unwrap();
+        let value = read_value(&path);
+        assert!(value["mcp"]["servers"]["added"].get("disabled").is_none());
+
+        delete_mcp_server_internal(&scope, OPENCODE_PROVIDER, "added").unwrap();
+        delete_mcp_server_internal(&scope, OPENCODE_PROVIDER, "renamed").unwrap();
+        let value = read_value(&path);
+        assert!(value["mcp"]["servers"].get("added").is_none());
+        assert!(value["mcp"].get("renamed").is_none());
+    }
+
+    #[test]
+    fn opencode_new_file_uses_v1_layout_and_rejects_reserved_names() {
+        let env = EnvGuard::new("opencode-new-file");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let config = r#"{"type": "remote", "url": "http://x"}"#;
+
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "srv", None, config).unwrap();
+        let value = read_value(&project_dir.join(OPENCODE_JSON_FILE));
+        assert!(value["mcp"]["srv"].is_object());
+
+        for reserved in OPENCODE_RESERVED_KEYS {
+            assert!(
+                upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, reserved, None, config)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_jsonc_is_readable_and_comments_block_rewrite() {
+        let env = EnvGuard::new("opencode-jsonc");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let path = project_dir.join(OPENCODE_JSONC_FILE);
+        let commented = "// note\n{\"mcp\": {\"servers\": {\"srv\": {\"type\": \"remote\", \"url\": \"http://x\",},},},}";
+        fs::write(&path, commented).unwrap();
+        let config = r#"{"type": "remote", "url": "http://y"}"#;
+
+        let listed = list_opencode(&scope);
+        assert_eq!(listed.servers[0].name, "srv");
+        assert!(listed.config_path.ends_with(OPENCODE_JSONC_FILE));
+        assert!(
+            upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "new", None, config).is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), commented);
+
+        fs::write(&path, r#"{"$schema": "https://opencode.ai/config.json"}"#).unwrap();
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "new", None, config).unwrap();
+        assert!(read_value(&path)["mcp"]["new"].is_object());
+        assert!(!project_dir.join(OPENCODE_JSON_FILE).exists());
+    }
+
+    /// 複製到其他 provider 只能寫入目標設定檔，來源設定檔與來源清單都必須維持不變。
+    #[test]
+    fn copy_to_other_provider_keeps_source_server() {
+        let env = EnvGuard::new("copy-keeps-source");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let config = r#"{"type": "http", "url": "http://x"}"#;
+        upsert_mcp_server_internal(&scope, CLAUDE_PROVIDER, "產題系統mcp", None, config).unwrap();
+        let source_path = project_dir.join(".mcp.json");
+        let source_before = fs::read_to_string(&source_path).unwrap();
+
+        upsert_mcp_server_internal(
+            &scope,
+            OPENCODE_PROVIDER,
+            "產題系統mcp",
+            None,
+            r#"{"type": "remote", "url": "http://x"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&source_path).unwrap(), source_before);
+        let providers = list_mcp_configs_internal(&scope).unwrap();
+        for provider in [CLAUDE_PROVIDER, OPENCODE_PROVIDER] {
+            let listed = providers
+                .iter()
+                .find(|entry| entry.provider_id == provider)
+                .unwrap();
+            assert!(
+                listed
+                    .servers
+                    .iter()
+                    .any(|server| server.name == "產題系統mcp"),
+                "{provider} should still list the server"
+            );
+        }
+    }
+
     #[test]
     fn copilot_creates_file_and_rejects_invalid_input() {
         let env = EnvGuard::new("copilot-create");
@@ -1138,6 +1406,92 @@ mod tests {
         .unwrap();
         let written_path = project_dir.join(".github").join("mcp.json");
         assert!(written_path.is_file());
+    }
+
+    fn copilot_project_server_names(scope: &McpScope) -> Vec<String> {
+        list_mcp_configs_internal(scope)
+            .unwrap()
+            .into_iter()
+            .find(|config| config.provider_id == COPILOT_PROVIDER)
+            .unwrap()
+            .servers
+            .into_iter()
+            .map(|server| server.name)
+            .collect()
+    }
+
+    #[test]
+    fn copilot_project_uses_root_file_when_both_exist() {
+        let env = EnvGuard::new("copilot-both-files");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let root_path = project_dir.join(".mcp.json");
+        let github_path = project_dir.join(".github").join("mcp.json");
+        let github_content = r#"{"mcpServers": {"from-github": {"command": "g"}}}"#;
+        fs::create_dir_all(github_path.parent().unwrap()).unwrap();
+        fs::write(&github_path, github_content).unwrap();
+        fs::write(
+            &root_path,
+            r#"{"mcpServers": {"from-root": {"command": "r"}}}"#,
+        )
+        .unwrap();
+
+        // Copilot CLI 1.0.105 實測：兩檔並存時只載入 .mcp.json，不依名稱合併。
+        assert_eq!(copilot_project_server_names(&scope), vec!["from-root"]);
+
+        upsert_mcp_server_internal(
+            &scope,
+            COPILOT_PROVIDER,
+            "added",
+            None,
+            r#"{"command": "a"}"#,
+        )
+        .unwrap();
+
+        assert!(read_value(&root_path)["mcpServers"]["added"].is_object());
+        assert_eq!(fs::read_to_string(&github_path).unwrap(), github_content);
+    }
+
+    #[test]
+    fn copilot_project_keeps_listing_root_file_after_writes() {
+        let env = EnvGuard::new("copilot-root-only");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let root_path = project_dir.join(".mcp.json");
+        fs::write(
+            &root_path,
+            r#"{"mcpServers": {"existing": {"command": "e"}}}"#,
+        )
+        .unwrap();
+
+        upsert_mcp_server_internal(
+            &scope,
+            COPILOT_PROVIDER,
+            "added",
+            None,
+            r#"{"command": "a"}"#,
+        )
+        .unwrap();
+
+        assert!(!project_dir.join(".github").join("mcp.json").exists());
+        assert_eq!(
+            copilot_project_server_names(&scope),
+            vec!["added", "existing"]
+        );
+
+        delete_mcp_server_internal(&scope, COPILOT_PROVIDER, "existing").unwrap();
+        assert!(read_value(&root_path)["mcpServers"]
+            .get("existing")
+            .is_none());
+
+        set_mcp_server_enabled_internal(&scope, COPILOT_PROVIDER, "added", false).unwrap();
+        assert!(read_value(&root_path)["mcpServers"].get("added").is_none());
+        set_mcp_server_enabled_internal(&scope, COPILOT_PROVIDER, "added", true).unwrap();
+        assert!(read_value(&root_path)["mcpServers"]["added"].is_object());
     }
 
     #[test]
