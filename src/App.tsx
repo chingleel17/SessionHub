@@ -522,7 +522,9 @@ function App() {
     if (!settingsQuery.data || hasShownOutdatedToast.current) return;
     const integrations = settingsQuery.data.providerIntegrations ?? [];
     const hasOutdated = integrations.some(
-      (integration) => integration.status === "outdated" || integration.status === "missing",
+      (integration) =>
+        integration.status === "outdated" &&
+        settingsQuery.data.enabledProviders.includes(integration.provider),
     );
     if (hasOutdated) {
       hasShownOutdatedToast.current = true;

@@ -11,6 +11,7 @@ const messages: Record<string, MessageKey> = {
   transient_error: "resetCredit.reason.network", invalid_response: "resetCredit.reason.invalidResponse",
   unsupported: "resetCredit.reason.unsupported", rate_limited: "resetCredit.reason.rateLimited",
   inconsistent: "resetCredit.reason.inconsistent", unknown_expiry: "resetCredit.reason.unknownExpiry",
+  unknown_credit_id: "resetCredit.reason.creditId",
   selection_unverified: "resetCredit.reason.selection", missed: "resetCredit.reason.missed",
   storage_error: "resetCredit.reason.storage", refresh_required: "resetCredit.reason.refresh",
   request_mismatch: "resetCredit.reason.request", invalid_request: "resetCredit.reason.request",

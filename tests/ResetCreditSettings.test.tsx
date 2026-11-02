@@ -58,6 +58,8 @@ test("reset credit controls are independent and preserve time when reminders are
     expect(quotaCard).toBeDefined();
     expect(quotaCard!.contains(resetCard)).toBe(false);
     expect(resetCard.querySelectorAll("dl > div")[1].querySelector("dd")?.textContent).toBe("Off");
+    const missingIdMarkup = renderToStaticMarkup(<I18nProvider><ResetCreditSettings settings={form} onChange={noop} status={{ ...status, autoUseReason: "unknown_credit_id" }} onRefresh={noop} /></I18nProvider>);
+    expect(missingIdMarkup).toContain(enUsMessages["resetCredit.reason.creditId"]);
     expect(Array.from(resetCard.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).every((input) => input.disabled)).toBe(true);
     expect(Array.from(structure.querySelectorAll("button")).find((button) => button.textContent === enUsMessages["settings.actions.saving"])?.disabled).toBe(true);
     await act(async () => root.render(<Harness />));

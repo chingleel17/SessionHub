@@ -31,7 +31,23 @@ pub(crate) fn init(conn: &Connection) -> Result<(), String> {
             account_scope TEXT NOT NULL, endpoint TEXT NOT NULL, next_at INTEGER NOT NULL,
             PRIMARY KEY(account_scope, endpoint));
         CREATE TABLE IF NOT EXISTS reset_credit_preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    ").map_err(|e| format!("重置券日誌初始化失敗: {e}"))
+    ").map_err(|e| format!("重置券日誌初始化失敗: {e}"))?;
+    let mut statement = conn
+        .prepare("PRAGMA table_info(reset_credit_consume_attempts)")
+        .map_err(|e| e.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if !columns.iter().any(|name| name == "target_credit_id") {
+        conn.execute(
+            "ALTER TABLE reset_credit_consume_attempts ADD COLUMN target_credit_id TEXT",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn recover(conn: &Connection, now: i64) -> Result<(), String> {
@@ -171,22 +187,22 @@ pub(crate) fn latest_attempt(conn: &Connection, scope: &str) -> Result<Option<At
 pub(crate) fn reconcile(
     conn: &Connection,
     scope: &str,
-    resolved: impl FnOnce(&[ResetCreditEntry]) -> bool,
+    resolved: impl FnOnce(&[ResetCreditEntry], Option<&str>, Option<i64>) -> bool,
 ) -> Result<bool, String> {
-    let pending: Option<(String, String)> = conn
+    let pending: Option<(String, String, Option<String>, Option<i64>)> = conn
         .query_row(
-            "SELECT request_id,observed FROM reset_credit_consume_attempts
+            "SELECT request_id,observed,target_credit_id,batch_expiry FROM reset_credit_consume_attempts
         WHERE account_scope=?1 AND state IN ('pending','unknown') AND released=0",
             [scope],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((id, json)) = pending else {
+    let Some((id, json, target, expiry)) = pending else {
         return Ok(true);
     };
     let original: Vec<ResetCreditEntry> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    if resolved(&original) {
+    if resolved(&original, target.as_deref(), expiry) {
         conn.execute(
             "UPDATE reset_credit_consume_attempts SET released=1 WHERE request_id=?1",
             [id],
@@ -230,6 +246,7 @@ pub(crate) fn begin_attempt(
     scope: &str,
     id: &str,
     expiry: Option<i64>,
+    target: Option<&str>,
     credits: &ResetCredits,
     now: i64,
 ) -> Result<(), String> {
@@ -245,8 +262,8 @@ pub(crate) fn begin_attempt(
         None
     };
     let observed = serde_json::to_string(&credits.credits).map_err(|e| e.to_string())?;
-    tx.execute("INSERT INTO reset_credit_consume_attempts(request_id,account_scope,origin,batch_expiry,ordinal,observed,state,created_at,updated_at)
-        VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,?7)", params![id,scope,if expiry.is_some(){"automatic"}else{"manual"},expiry,ordinal,observed,now])
+    tx.execute("INSERT INTO reset_credit_consume_attempts(request_id,account_scope,origin,batch_expiry,ordinal,observed,state,created_at,updated_at,target_credit_id)
+        VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,?7,?8)", params![id,scope,if expiry.is_some(){"automatic"}else{"manual"},expiry,ordinal,observed,now,target])
         .map_err(|_| "此帳號已有進行中或結果不明的重置請求".to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -271,10 +288,38 @@ pub(crate) fn verified_batch(conn: &Connection, scope: &str, expiry: i64) -> Res
 mod tests {
     use super::*;
     use crate::quota::reset_credit_policy::original_credits_resolved;
+
+    #[test]
+    fn reset_credit_target_id_survives_recovery_and_schema_upgrade() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE reset_credit_consume_attempts (request_id TEXT PRIMARY KEY, account_scope TEXT NOT NULL, origin TEXT NOT NULL, batch_expiry INTEGER, ordinal INTEGER, observed TEXT NOT NULL, state TEXT NOT NULL, result TEXT, released INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);").unwrap();
+        init(&conn).unwrap();
+        init(&conn).unwrap();
+        assert!(claim_auto_query(&conn, "a", 1000, 1, 940).unwrap());
+        begin_attempt(
+            &conn,
+            "a",
+            "request",
+            Some(1000),
+            Some("target"),
+            &credits(),
+            940,
+        )
+        .unwrap();
+        recover(&conn, 941).unwrap();
+        assert!(!reconcile(&conn, "a", |_, target, expiry| {
+            assert_eq!(target, Some("target"));
+            assert_eq!(expiry, Some(1000));
+            false
+        })
+        .unwrap());
+        assert!(reconcile(&conn, "a", |_, target, _| target == Some("target")).unwrap());
+    }
     fn credits() -> ResetCredits {
         ResetCredits {
             available_count: 1,
             credits: vec![ResetCreditEntry {
+                id: None,
                 status: "active".into(),
                 granted_at: None,
                 expires_at: None,
@@ -286,30 +331,34 @@ mod tests {
         let conn = Connection::open_in_memory().expect("db");
         init(&conn).expect("schema");
         init(&conn).expect("reentrant");
-        begin_attempt(&conn, "a", "one", None, &credits(), 10).expect("claim");
-        assert!(begin_attempt(&conn, "a", "two", None, &credits(), 11).is_err());
+        begin_attempt(&conn, "a", "one", None, None, &credits(), 10).expect("claim");
+        assert!(begin_attempt(&conn, "a", "two", None, None, &credits(), 11).is_err());
         recover(&conn, 12).expect("recover");
         assert_eq!(
             attempt(&conn, "one").expect("read").expect("one").state,
             "unknown"
         );
-        assert!(!reconcile(&conn, "a", |original| original_credits_resolved(
-            original,
-            &credits(),
-            100
-        ))
-        .expect("still unknown"));
-        assert!(reconcile(&conn, "a", |original| original_credits_resolved(
-            original,
-            &ResetCredits {
-                available_count: 0,
-                credits: vec![]
-            },
-            100
-        ))
-        .expect("resolved"));
-        assert!(begin_attempt(&conn, "b", "one", None, &credits(), 20).is_err());
-        begin_attempt(&conn, "a", "two", None, &credits(), 21).expect("unlocked");
+        assert!(
+            !reconcile(&conn, "a", |original, _, _| original_credits_resolved(
+                original,
+                &credits(),
+                100
+            ))
+            .expect("still unknown")
+        );
+        assert!(
+            reconcile(&conn, "a", |original, _, _| original_credits_resolved(
+                original,
+                &ResetCredits {
+                    available_count: 0,
+                    credits: vec![]
+                },
+                100
+            ))
+            .expect("resolved")
+        );
+        assert!(begin_attempt(&conn, "b", "one", None, None, &credits(), 20).is_err());
+        begin_attempt(&conn, "a", "two", None, None, &credits(), 21).expect("unlocked");
         assert_eq!(
             attempt(&conn, "one").expect("read").expect("one").scope,
             "a"
@@ -338,10 +387,10 @@ mod tests {
         let conn = Connection::open_in_memory().expect("db");
         init(&conn).expect("schema");
         assert!(claim_auto_query(&conn, "a", 1000, 1, 940).expect("query"));
-        begin_attempt(&conn, "a", "first", Some(1000), &credits(), 940).expect("post");
+        begin_attempt(&conn, "a", "first", Some(1000), None, &credits(), 940).expect("post");
         finish_attempt(&conn, "first", "reset", false, 941).expect("result");
         verified_batch(&conn, "a", 1000).expect("verified");
-        assert!(begin_attempt(&conn, "a", "second", Some(1000), &credits(), 942).is_err());
+        assert!(begin_attempt(&conn, "a", "second", Some(1000), None, &credits(), 942).is_err());
         finish_batch(&conn, "a", 1000, "reset").expect("terminal");
         assert!(!claim_auto_query(&conn, "a", 1000, 2, 950).expect("no recreate"));
     }

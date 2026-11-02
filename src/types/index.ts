@@ -775,6 +775,7 @@ export type ExtraCredits = {
 };
 
 export type ResetCreditEntry = {
+  id?: string | null;
     grantedAt?: string | null;
     expiresAt?: string | null;
     status: string;
