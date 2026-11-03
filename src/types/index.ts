@@ -297,6 +297,11 @@ export type McpScope =
     | { kind: "global" }
     | { kind: "project"; projectCwd: string };
 
+export type EnsuredMcpConfigFile = {
+    path: string;
+    created: boolean;
+};
+
 export type McpServerEntry = {
     name: string;
     enabled: boolean;
