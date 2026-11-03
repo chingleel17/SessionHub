@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::mcp_config::{
-    delete_mcp_server_internal, is_codex_project_trusted, list_mcp_configs_with_providers,
+    delete_mcp_server_internal, ensure_mcp_config_file_internal, is_codex_project_trusted,
+    list_mcp_configs_with_providers, resolve_mcp_reveal_path_internal,
     set_mcp_server_enabled_internal, test_mcp_http_connection, upsert_mcp_server_internal,
-    McpConnectionTestResult, McpProviderConfig, McpScope,
+    EnsuredMcpConfigFile, McpConnectionTestResult, McpProviderConfig, McpScope,
 };
 
 #[tauri::command]
@@ -62,6 +63,25 @@ pub async fn set_mcp_server_enabled(
     })
     .await
     .map_err(|error| format!("failed to join set MCP server enabled task: {error}"))?
+}
+
+#[tauri::command]
+pub async fn ensure_mcp_config_file(
+    scope: McpScope,
+    provider: String,
+) -> Result<EnsuredMcpConfigFile, String> {
+    tauri::async_runtime::spawn_blocking(move || ensure_mcp_config_file_internal(&scope, &provider))
+        .await
+        .map_err(|error| format!("failed to join ensure MCP config file task: {error}"))?
+}
+
+#[tauri::command]
+pub async fn resolve_mcp_reveal_path(scope: McpScope, provider: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_mcp_reveal_path_internal(&scope, &provider)
+    })
+    .await
+    .map_err(|error| format!("failed to join resolve MCP reveal path task: {error}"))?
 }
 
 #[tauri::command]

@@ -48,6 +48,13 @@ pub(crate) struct McpServerEntry {
     pub(crate) editable: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EnsuredMcpConfigFile {
+    pub(crate) path: String,
+    pub(crate) created: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct McpProviderConfig {
@@ -124,9 +131,13 @@ fn opencode_config_file(dir: &Path) -> PathBuf {
     }
 }
 
+/// opencode 不分副檔名都以 JSONC 解析設定檔，因此 `opencode.json` 內的註解與尾逗號也是合法內容。
 fn is_jsonc_path(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension == "jsonc")
+        || path
+            .file_name()
+            .is_some_and(|file_name| file_name == OPENCODE_JSON_FILE)
 }
 
 fn load_mcp_settings() -> Result<AppSettings, String> {
@@ -236,7 +247,7 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>, String> {
     }
 }
 
-/// 改寫會遺失註解，因此含註解或尾逗號（非嚴格 JSON）的 `.jsonc` 一律拒絕覆寫。
+/// 改寫會遺失註解，因此含註解或尾逗號（非嚴格 JSON）的 JSONC 設定檔一律拒絕覆寫。
 fn ensure_jsonc_safe_to_write(path: &Path) -> Result<(), String> {
     if !is_jsonc_path(path) || !path.is_file() {
         return Ok(());
@@ -478,16 +489,57 @@ fn list_one_provider(
 ) -> McpProviderConfig {
     match list_one_provider_inner(provider, scope, disabled_store, include_cli) {
         Ok(config) => config,
-        Err(error) => McpProviderConfig {
-            provider_id: provider.to_string(),
-            config_path: String::new(),
-            config_exists: false,
-            servers: Vec::new(),
-            error: Some(error),
-            enabled: true,
-            diagnostics: Vec::new(),
-        },
+        Err(error) => {
+            // 設定檔解析失敗時仍回傳路徑，讓使用者能開啟檔案修正。
+            let path = mcp_config_path(provider, scope).ok();
+            McpProviderConfig {
+                provider_id: provider.to_string(),
+                config_path: path
+                    .as_deref()
+                    .map(normalize_display_path)
+                    .unwrap_or_default(),
+                config_exists: path.as_deref().is_some_and(Path::is_file),
+                servers: Vec::new(),
+                error: Some(error),
+                enabled: true,
+                diagnostics: Vec::new(),
+            }
+        }
     }
+}
+
+/// 確保設定檔存在：僅在檔案不存在時建立空設定，絕不覆寫既有內容。
+pub(crate) fn ensure_mcp_config_file_internal(
+    scope: &McpScope,
+    provider: &str,
+) -> Result<EnsuredMcpConfigFile, String> {
+    let spec = provider_spec(provider)?;
+    let path = mcp_config_path(provider, scope)?;
+    let created = !path.exists();
+    if created {
+        let initial_content: &[u8] = match spec.format {
+            ConfigFormat::Json => b"{}\n",
+            ConfigFormat::Toml => b"",
+        };
+        atomic_write_file(&path, initial_content)?;
+    }
+    Ok(EnsuredMcpConfigFile {
+        path: normalize_display_path(&path),
+        created,
+    })
+}
+
+/// 回傳檔案總管要定位的路徑：設定檔不存在時退回最近的既有上層目錄，不產生任何檔案。
+/// 顯示位置不應改動磁碟，例如建立專案層 `.mcp.json` 會讓 copilot 不再載入 `.github/mcp.json`。
+pub(crate) fn resolve_mcp_reveal_path_internal(
+    scope: &McpScope,
+    provider: &str,
+) -> Result<String, String> {
+    let path = mcp_config_path(provider, scope)?;
+    path.ancestors()
+        .find(|candidate| candidate.exists())
+        .map(normalize_display_path)
+        .ok_or_else(|| format!("no existing directory found for {}", path.display()))
 }
 
 fn list_one_provider_inner(
@@ -1341,6 +1393,80 @@ mod tests {
         upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "new", None, config).unwrap();
         assert!(read_value(&path)["mcp"]["new"].is_object());
         assert!(!project_dir.join(OPENCODE_JSON_FILE).exists());
+    }
+
+    #[test]
+    fn opencode_json_with_comments_is_readable_and_blocks_rewrite() {
+        let env = EnvGuard::new("opencode-json-comments");
+        let commented = "{\n  // note\n  \"mcp\": {\"srv\": {\"type\": \"remote\", \"url\": \"http://x\",},},\n}";
+        let (scope, path) = opencode_project(&env, commented);
+
+        let listed = list_opencode(&scope);
+        assert_eq!(listed.error, None);
+        assert_eq!(listed.servers[0].name, "srv");
+
+        let config = r#"{"type": "remote", "url": "http://y"}"#;
+        assert!(
+            upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "new", None, config).is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), commented);
+    }
+
+    #[test]
+    fn unparsable_config_still_reports_path() {
+        let env = EnvGuard::new("mcp-broken-config");
+        let (scope, _) = opencode_project(&env, "{ not valid");
+
+        let listed = list_opencode(&scope);
+        assert!(listed.error.is_some());
+        assert!(listed.config_path.ends_with(OPENCODE_JSON_FILE));
+        assert!(listed.config_exists);
+    }
+
+    #[test]
+    fn ensure_config_file_creates_only_when_missing() {
+        let env = EnvGuard::new("mcp-ensure-config");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+
+        let created = ensure_mcp_config_file_internal(&scope, COPILOT_PROVIDER).unwrap();
+        assert!(created.created);
+        let copilot_path = project_dir.join(".github").join("mcp.json");
+        assert_eq!(read_value(&copilot_path), serde_json::json!({}));
+
+        let codex = ensure_mcp_config_file_internal(&scope, CODEX_PROVIDER).unwrap();
+        assert!(codex.created);
+        let codex_path = project_dir.join(".codex").join("config.toml");
+        assert_eq!(fs::read_to_string(&codex_path).unwrap(), "");
+
+        let existing = r#"{"mcpServers": {"srv": {"command": "run"}}}"#;
+        fs::write(&copilot_path, existing).unwrap();
+        let again = ensure_mcp_config_file_internal(&scope, COPILOT_PROVIDER).unwrap();
+        assert!(!again.created);
+        assert_eq!(fs::read_to_string(&copilot_path).unwrap(), existing);
+    }
+
+    #[test]
+    fn reveal_path_falls_back_to_existing_ancestor_without_creating() {
+        let env = EnvGuard::new("mcp-reveal-path");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+
+        let missing = resolve_mcp_reveal_path_internal(&scope, CODEX_PROVIDER).unwrap();
+        assert_eq!(missing, normalize_display_path(&project_dir));
+        assert!(!project_dir.join(".codex").exists());
+
+        let config_path = ensure_mcp_config_file_internal(&scope, CODEX_PROVIDER)
+            .unwrap()
+            .path;
+        assert_eq!(
+            resolve_mcp_reveal_path_internal(&scope, CODEX_PROVIDER).unwrap(),
+            config_path
+        );
     }
 
     /// 複製到其他 provider 只能寫入目標設定檔，來源設定檔與來源清單都必須維持不變。

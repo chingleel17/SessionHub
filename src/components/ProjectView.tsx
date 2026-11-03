@@ -155,6 +155,8 @@ type Props = {
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
   onTestMcpConnection: (url: string, headers: Record<string, string>) => Promise<McpConnectionTestResult>;
+  onOpenMcpConfig: (provider: string) => void;
+  onRevealMcpConfig: (provider: string) => void;
   codexTrusted: boolean;
   onAgentsTabChange: (tab: "agents-md" | "skills" | "commands" | "mcp") => void;
   globalAgentsData: AgentsScopeDataBundle;
@@ -301,6 +303,8 @@ export function ProjectView({
   onDeleteMcpServer,
   onSetMcpServerEnabled,
   onTestMcpConnection,
+  onOpenMcpConfig,
+  onRevealMcpConfig,
   codexTrusted,
   onAgentsTabChange,
   globalAgentsData,
@@ -976,6 +980,8 @@ export function ProjectView({
           onDeleteMcpServer={onDeleteMcpServer}
           onSetMcpServerEnabled={onSetMcpServerEnabled}
           onTestMcpConnection={onTestMcpConnection}
+          onOpenMcpConfig={onOpenMcpConfig}
+          onRevealMcpConfig={onRevealMcpConfig}
           codexTrusted={codexTrusted}
           onActiveTabChange={onAgentsTabChange}
           globalData={globalAgentsData}

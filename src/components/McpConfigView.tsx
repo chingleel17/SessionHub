@@ -29,13 +29,15 @@ export type McpScopeGroup = {
   onDelete: (provider: string, name: string) => Promise<unknown>;
   onSetEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
   onTestConnection: (url: string, headers: Record<string, string>) => Promise<McpConnectionTestResult>;
+  /** 外部開啟設定檔；檔案不存在時會先建立。 */
+  onOpenConfig: (provider: string) => void;
+  /** 在檔案總管顯示設定檔；檔案不存在時定位到最近的既有上層目錄。 */
+  onRevealConfig: (provider: string) => void;
   codexTrusted?: boolean;
 };
 
 type Props = {
   groups: McpScopeGroup[];
-  onOpenExternal: (path: string) => void;
-  onRevealPath: (path: string) => void;
 };
 
 /** HTTP header 單列：value 常帶有 token（如 Authorization），介面上以密碼欄位遮蔽並可個別顯示/隱藏；
@@ -391,7 +393,7 @@ function assembleConfig(
   return { configJson: JSON.stringify(config, null, 2) };
 }
 
-export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
+export function McpConfigView({ groups }: Props) {
   const { t } = useI18n();
   const providerIds = useMemo(
     () => groups
@@ -431,11 +433,11 @@ export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
       {groups.length > 1 ? (
         <div className="agents-scope-groups">
           {groups.map((group) => (
-            <McpGroupCollapsible key={groupStorageKey(group.scope)} group={group} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} />
+            <McpGroupCollapsible key={groupStorageKey(group.scope)} group={group} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} />
           ))}
         </div>
       ) : (
-        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} inlineHeader />
+        <McpProviderPanel group={groups[0]} activeProvider={activeProvider} onActiveProviderChange={setActiveProvider} inlineHeader />
       )}
     </div>
   );
@@ -444,15 +446,15 @@ export function McpConfigView({ groups, onOpenExternal, onRevealPath }: Props) {
 /** 操作按鈕群（外開 / 資料夾 / 重整 / 新增），供收折標題列或單一群組內嵌列共用。 */
 function McpHeaderActions({
   configPath,
-  onOpenExternal,
-  onRevealPath,
+  onOpenConfig,
+  onRevealConfig,
   onRefresh,
   isFetching,
   onAdd,
 }: {
   configPath: string | undefined;
-  onOpenExternal: (path: string) => void;
-  onRevealPath: (path: string) => void;
+  onOpenConfig: () => void;
+  onRevealConfig: () => void;
   onRefresh: () => void;
   isFetching: boolean;
   onAdd: () => void;
@@ -464,7 +466,7 @@ function McpHeaderActions({
         label={t("agents.action.openExternal")}
         className="agents-icon-button"
         disabled={!configPath}
-        onClick={() => configPath && onOpenExternal(configPath)}
+        onClick={onOpenConfig}
       >
         <ExternalLinkIcon size={15} />
       </IconButton>
@@ -472,7 +474,7 @@ function McpHeaderActions({
         label={t("agents.action.reveal")}
         className="agents-icon-button"
         disabled={!configPath}
-        onClick={() => configPath && onRevealPath(configPath)}
+        onClick={onRevealConfig}
       >
         <FolderIcon size={15} />
       </IconButton>
@@ -490,14 +492,10 @@ function McpGroupCollapsible({
   group,
   activeProvider,
   onActiveProviderChange,
-  onOpenExternal,
-  onRevealPath,
 }: {
   group: McpScopeGroup;
   activeProvider: string;
   onActiveProviderChange: (providerId: string) => void;
-  onOpenExternal: (path: string) => void;
-  onRevealPath: (path: string) => void;
 }) {
   const currentConfig = group.providers.find((p) => p.providerId === activeProvider);
   const count = currentConfig?.servers.length ?? 0;
@@ -528,8 +526,8 @@ function McpGroupCollapsible({
       actions={
         <McpHeaderActions
           configPath={currentConfig?.configPath}
-          onOpenExternal={onOpenExternal}
-          onRevealPath={onRevealPath}
+          onOpenConfig={() => group.onOpenConfig(activeProvider)}
+          onRevealConfig={() => group.onRevealConfig(activeProvider)}
           onRefresh={() => void group.onRefresh()}
           isFetching={group.isFetching}
           onAdd={() => {
@@ -539,7 +537,7 @@ function McpGroupCollapsible({
         />
       }
     >
-      <McpProviderPanel group={group} activeProvider={activeProvider} onActiveProviderChange={onActiveProviderChange} onOpenExternal={onOpenExternal} onRevealPath={onRevealPath} addSignal={addSignal} />
+      <McpProviderPanel group={group} activeProvider={activeProvider} onActiveProviderChange={onActiveProviderChange} addSignal={addSignal} />
     </CollapsibleSection>
   );
 }
@@ -548,16 +546,12 @@ function McpProviderPanel({
   group,
   activeProvider,
   onActiveProviderChange,
-  onOpenExternal,
-  onRevealPath,
   inlineHeader = false,
   addSignal = 0,
 }: {
   group: McpScopeGroup;
   activeProvider: string;
   onActiveProviderChange: (providerId: string) => void;
-  onOpenExternal: (path: string) => void;
-  onRevealPath: (path: string) => void;
   /** 單一群組（無收折標題列）情境：在內容頂部自帶一列操作按鈕。 */
   inlineHeader?: boolean;
   /** 收折標題列「新增」按鈕的觸發訊號（遞增即開啟編輯器）。 */
@@ -811,8 +805,8 @@ function McpProviderPanel({
           ) : null}
           <McpHeaderActions
             configPath={currentConfig?.configPath}
-            onOpenExternal={onOpenExternal}
-            onRevealPath={onRevealPath}
+            onOpenConfig={() => group.onOpenConfig(activeProvider)}
+            onRevealConfig={() => group.onRevealConfig(activeProvider)}
             onRefresh={() => void group.onRefresh()}
             isFetching={group.isFetching}
             onAdd={() => setEditor(emptyEditor())}
