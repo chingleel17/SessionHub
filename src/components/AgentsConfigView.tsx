@@ -84,6 +84,8 @@ export type AgentsScopeDataBundle = {
   onDeleteMcpServer: (provider: string, name: string) => Promise<unknown>;
   onSetMcpServerEnabled: (provider: string, name: string, enabled: boolean) => Promise<unknown>;
   onTestMcpConnection: (url: string, headers: Record<string, string>) => Promise<McpConnectionTestResult>;
+  onOpenMcpConfig: (provider: string) => void;
+  onRevealMcpConfig: (provider: string) => void;
   codexTrusted?: boolean;
   onActiveTabChange?: (tab: AgentsTab) => void;
 };
@@ -677,10 +679,10 @@ export function AgentsConfigView(props: Props) {
         onDelete: data.onDeleteMcpServer,
         onSetEnabled: data.onSetMcpServerEnabled,
         onTestConnection: data.onTestMcpConnection,
+        onOpenConfig: data.onOpenMcpConfig,
+        onRevealConfig: data.onRevealMcpConfig,
         codexTrusted: data.codexTrusted,
       }))}
-      onOpenExternal={onOpenExternal}
-      onRevealPath={onRevealPath}
     />
   );
 

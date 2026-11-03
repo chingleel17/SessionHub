@@ -69,17 +69,19 @@ Global scope：
 
 - claude：`%USERPROFILE%\.claude.json` 頂層 `mcpServers`（JSON，改寫時 MUST 保持既有鍵順序）
 - codex：`<codexRoot>\config.toml` 的 `[mcp_servers.<name>]`（TOML，改寫時 MUST 保留既有註解與排版）
-- opencode：`%USERPROFILE%\.config\opencode\opencode.json` 的 `mcp`（JSON）
+- opencode：`%USERPROFILE%\.config\opencode\opencode.json` 的 `mcp`；該檔不存在但 `opencode.jsonc` 存在時改用後者（配置規則見下方 opencode v1/v2）
 - copilot：`<copilotRoot>\mcp-config.json` 的 `mcpServers`（JSON）
 
 Project scope（`<project>` = 專案根目錄）：
 
 - claude：`<project>\.mcp.json` 的 `mcpServers`（JSON）
 - codex：`<project>\.codex\config.toml` 的 `[mcp_servers.<name>]`（TOML）
-- opencode：`<project>\opencode.json` 的 `mcp`（JSON）
-- copilot：讀取時優先 `<project>\.github\mcp.json`，若不存在但 `<project>\.mcp.json` 存在則讀後者；寫入一律回 `<project>\.github\mcp.json`（`mcpServers`，JSON）
+- opencode：`<project>\opencode.json` 的 `mcp`；該檔不存在但 `<project>\opencode.jsonc` 存在時改用後者（配置規則見下方 opencode v1/v2）
+- copilot：`<project>\.mcp.json` 存在時讀寫該檔，否則讀寫 `<project>\.github\mcp.json`（`mcpServers`，JSON）。Copilot CLI 在兩檔並存時只載入 `.mcp.json`，系統 MUST 與此行為一致
 
 codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使用者自訂路徑優先，否則預設家目錄）。
+
+opencode v1/v2：系統 SHALL 同時讀取 `mcp.<name>`（v1 配置）與 `mcp.servers.<name>`（v2 配置），且 `mcp.servers`、`mcp.timeout` MUST NOT 被視為 server；這兩個名稱 MUST 拒絕作為 server 名稱。編輯、改名、刪除與啟用切換 SHALL 留在項目原本的配置。新增時若檔案已有 `mcp.servers` SHALL 寫入該處，否則寫入 `mcp.<name>`。`.jsonc` 含註解或尾逗號時 SHALL 可讀取但 MUST 拒絕寫入，避免遺失內容。
 
 #### Scenario: codex 設定改寫保留註解
 
@@ -99,11 +101,21 @@ codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使�
 #### Scenario: copilot 專案設定檔位置解析
 
 - **WHEN** 某專案同時存在 `.github\mcp.json` 與 `.mcp.json`
-- **THEN** 讀取以 `.github\mcp.json` 為準；且任何寫入都落在 `.github\mcp.json`
+- **THEN** 讀取與寫入都以 `.mcp.json` 為準，`.github\mcp.json` 不變
+
+#### Scenario: copilot 專案僅有 .mcp.json 時寫入
+
+- **WHEN** 某專案只有 `.mcp.json`，使用者對 copilot 新增、編輯、刪除或切換啟用
+- **THEN** 變更寫入 `.mcp.json`，不建立 `.github\mcp.json`，既有項目仍列於清單
+
+#### Scenario: copilot 專案尚無設定檔時新增
+
+- **WHEN** 某專案兩個檔案都不存在，使用者對 copilot 新增 server
+- **THEN** 建立並寫入 `.github\mcp.json`
 
 ### Requirement: 新增與編輯 MCP server
 
-系統 SHALL 支援在任一平台新增與編輯 MCP server。編輯 dialog SHALL 使用不透明樣式呈現（見 ui-primitives 的 `dialog-card--solid`），並提供名稱欄位與「類型」下拉選單（採用共用 Select 元件），依所選類型顯示對應欄位（見 design D12）：
+系統 SHALL 支援在任一平台新增與編輯 MCP server。新增 dialog SHALL 提供「平台」下拉選單（列出已啟用平台、預設為目前分頁），儲存成功後 SHALL 切換至該平台分頁；編輯既有項目時 SHALL NOT 提供平台選單。編輯 dialog SHALL 使用不透明樣式呈現（見 ui-primitives 的 `dialog-card--solid`），並提供名稱欄位與「類型」下拉選單（採用共用 Select 元件），依所選類型顯示對應欄位（見 design D12）：
 
 - **HTTP/SSE**：URL（必填）與 Headers（選填，結構化 key-value 列表，見下方 Headers 遮蔽需求）
 - **npx 套件**：套件名稱（必填）、額外參數（選填）、環境變數（選填 key-value 清單）
@@ -276,7 +288,7 @@ HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對�
 
 系統 SHALL 支援逐一啟用/停用 MCP server，策略依平台原生能力分流：
 
-- codex 與 opencode：停用 SHALL 在該 server 設定寫入 `enabled = false`（TOML）／`"enabled": false`（JSON）；啟用 SHALL 移除該旗標。清單的啟用狀態 SHALL 以「`enabled` 不為 false」判定。
+- codex 與 opencode：停用 SHALL 在該 server 設定寫入 `enabled = false`（TOML）／`"enabled": false`（JSON）；啟用 SHALL 移除該旗標。清單的啟用狀態 SHALL 以「`enabled` 不為 false」判定。opencode 位於 `mcp.servers` 的項目 SHALL 改用 `"disabled": true`（v2 會忽略此處的 `enabled`），且 `disabled` 為 true 亦視為停用。
 - claude 與 copilot：無原生旗標。停用 SHALL 將該 server 自設定檔移除並將原始設定值暫存至 `%APPDATA%\SessionHub\mcp-disabled.json`（結構 `{"<provider>::<scopeKey>": {"<name>": <設定值>}}`，`scopeKey` 為 `"global"` 或正規化後的專案路徑，確保 global 與各專案的同名 server 互不覆蓋）；啟用 SHALL 將暫存值原樣寫回設定檔並自暫存移除。清單 SHALL 合併顯示對應 scope 暫存中的停用項目（`enabled: false`）。
 
 #### Scenario: opencode 原生停用

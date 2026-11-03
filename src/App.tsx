@@ -20,8 +20,10 @@ import type {
   CommandsScanResult,
   ConfirmDialogState,
   EditDialogState,
+  EnsuredMcpConfigFile,
   IdeLauncherType,
   McpProviderConfig,
+  McpScope,
   ManualModelPricingInput,
   ModelPricingEntry,
   OpenSpecData,
@@ -1396,7 +1398,7 @@ function App() {
     }
   });
 
-  const mcpMutationContext = (scope: { kind: "global" } | { kind: "project"; projectCwd: string }) => {
+  const mcpMutationContext = (scope: McpScope) => {
     const scopeKey = scope.kind === "global" ? "global" : scope.projectCwd;
     return { scopeKey, key: resourceQueryKey("mcp", scopeKey, settingsQuery.data ?? settingsForm) };
   };
@@ -2304,6 +2306,26 @@ function App() {
     });
   };
 
+  const handleOpenMcpConfig = async (scope: McpScope, provider: string) => {
+    try {
+      const { path, created } = await invoke<EnsuredMcpConfigFile>("ensure_mcp_config_file", { scope, provider });
+      await openPath(path);
+      if (created) {
+        await handleRefreshResource("mcp", scope.kind === "global" ? "global" : scope.projectCwd);
+      }
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    }
+  };
+
+  const handleRevealMcpConfig = async (scope: McpScope, provider: string) => {
+    try {
+      await revealItemInDir(await invoke<string>("resolve_mcp_reveal_path", { scope, provider }));
+    } catch (error) {
+      showToast(resolveErrorMessage(error, t("toast.toolOpenFailed")));
+    }
+  };
+
   const handleCopyProjectPath = (path: string) => {
     navigator.clipboard.writeText(path)
       .then(() => showToast(t("toast.projectPathCopied")))
@@ -2349,6 +2371,8 @@ function App() {
     onSetMcpServerEnabled: (provider, name, enabled) =>
       setMcpServerEnabledMutation.mutateAsync({ scope: { kind: "global" }, provider, name, enabled }),
     onTestMcpConnection: (url, headers) => testMcpHttpServerMutation.mutateAsync({ url, headers }),
+    onOpenMcpConfig: (provider) => void handleOpenMcpConfig({ kind: "global" }, provider),
+    onRevealMcpConfig: (provider) => void handleRevealMcpConfig({ kind: "global" }, provider),
   };
 
   // 全域 Agents 檢視（含 MCP 頁籤）：獨立元件，供全域 Agents 頁（agents-global）渲染。
@@ -2655,6 +2679,12 @@ function App() {
                 })
               }
               onTestMcpConnection={(url, headers) => testMcpHttpServerMutation.mutateAsync({ url, headers })}
+              onOpenMcpConfig={(provider) =>
+                void handleOpenMcpConfig({ kind: "project", projectCwd: activeProject.pathLabel }, provider)
+              }
+              onRevealMcpConfig={(provider) =>
+                void handleRevealMcpConfig({ kind: "project", projectCwd: activeProject.pathLabel }, provider)
+              }
               codexTrusted={codexProjectTrustQuery.data ?? false}
               onAgentsTabChange={(tab) => {
                 if (activeProject) {

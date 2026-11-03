@@ -645,6 +645,8 @@ pub fn run() {
             upsert_mcp_server,
             delete_mcp_server,
             set_mcp_server_enabled,
+            ensure_mcp_config_file,
+            resolve_mcp_reveal_path,
             check_codex_project_trust,
             test_mcp_http_server,
             get_intervention_list,
