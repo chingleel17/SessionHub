@@ -684,6 +684,24 @@ fn extract_native_enabled(value: &mut Value, opencode_layout: bool) -> bool {
     enabled && !disabled
 }
 
+/// 清單會移除原生啟用旗標，編輯內容因此不含它們；儲存時沿用原項目的旗標，避免編輯改變啟用狀態。
+/// 編輯內容自行指定的旗標優先。
+fn carry_native_enabled_flags(previous: &Value, next: &mut Value, opencode_layout: bool) {
+    let (Value::Object(previous), Value::Object(next)) = (previous, next) else {
+        return;
+    };
+    let flag_keys: &[&str] = if opencode_layout {
+        &["enabled", "disabled"]
+    } else {
+        &["enabled"]
+    };
+    for key in flag_keys {
+        if let (Some(flag), false) = (previous.get(*key), next.contains_key(*key)) {
+            next.insert((*key).to_string(), flag.clone());
+        }
+    }
+}
+
 // ---------- Upsert ----------
 
 pub(crate) fn upsert_mcp_server_internal(
@@ -703,7 +721,7 @@ pub(crate) fn upsert_mcp_server_internal(
             "{name} is a reserved name in the OpenCode MCP config"
         ));
     }
-    let parsed: Value = serde_json::from_str(config_json)
+    let mut parsed: Value = serde_json::from_str(config_json)
         .map_err(|error| format!("invalid JSON config: {error}"))?;
     if !parsed.is_object() {
         return Err("server config must be a JSON object".to_string());
@@ -733,6 +751,11 @@ pub(crate) fn upsert_mcp_server_internal(
             let mut root = read_json_object(&write_path)?;
             // 改名時留在舊名稱所在的配置，v1/v2 項目不會因編輯而搬移。
             let servers = json_servers_map_mut(&mut root, &spec, rename_from.unwrap_or(name))?;
+            if spec.native_enabled_flag {
+                if let Some(previous) = servers.get(rename_from.unwrap_or(name)) {
+                    carry_native_enabled_flags(previous, &mut parsed, spec.opencode_layout);
+                }
+            }
             if let Some(old_name) = rename_from {
                 servers.remove(old_name);
             }
@@ -745,6 +768,12 @@ pub(crate) fn upsert_mcp_server_internal(
             let section = document[spec.section_key]
                 .as_table_mut()
                 .ok_or_else(|| format!("{} is not a TOML table", spec.section_key))?;
+            if let Some(previous) = section
+                .get(rename_from.unwrap_or(name))
+                .and_then(toml_item_to_json)
+            {
+                carry_native_enabled_flags(&previous, &mut parsed, spec.opencode_layout);
+            }
             if let Some(old_name) = rename_from {
                 section.remove(old_name);
             }
@@ -1410,6 +1439,78 @@ mod tests {
             upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "new", None, config).is_err()
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), commented);
+    }
+
+    #[test]
+    fn editing_disabled_opencode_server_keeps_it_disabled() {
+        let env = EnvGuard::new("opencode-edit-disabled");
+        let (scope, path) = opencode_project(
+            &env,
+            r#"{"mcp": {
+                "v1": {"type": "remote", "url": "http://a", "enabled": false},
+                "servers": {"v2": {"type": "remote", "url": "http://b", "disabled": true}}
+            }}"#,
+        );
+        let edited = r#"{"type": "remote", "url": "http://edited"}"#;
+
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "v1", Some("v1"), edited).unwrap();
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "v2-new", Some("v2"), edited)
+            .unwrap();
+
+        let value = read_value(&path);
+        assert_eq!(value["mcp"]["v1"]["url"], "http://edited");
+        assert_eq!(value["mcp"]["v1"]["enabled"], false);
+        assert_eq!(value["mcp"]["servers"]["v2-new"]["url"], "http://edited");
+        assert_eq!(value["mcp"]["servers"]["v2-new"]["disabled"], true);
+        assert!(list_opencode(&scope).servers.iter().all(|s| !s.enabled));
+
+        set_mcp_server_enabled_internal(&scope, OPENCODE_PROVIDER, "v1", true).unwrap();
+        upsert_mcp_server_internal(&scope, OPENCODE_PROVIDER, "v1", Some("v1"), edited).unwrap();
+        assert!(read_value(&path)["mcp"]["v1"].get("enabled").is_none());
+
+        // 自訂 JSON 明確指定的旗標優先於原項目的旗標。
+        upsert_mcp_server_internal(
+            &scope,
+            OPENCODE_PROVIDER,
+            "v2-new",
+            Some("v2-new"),
+            r#"{"type": "remote", "url": "http://edited", "disabled": false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_value(&path)["mcp"]["servers"]["v2-new"]["disabled"],
+            false
+        );
+    }
+
+    #[test]
+    fn editing_disabled_codex_server_keeps_it_disabled() {
+        let env = EnvGuard::new("codex-edit-disabled");
+        let project_dir = env.project_dir();
+        let scope = McpScope::Project {
+            project_cwd: project_dir.to_string_lossy().to_string(),
+        };
+        let path = project_dir.join(".codex").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "[mcp_servers.srv]\nurl = \"http://a\"\nenabled = false\n",
+        )
+        .unwrap();
+
+        upsert_mcp_server_internal(
+            &scope,
+            CODEX_PROVIDER,
+            "renamed",
+            Some("srv"),
+            r#"{"url": "http://edited"}"#,
+        )
+        .unwrap();
+
+        let document = read_toml_document(&path).unwrap();
+        let entry = &document["mcp_servers"]["renamed"];
+        assert_eq!(entry["url"].as_str(), Some("http://edited"));
+        assert_eq!(entry["enabled"].as_bool(), Some(false));
     }
 
     #[test]

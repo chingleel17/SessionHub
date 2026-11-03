@@ -46,10 +46,20 @@
 - **WHEN** 某平台在該 scope 的設定檔尚不存在
 - **THEN** 該平台顯示空清單與「設定檔不存在」提示，且不視為錯誤；其餘平台正常顯示
 
+#### Scenario: 外部開啟尚不存在的設定檔
+
+- **WHEN** 使用者對設定檔尚不存在的平台點擊「外部開啟」
+- **THEN** 系統在該平台該 scope 解析出的路徑建立空設定檔（JSON 為 `{}`、TOML 為空檔）後開啟並刷新清單；設定檔已存在時 MUST NOT 覆寫內容
+
+#### Scenario: 檔案總管顯示尚不存在的設定檔
+
+- **WHEN** 使用者對設定檔尚不存在的平台點擊「檔案總管顯示」
+- **THEN** 系統定位到最近的既有上層目錄，MUST NOT 建立任何檔案或目錄
+
 #### Scenario: 單一平台讀取失敗不影響其他平台
 
 - **WHEN** 某平台設定檔存在但無法解析（格式損壞）
-- **THEN** 該平台顯示錯誤訊息，其他平台清單仍正常載入
+- **THEN** 該平台顯示錯誤訊息，其他平台清單仍正常載入；該平台仍回傳設定檔路徑，「外部開啟」與「檔案總管顯示」SHALL 可用以修正檔案
 
 #### Scenario: 點擊列開啟編輯
 
@@ -81,7 +91,7 @@ Project scope（`<project>` = 專案根目錄）：
 
 codexRoot 與 copilotRoot SHALL 沿用 app-settings 既有的 root 解析（使用者自訂路徑優先，否則預設家目錄）。
 
-opencode v1/v2：系統 SHALL 同時讀取 `mcp.<name>`（v1 配置）與 `mcp.servers.<name>`（v2 配置），且 `mcp.servers`、`mcp.timeout` MUST NOT 被視為 server；這兩個名稱 MUST 拒絕作為 server 名稱。編輯、改名、刪除與啟用切換 SHALL 留在項目原本的配置。新增時若檔案已有 `mcp.servers` SHALL 寫入該處，否則寫入 `mcp.<name>`。`.jsonc` 含註解或尾逗號時 SHALL 可讀取但 MUST 拒絕寫入，避免遺失內容。
+opencode v1/v2：系統 SHALL 同時讀取 `mcp.<name>`（v1 配置）與 `mcp.servers.<name>`（v2 配置），且 `mcp.servers`、`mcp.timeout` MUST NOT 被視為 server；這兩個名稱 MUST 拒絕作為 server 名稱。編輯、改名、刪除與啟用切換 SHALL 留在項目原本的配置。新增時若檔案已有 `mcp.servers` SHALL 寫入該處，否則寫入 `mcp.<name>`。`opencode.json` 與 `opencode.jsonc` SHALL 皆以 JSONC 解析（opencode 本身接受 `opencode.json` 內的註解）；含註解或尾逗號時 SHALL 可讀取但 MUST 拒絕寫入，避免遺失內容。
 
 #### Scenario: codex 設定改寫保留註解
 
@@ -311,6 +321,11 @@ HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對�
 - **WHEN** 使用者編輯一個目前停用（位於暫存）的 claude/copilot server 並儲存
 - **THEN** 更新暫存中的設定值且項目保持停用，不寫回 provider 設定檔
 
+#### Scenario: 編輯停用中的 codex/opencode 項目
+
+- **WHEN** 使用者編輯或改名一個帶有原生停用旗標（`enabled = false` 或 `"disabled": true`）的 codex/opencode server 並儲存
+- **THEN** 更新設定值且原生旗標保留，項目維持停用；編輯內容（自訂 JSON）明確指定該旗標時以編輯內容為準
+
 #### Scenario: 停用項目在清單中常駐可見
 
 - **WHEN** 清單中存在已停用的 MCP server（無論是 codex/opencode 的 `enabled: false` 或 claude/copilot 的暫存項目）
@@ -351,12 +366,14 @@ HTTP/SSE 類型的編輯表單 SHALL 提供「測試連線」操作，位於對�
 
 ### Requirement: Tauri command 介面
 
-後端 SHALL 提供六個 Tauri commands。前五個皆帶 `scope` 參數（`{ kind: "global" }` 或 `{ kind: "project", projectCwd }`）、回傳 `Result<T, String>` 並以 `spawn_blocking` 執行檔案 I/O：
+後端 SHALL 提供八個 Tauri commands。除 `check_codex_project_trust` 與 `test_mcp_http_server` 外皆帶 `scope` 參數（`{ kind: "global" }` 或 `{ kind: "project", projectCwd }`）；全部回傳 `Result<T, String>` 並以 `spawn_blocking` 執行：
 
 - `list_mcp_configs(scope) -> Vec<McpProviderConfig>`：回傳四個平台的 `{ providerId, configPath, configExists, servers: [{ name, enabled, configJson }], error? }`
 - `upsert_mcp_server(scope, provider, name, originalName?, configJson)`
 - `delete_mcp_server(scope, provider, name)`
 - `set_mcp_server_enabled(scope, provider, name, enabled)`
+- `ensure_mcp_config_file(scope, provider) -> { path, created }`：設定檔不存在時建立空設定檔，回傳路徑與是否新建；供「外部開啟」使用
+- `resolve_mcp_reveal_path(scope, provider) -> String`：回傳設定檔路徑，不存在時回傳最近的既有上層目錄，不改動磁碟；供「檔案總管顯示」使用
 - `check_codex_project_trust(projectCwd) -> bool`：回傳該專案是否已被 codex 信任，僅 project scope 的 codex 分頁使用
 - `test_mcp_http_server(url, headers) -> McpConnectionTestResult`：不帶 `scope`（不涉及任何設定檔讀寫），對指定 URL 送出 MCP JSON-RPC `initialize` 請求以驗證 HTTP/SSE 類型連線是否可用，逾時 5 秒。回傳值為以 `kind` 欄位區分的聯集：`{ kind: "ok" }`（2xx 且回應為合法 JSON-RPC 結果）、`{ kind: "unauthorized" }`（401/403）、`{ kind: "unexpectedResponse", status }`（其他非預期狀態碼，或狀態碼為 2xx 但回應內容非合法 JSON-RPC —— 例如 URL 誤填為一般網頁端點）、`{ kind: "connectionFailed", message }`（DNS/TCP/TLS 等傳輸層錯誤）
 
