@@ -12,6 +12,7 @@ struct FakeHost {
     outcomes: Mutex<VecDeque<Result<String, CreditError>>>,
     query_errors: Mutex<VecDeque<CreditError>>,
     queries: AtomicUsize,
+    change_target_on_query: AtomicUsize,
     posts: AtomicUsize,
     notices: Mutex<Vec<String>>,
     deny_notification: AtomicBool,
@@ -21,6 +22,7 @@ struct FakeHost {
     epoch: AtomicUsize,
     advance_after_query: AtomicI64,
     switch_after_dispatch: AtomicBool,
+    leave_target_available: AtomicBool,
     consumed_scopes: Mutex<Vec<String>>,
     verify_notification_gate: AtomicBool,
     changes: AtomicUsize,
@@ -42,7 +44,8 @@ impl FakeHost {
             credits: Mutex::new(ResetCredits {
                 available_count: count,
                 credits: (0..count)
-                    .map(|_| ResetCreditEntry {
+                    .map(|index| ResetCreditEntry {
+                        id: Some(format!("credit-{index}")),
                         granted_at: Some("2026-10-01T00:00:00Z".into()),
                         expires_at: timestamp(now + seconds),
                         status: "active".into(),
@@ -52,6 +55,7 @@ impl FakeHost {
             outcomes: Mutex::new(VecDeque::new()),
             query_errors: Mutex::new(VecDeque::new()),
             queries: AtomicUsize::new(0),
+            change_target_on_query: AtomicUsize::new(0),
             posts: AtomicUsize::new(0),
             notices: Mutex::new(vec![]),
             deny_notification: AtomicBool::new(false),
@@ -61,6 +65,7 @@ impl FakeHost {
             epoch: AtomicUsize::new(0),
             advance_after_query: AtomicI64::new(0),
             switch_after_dispatch: AtomicBool::new(false),
+            leave_target_available: AtomicBool::new(false),
             consumed_scopes: Mutex::new(Vec::new()),
             verify_notification_gate: AtomicBool::new(false),
             changes: AtomicUsize::new(0),
@@ -100,7 +105,10 @@ impl Host for FakeHost {
         })
     }
     fn query(&self, _: &AppSettings, _: &Identity) -> Result<ResetCredits, CreditError> {
-        self.queries.fetch_add(1, Ordering::SeqCst);
+        let query = self.queries.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.change_target_on_query.load(Ordering::SeqCst) == query {
+            self.credits.lock().unwrap().credits[0].id = Some("new-target".into());
+        }
         if let Some(error) = self.query_errors.lock().unwrap().pop_front() {
             return Err(error);
         }
@@ -135,6 +143,7 @@ impl Host for FakeHost {
         context: Identity,
         _: &str,
         expiry: Option<i64>,
+        target: Option<&str>,
     ) -> Result<String, CreditError> {
         if expiry.is_some_and(|at| !in_use_window(at, self.now().timestamp())) {
             return Err(CreditError::new("missed"));
@@ -147,9 +156,13 @@ impl Host for FakeHost {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| Ok("reset".into()));
-        if matches!(result.as_deref(), Ok("reset")) {
+        if matches!(result.as_deref(), Ok("reset"))
+            && !self.leave_target_available.load(Ordering::SeqCst)
+        {
             let mut credits = self.credits.lock().unwrap();
-            if let Some(index) = credits.credits.iter().position(|c| c.status == "active") {
+            if let Some(index) = credits.credits.iter().position(|c| {
+                is_available(c) && target.is_none_or(|id| c.id.as_deref() == Some(id))
+            }) {
                 credits.credits[index].status = "used".into();
                 credits.available_count = credits.available_count.saturating_sub(1);
             }
@@ -389,17 +402,64 @@ fn reset_credit_notification_denial_does_not_block_auto() {
 }
 
 #[test]
-fn reset_credit_mixed_expiry_and_resume_after_expiry_never_consume() {
+fn reset_credit_mixed_expiry_consumes_only_earliest() {
     let host = FakeHost::new(2, 60);
     let db = database();
     let state = AutomationState::default();
     let mut engine = Engine::default();
-    host.credits.lock().unwrap().credits[1].expires_at = timestamp(host.now().timestamp() + 3600);
-    let status = engine.tick(&host, &db, &state).unwrap();
-    assert_eq!(status.reason.as_deref(), Some("selection_unverified"));
+    host.credits.lock().unwrap().credits[0].expires_at = timestamp(host.now().timestamp() + 3600);
+    engine.tick(&host, &db, &state).unwrap();
+    assert_eq!(host.credits.lock().unwrap().credits[0].status, "active");
+    assert_eq!(host.credits.lock().unwrap().credits[1].status, "used");
     host.advance(61);
     Engine::default().tick(&host, &db, &state).unwrap();
+    assert_eq!(host.posts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn reset_credit_auto_missing_id_never_posts() {
+    let host = FakeHost::new(1, 60);
+    host.credits.lock().unwrap().credits[0].id = None;
+    let status = Engine::default()
+        .tick(&host, &database(), &AutomationState::default())
+        .unwrap();
+    assert_eq!(status.auto_use_reason.as_deref(), Some("unknown_credit_id"));
     assert_eq!(host.posts.load(Ordering::SeqCst), 0);
+    assert!(
+        notification_body("zh-TW", (1, 0), 0, true, Some("unknown_credit_id")).contains("識別碼")
+    );
+    assert!(
+        notification_body("en-US", (1, 0), 0, true, Some("unknown_credit_id"))
+            .contains("credit IDs")
+    );
+}
+
+#[test]
+fn reset_credit_changed_target_is_rechecked_before_dispatch() {
+    let host = FakeHost::new(1, 60);
+    host.change_target_on_query.store(2, Ordering::SeqCst);
+    let db = database();
+    let state = AutomationState::default();
+    let mut engine = Engine::default();
+    engine.tick(&host, &db, &state).unwrap();
+    assert_eq!(host.posts.load(Ordering::SeqCst), 0);
+    host.advance(20);
+    engine.tick(&host, &db, &state).unwrap();
+    assert_eq!(host.posts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn reset_credit_success_without_target_confirmation_stops_batch() {
+    let host = FakeHost::new(2, 60);
+    host.leave_target_available.store(true, Ordering::SeqCst);
+    let db = database();
+    let state = AutomationState::default();
+    let mut engine = Engine::default();
+    engine.tick(&host, &db, &state).unwrap();
+    assert_eq!(host.posts.load(Ordering::SeqCst), 1);
+    host.advance(10);
+    engine.tick(&host, &db, &state).unwrap();
+    assert_eq!(host.posts.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -461,6 +521,19 @@ fn reset_credit_manual_rejects_unconfirmed_active_count() {
         Err("inconsistent".into())
     );
     assert_eq!(host.posts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn reset_credit_manual_accepts_available_status() {
+    let host = FakeHost::new(1, 3600);
+    let db = database();
+    let state = AutomationState::default();
+    host.credits.lock().unwrap().credits[0].status = "Available".into();
+    assert_eq!(
+        consume_manual_internal(&host, &db, &state, "manual-available", "account-a"),
+        Ok("reset".into())
+    );
+    assert_eq!(host.posts.load(Ordering::SeqCst), 1);
 }
 
 #[test]

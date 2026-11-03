@@ -8,7 +8,7 @@ QuotaOverview 的 Codex 重置額度標題前 SHALL 顯示使用重置按鈕，�
 
 - **WHEN** 使用者確認操作，且 Codex 額度監控已啟用、具有 ChatGPT 帳戶 ID 與可用重置額度
 - **THEN** 後端先重新查詢可用重置額度，再以相同 Codex 憑證呼叫 `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`
-- **AND** 請求 JSON 包含新產生的 `redeem_request_id`，若有 account ID 則附帶 `ChatGPT-Account-Id` header
+- **AND** 請求 JSON 包含新產生的 `redeem_request_id`；手動流程維持不指定 `credit_id`，若有 account ID 則附帶 `ChatGPT-Account-Id` header
 - **AND** 前端顯示後端回傳的 `reset`、`nothing_to_reset`、`no_credit` 或 `already_redeemed` 對應結果，完成後重新整理 Codex 額度與可用次數
 - **AND** 取得帳號執行權後仍須重新驗證帳號與可用額度，不得因等待期間登入帳號改變而消耗另一帳號
 - **AND** 開啟確認視窗時綁定所見快照的帳號範圍，確認送出時攜帶該範圍；後端須與目前解析出的帳號一致才接受操作
@@ -23,7 +23,7 @@ QuotaOverview 的 Codex 重置額度標題前 SHALL 顯示使用重置按鈕，�
 - **WHEN** 憑證無效、請求失敗、回應格式未知或網路逾時
 - **THEN** 顯示錯誤或提示使用者重新整理確認結果
 - **AND** 操作按鈕恢復可用狀態，並重新整理 Codex snapshot；不得自行宣稱已完成重置
-- **AND** 結果不明尚未解除時，後端不得接受同一帳號任何新消耗；按鈕可回報需重新整理確認的狀態。僅在重新查詢確認原觀察券皆不可用，或其到期時間皆已過且沒有未知到期券時解除
+- **AND** 結果不明尚未解除時，後端不得接受同一帳號任何新消耗；按鈕可回報需重新整理確認的狀態。手動與舊版無目標 ID 的紀錄僅在原觀察券皆不可用，或其到期時間皆已過且沒有未知到期券時解除；新自動指定券紀錄依目標 ID 核對規則解除
 
 #### Scenario: 自動使用進行中遇到手動使用
 
@@ -51,7 +51,7 @@ QuotaOverview 的 Codex 重置額度標題前 SHALL 顯示使用重置按鈕，�
 
 #### Scenario: 可用張數與可確認明細不一致
 
-- **WHEN** 手動操作重新查詢得到正的可用數，但無法以 active 明細確認相同張數
+- **WHEN** 手動操作重新查詢得到正的可用數，但無法以 `available` 或相容的 `active` 明細確認相同張數（狀態比對不分大小寫）
 - **THEN** 不送出消耗，顯示資料不一致並要求重新整理
 - **AND** 未知狀態或缺漏明細不得成為繞過結果不明阻擋的依據
 

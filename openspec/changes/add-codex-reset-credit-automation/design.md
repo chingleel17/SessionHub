@@ -4,8 +4,8 @@
 
 動機見 `proposal.md`。目前資料與限制如下：
 
-- `src-tauri/src/types/quota.rs` 的 `ResetCredits` 提供總可用張數與明細；每筆僅有 `granted_at`、`expires_at`、`status`，沒有穩定券 ID。到期時間可缺少，既有轉換精度為 UTC 秒。
-- `quota/codex.rs` 已有 GET reset-credits 與 POST consume。POST 僅接受 `redeem_request_id`，不能指定券；目前沒有服務端最早到期優先或重試冪等性的已驗證契約。
+- 現有 `ResetCredits` 尚未保存官方明細的 `id`；OpenAI Codex 官方用戶端的明細模型包含 `id`、`status` 與選填 `expires_at`，既有時間轉換精度為 UTC 秒。
+- OpenAI Codex 官方用戶端以 `credit_id` 指定 POST consume 的目標券，另傳 `redeem_request_id`；沒有已驗證的服務端預設選券順序或重試冪等契約。
 - 查詢可退回 OpenCode 的 OpenAI OAuth，但現有消耗僅讀 Codex CLI 憑證，需讓查詢／消耗使用同一個解析結果。
 - `app_setup.rs` 現有背景用量刷新每 60 秒檢查、約每 30 分鐘刷新，不足以處理一分鐘的到期區間。
 - 設定由 `AppSettings` 持久化；原生通知已有 Tauri plugin。前端 IPC 集中 `App.tsx`，通知與消耗不能依賴前端頁面保持掛載。
@@ -20,7 +20,7 @@
 
 **Non-Goals:**
 
-- 不建立逐券 ID、不模擬使用者產生 Codex 用量來耗完券、不猜測服務端選券順序。
+- 不自行生成或推測券 ID、不模擬使用者產生 Codex 用量來耗完券、不猜測服務端預設選券順序。
 - 不新增跨多帳號管理、雲端排程、OS 常駐服務或退出後執行機制。
 
 ## Decisions
@@ -31,7 +31,7 @@
 
 - 提醒採本地日曆日期，區間為 `(now, start_of_local_day(today + days_before + 1))`；「今天」及「未來 D 天」分別計數。跨日計算使用日期／時區轉換，不用 `24h * 天數` 代替，處理日光節約時間。
 - 自動使用以 UTC 時刻比較，區間為 `[expires_at - 60s, expires_at)`，恰好到期不送新請求。
-- 未知 status 不推定可用；`active` 且缺到期時間可繼續顯示，但不排程。自動使用前核對總可用張數與 active 明細數；不一致即暫停。
+- 可用狀態為不分大小寫的 `available` 或相容既有資料的 `active`；未知 status 不推定可用。可用券缺到期時間可繼續顯示但不得自動選券；自動使用前核對總可用張數與可用明細數。
 - 前後端均驗證 `HH:mm` 與整數天數；載入時使用逐欄位容錯／正規化，避免負數或錯誤型別使整份設定載入失敗。儲存時拒絕無效輸入，不把錯誤資料靜默存成預設值。
 - 前端 `mergeAppSettings` 只保留 `DEFAULT_APP_SETTINGS` 既有鍵，因此四個新欄位必須同步加入 `src/utils/appSettingsDefaults.ts`；驗證須包含真正經過表單合併的儲存往返，不僅是 Rust／JSON 序列化。
 - 釘選或其他功能的背景保存須沿用目前已儲存的四個重置券值，不能把設定頁草稿一起送出；只有明確按下設定儲存時才採用草稿。
@@ -72,7 +72,7 @@ GET 的暫時性失敗可有界重試：每日檢查最多 3 次，首次失敗�
 
 將現有憑證解析整理為 quota 內部的 account context，包含憑證來源、ChatGPT 帳號 ID 及僅在記憶體使用的授權資料。GET 與 POST 接收同一 context，保留既有 Codex 優先、OpenCode 備援來源；不得查到 A 的券後重新解析並送往 B。
 
-自動化直接查詢回傳有型別的結果：`available`（含合法的零張）、`unsupported`（如 404）、`no_auth`、`transient_error`、`invalid_response`。不得把 adapter 的 best-effort `reset_credits: null` 視為零張；缺少必要計數、錯誤型別或未成功取得明細不使用零值補齊。`active` 且到期欄位無效的單筆仍按既定資格規則處理，不讓其他欄位成功掩蓋整個查詢失敗。
+自動化直接查詢回傳有型別的結果：`available`（含合法的零張）、`unsupported`（如 404）、`no_auth`、`transient_error`、`invalid_response`。不得把 adapter 的 best-effort `reset_credits: null` 視為零張；缺少必要計數、錯誤型別或未成功取得明細不使用零值補齊。可用狀態且到期欄位無效的單筆仍按既定資格規則處理，不讓其他欄位成功掩蓋整個查詢失敗。
 
 本功能不更新 OAuth token、不呼叫 CLI 代為登入。Codex 來源可讀但 API 回報未授權時，不因 401 靜默切換其他帳號；記錄登入失效，暫停同一失效憑證的定時請求，憑證更新或程序啟動後才重新檢查。解析器來源優先順序維持既有慣例；任何來源變更仍須重新核對帳號範圍。
 
@@ -86,22 +86,17 @@ Codex snapshot 增加選填的 `accountScope`，非 Codex provider 不受影響�
 
 Dashboard 手動操作保留既有「全域用量監控與 Codex 用量 provider 開啟」的條件；不因停用 Codex session 掃描而禁止手動使用。重置券提醒及自動使用則不依賴上述平台開關，只依自身旗標、帳號與原有券資格檢查。
 
-手動新消耗亦須確認 active 明細數與可用數一致，不能只因總數大於零就使用。核對 unknown 時，未知狀態不得視為已不可用；若目前明細不完整／計數不一致，亦不得單憑原券未出現在清單就解除阻擋。憑證拒絕的記憶以獨立的憑證指紋辨識，POST 401／403 與 GET 共用；指紋不含設定世代，避免不相關的設定保存重新啟用同一失效 token。
+手動新消耗亦須確認可用狀態明細數與可用數一致，不能只因總數大於零就使用。核對 unknown 時，未知狀態不得視為已不可用；若目前明細不完整／計數不一致，亦不得單憑原券未出現在清單就解除阻擋。憑證拒絕的記憶以獨立的憑證指紋辨識，POST 401／403 與 GET 共用；指紋不含設定世代，避免不相關的設定保存重新啟用同一失效 token。
 
 **取捨：** 重用現有 API 與 UI 確認流程，不由背景協調器呼叫 Tauri command，也不新增自動模式繞過共用協調。
 
-### 4. 以到期批次處理多張券，不偽造逐券識別
+### 4. 以官方券 ID 指定最早到期的券
 
 自動批次以 `(account_scope, expires_at_utc)` 識別，同效期相同明細以張數保留，不以內容去重而遺失張數。首筆請求前保存該批次可用數作為本批次上限；批次已有終止紀錄時，不因刷新、重啟或不同設定版本重新產生批次。
 
-目前沒有已驗證的選券契約，因此首版僅允許：
+GET 明細保留官方 `id`，在模型與持久快照中以選填欄位相容舊資料；舊快照缺 ID 只能顯示，不能授權自動消耗。每次候選與 POST 前重新查詢並核對同一帳號：所有可用明細須與總數一致，ID 為非空且彼此唯一，效期均可解析且尚未到期；否則暫停並顯示原因。依實際 UTC 到期時刻選最早者，同效期以 ID 字典序選取，不能依 API 陣列順序選券。
 
-- 只有一張可用券，且該券已進入到期區間。
-- 所有可用券均有相同且已知的到期時間，且已進入到期區間。
-
-若未來能以可核對的服務端契約證明最早到期優先，再放寬混合效期；本次不得從回傳排序或單次觀察推論。任何 active 券缺到期時間、混合效期或明細／總數不一致，均顯示對應暫停原因，不盲目消耗較晚到期券。
-
-允許的批次逐次 POST，`reset` 後必須重新查詢，確認該批次張數減少且仍未到期，才繼續。總請求數受最初到期張數限制；`nothing_to_reset`、`no_credit`、`already_redeemed`、錯誤、結果不明或無法確認張數減少皆終止本批次，不在下一個 tick 重新開始。`nothing_to_reset` 只表示此次無需重置，不推論所有剩餘券已使用。
+消耗只在目標券到期前 60 秒內進行；最後重查若目標已改變、已不可用或逾期，重新評估而非沿用舊 ID。自動 POST 同時帶 `redeem_request_id` 與目標 `credit_id`；手動維持既有不指定券的行為。每次 `reset` 後重查，確認指定 ID 已明確不可用且總數／明細一致，才可處理下一張同效期券；目標仍可用、缺失但明細不完整、查詢失敗或狀態未知均停止批次。總請求數受初始批次張數限制；`nothing_to_reset`、`no_credit`、`already_redeemed`、錯誤或結果不明均終止本批次，不能在下一個 tick 重開。
 
 **取捨：** 無法保證所有券都能使用，尤其服務端沒有需要重置的用量時；保留這個實際結果比反覆 POST 或假造成功更符合 API 能力。
 
@@ -123,9 +118,9 @@ Dashboard 手動操作保留既有「全域用量監控與 Codex 用量 provider
 
 request ID 一旦存在即不可改變其帳號／來源／操作內容。相同請求再次抵達只讀回既有狀態；不同內容則拒絕，不能用 upsert 覆寫後重新 POST。缺少 request ID 或 expected scope 在進入送出階段前拒絕。自動化不透過前端產生消耗 ID。
 
-`unknown` 存在時暫停該帳號後續消耗，重新查詢以對照原先觀察的到期批次。原批次已不存在可用券或全部到期後解除阻擋，但歷史仍保留結果不明，不改標成功。手動不指定券，故其不明紀錄須包含請求前所有可用批次，不能只猜最早一批；無到期資訊的原券仍存在時持續保留阻擋。
+`unknown` 存在時暫停該帳號後續消耗。新自動請求須於 pending 紀錄目標 ID 及效期；以一致且完整的最新明細確認該 ID 明確不可用或其原效期已過後解除阻擋，歷史仍保留結果不明，不改標成功。舊版無目標 ID 的 pending／unknown 及手動不指定券的紀錄，仍以原先保存的全部觀察券及既有保守核對規則處理，不因升級解除阻擋。
 
-若 DB 無法寫入、已存在無法排除的 pending／unknown，或刷新不能核對帳號，禁止新的消耗。只存分類及必要到期資訊，不存 token、授權 header 或原始憑證。
+若 DB 無法寫入、已存在無法排除的 pending／unknown，或刷新不能核對帳號，禁止新的消耗。只存分類、必要券 ID 及到期資訊，不存 token、授權 header 或原始憑證。
 
 以上表是操作日誌，與 quota snapshot 的 prune／重建分離。停用 provider、關閉開關及清除可重建快照均不得刪除此日誌；歷史沿用 metadata.db 的生命週期，不新增自動清理策略。保證範圍是同一份完整的資料庫；外部刪除、替換或回復舊備份後無法還原已遺失的去重證據，本次不新增偵測外部還原或第二份影子日誌機制。DB 執行中失效時停止副作用，不以清空表格自動修復。未來若提供資料重設／備份還原功能，須另定此操作日誌的處理契約。
 
@@ -155,7 +150,7 @@ request ID 一旦存在即不可改變其帳號／來源／操作內容。相同
 | --- | --- |
 | 等待期限、帳號鎖、GET 或前置條件 | 尚未取得送出執行權，可取消；暫時性 GET 依持久化預算重試 |
 | 最後核對成功並取得送出執行權 | 先寫 pending，再發一次 POST；已進入副作用執行階段 |
-| 明確 reset／nothing_to_reset／no_credit／already_redeemed | 保存原結果；只有 reset 且重查同批次減少才可續下一張 |
+| 明確 reset／nothing_to_reset／no_credit／already_redeemed | 保存原結果；只有 reset 且重查確認目標 ID 不可用才可續下一張 |
 | 本地送出前可確認失敗，或明確的 401／403／429 拒絕回應 | 保存 failed 及原因，停止本批次；401／403 顯示登入原因，429 保存退避，不另發 consume |
 | POST 逾時、I/O 中斷、3xx、不明 5xx、解析失敗、重啟遺留 pending | 保存 unknown，帳號級阻擋；不因傳輸錯誤推論未消耗 |
 | API 結果已知，但後續日誌寫入失敗 | 不發後續 POST；記憶體保留已知結果，持久 pending 在重啟後保守視為 unknown |
@@ -165,7 +160,7 @@ request ID 一旦存在即不可改變其帳號／來源／操作內容。相同
 ## Risks / Trade-offs
 
 - **一分鐘區間短且有網路延遲** → 十秒檢查、事前發現候選、請求逾時及到期前重查；超過期限不補用，明確呈現失敗／錯過。
-- **無指定券與選券順序契約** → 首版採單張或全數同效期的可確認範圍，混合效期提供暫停原因，不能宣稱必用掉特定券。
+- **官方端點與資料變動** → 明確傳送目標 `credit_id`，缺失、重複或無法確認時暫停；不因舊快照或一次成功觀察推測選券結果。
 - **程序退出、休眠與關機** → 生命週期補查僅針對仍有效工作，設定頁說明執行範圍；不自動修改開機啟動或最小化至系統匣設定。
 - **至多一次通知可能在崩潰時漏送** → 接受比重複提醒更小的副作用，保留提交狀態供檢查。
 - **API 成功與 DB 更新無法形成跨系統交易** → 預先日誌及 unknown 狀態，不盲目重送；同一帳號手動與自動都遵守阻擋。
@@ -175,7 +170,7 @@ request ID 一旦存在即不可改變其帳號／來源／操作內容。相同
 ## Migration Plan
 
 1. 新增設定預設及逐欄位驗證，缺新欄位的舊設定載入後兩個開關皆關閉。
-2. 新增 SQLite 表與唯一條件，不刪除既有快照／session 資料；Codex 舊快照缺帳號範圍時標為未確認，不直接授權消耗。
+2. 新增 SQLite 表與唯一條件，不刪除既有快照／session 資料；Codex 舊快照缺帳號範圍時標為未確認，不直接授權消耗。逐券 ID 改版以選填欄位及加法 migration 相容既有快照與日誌，不回填猜測的 ID；保留舊終止批次與未解除紀錄。
 3. 先接妥共用帳號及手動消耗協調，再啟動提醒／自動批次；背景功能只有在已儲存設定開啟時運作。
 4. 以隔離資料目錄、假時鐘／假 HTTP 完成自動驗收；原生通知以 Windows 安裝版驗收，測試不得實際消耗真實帳號的券。
 5. 回復時先關閉兩項開關並確認沒有執行中請求。可保留新增表及設定欄位；回復到不認識日誌的舊版本時，不重播未完成工作，舊版手動操作無法提供新版本的不明結果阻擋保證。
@@ -183,6 +178,7 @@ request ID 一旦存在即不可改變其帳號／來源／操作內容。相同
 ## References
 
 - 專案既有契約：`openspec/specs/provider-quota-monitoring/spec.md`、`openspec/specs/app-settings/spec.md`、`openspec/specs/windows-notification-identity/spec.md`。
+- OpenAI Codex 官方指定券實作：https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs；明細與請求測試：https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets_tests.rs（公開用戶端實作，不代表預設選券順序或服務端相容性保證）。
 - Tauri 2 Notifications（2026-10-30 查核）：https://v2.tauri.app/plugin/notification/
 - Tauri Process Model：https://v2.tauri.app/concept/process-model/
 - Tauri System Tray：https://v2.tauri.app/learn/system-tray/

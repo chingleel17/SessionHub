@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { mergeAppSettings } from "../src/utils/appSettingsDefaults";
+import { resetCreditMessage } from "../src/utils/resetCreditAutomation";
+import { zhTwMessages } from "../src/locales/zh-TW";
+import { enUsMessages } from "../src/locales/en-US";
 
 describe("reset credit settings merge", () => {
+  test("missing credit ID has localized recovery guidance", () => {
+    expect(resetCreditMessage((key) => zhTwMessages[key], "unknown_credit_id")).toContain("識別碼");
+    expect(resetCreditMessage((key) => enUsMessages[key], "unknown_credit_id")).toContain("IDs");
+  });
   test("old form data retains defaults through a save round trip", () => {
     const old = { copilotRoot: "copilot", opencodeRoot: "open", codexRoot: "codex", enabledProviders: ["codex"], showArchived: false };
     const saved = JSON.parse(JSON.stringify({ ...old, ...mergeAppSettings(old), showArchived: true }));

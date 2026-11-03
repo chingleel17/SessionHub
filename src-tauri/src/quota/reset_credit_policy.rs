@@ -21,34 +21,77 @@ pub(crate) fn expires_at(credit: &ResetCreditEntry) -> Option<i64> {
         .map(|t| t.timestamp())
 }
 
+pub(crate) fn is_available(credit: &ResetCreditEntry) -> bool {
+    credit.status.eq_ignore_ascii_case("active") || credit.status.eq_ignore_ascii_case("available")
+}
+
 pub(crate) fn in_use_window(expiry: i64, now: i64) -> bool {
     expiry.saturating_sub(AUTO_USE_LEAD_SECONDS) <= now && now < expiry
 }
 
 pub(crate) fn eligible_expiry(credits: &ResetCredits, now: i64) -> Result<i64, &'static str> {
+    eligible_credit(credits, now).map(|(expiry, _)| expiry)
+}
+
+pub(crate) fn eligible_credit(
+    credits: &ResetCredits,
+    now: i64,
+) -> Result<(i64, &str), &'static str> {
     if credits.available_count == 0 {
         return Err("no_credit");
     }
-    let active: Vec<_> = credits
-        .credits
-        .iter()
-        .filter(|c| c.status == "active")
-        .collect();
+    let active: Vec<_> = credits.credits.iter().filter(|c| is_available(c)).collect();
     if active.len() != credits.available_count as usize {
         return Err("inconsistent");
     }
-    let mut common = None;
+    let mut selected = None;
+    let mut ids = std::collections::HashSet::new();
     for credit in active {
+        let id = credit
+            .id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or("unknown_credit_id")?;
+        if !ids.insert(id) {
+            return Err("unknown_credit_id");
+        }
         let expiry = expires_at(credit).ok_or("unknown_expiry")?;
         if expiry <= now {
             return Err("missed");
         }
-        if common.is_some_and(|previous| previous != expiry) {
-            return Err("selection_unverified");
-        }
-        common = Some(expiry);
+        let candidate = (expiry, id);
+        selected =
+            Some(selected.map_or(candidate, |previous: (i64, &str)| previous.min(candidate)));
     }
-    common.ok_or("no_credit")
+    selected.ok_or("no_credit")
+}
+
+pub(crate) fn target_unavailable(id: &str, credits: &ResetCredits) -> bool {
+    if credits.credits.iter().filter(|c| is_available(c)).count()
+        != credits.available_count as usize
+    {
+        return false;
+    }
+    let mut ids = std::collections::HashSet::new();
+    if credits
+        .credits
+        .iter()
+        .filter_map(|c| c.id.as_deref())
+        .any(|id| !ids.insert(id))
+    {
+        return false;
+    }
+    let mut matching = credits
+        .credits
+        .iter()
+        .filter(|c| c.id.as_deref() == Some(id));
+    let Some(credit) = matching.next() else {
+        return false;
+    };
+    matching.next().is_none()
+        && ["expired", "used", "redeemed", "consumed"]
+            .iter()
+            .any(|status| credit.status.eq_ignore_ascii_case(status))
 }
 
 pub(crate) fn reminder_counts<T: TimeZone>(
@@ -62,7 +105,7 @@ pub(crate) fn reminder_counts<T: TimeZone>(
         .unwrap_or(today);
     let mut counts = (0, 0);
     for credit in &credits.credits {
-        if credit.status != "active" {
+        if !is_available(credit) {
             continue;
         }
         let Some(expiry) = expires_at(credit).and_then(|t| DateTime::<Utc>::from_timestamp(t, 0))
@@ -132,11 +175,7 @@ pub(crate) fn original_credits_resolved(
     {
         return true;
     }
-    if current
-        .credits
-        .iter()
-        .filter(|c| c.status == "active")
-        .count()
+    if current.credits.iter().filter(|c| is_available(c)).count()
         != current.available_count as usize
     {
         return false;
@@ -156,6 +195,7 @@ mod tests {
     use super::*;
     fn credit(expiry: Option<&str>, status: &str) -> ResetCreditEntry {
         ResetCreditEntry {
+            id: Some("credit".into()),
             granted_at: Some("2026-10-01T00:00:00Z".into()),
             expires_at: expiry.map(str::to_string),
             status: status.into(),
@@ -171,13 +211,68 @@ mod tests {
             available_count: 2,
             credits: vec![credit(Some("2026-10-30T10:00:00Z"), "active"); 2],
         };
+        credits.credits[1].id = Some("credit-2".into());
         assert!(eligible_expiry(&credits, 1).is_ok());
         credits.credits[1].expires_at = Some("2026-11-01T10:00:00Z".into());
-        assert_eq!(eligible_expiry(&credits, 1), Err("selection_unverified"));
+        assert_eq!(eligible_credit(&credits, 1).unwrap().1, "credit");
         credits.credits[1].expires_at = None;
         assert_eq!(eligible_expiry(&credits, 1), Err("unknown_expiry"));
         credits.available_count = 1;
         assert_eq!(eligible_expiry(&credits, 1), Err("inconsistent"));
+    }
+    #[test]
+    fn available_status_is_counted_without_relaxing_expiry_selection() {
+        let now = chrono_tz::Asia::Taipei
+            .with_ymd_and_hms(2026, 11, 2, 9, 0, 0)
+            .unwrap();
+        let mut credits = ResetCredits {
+            available_count: 3,
+            credits: vec![
+                credit(Some("2026-11-07T00:00:00Z"), "Available"),
+                credit(Some("2026-12-01T00:00:00Z"), "available"),
+                credit(Some("2026-12-02T00:00:00Z"), "active"),
+            ],
+        };
+        credits.credits[1].id = Some("credit-2".into());
+        credits.credits[2].id = Some("credit-3".into());
+        assert_eq!(
+            eligible_credit(&credits, now.timestamp()).unwrap().1,
+            "credit"
+        );
+        assert_eq!(reminder_counts(&credits, &now, 5), (0, 1));
+        credits.credits[1].status = "unknown".into();
+        assert_eq!(
+            eligible_expiry(&credits, now.timestamp()),
+            Err("inconsistent")
+        );
+    }
+    #[test]
+    fn reset_credit_id_validation_and_reconciliation_are_conservative() {
+        let mut credits = ResetCredits {
+            available_count: 2,
+            credits: vec![
+                credit(Some("2026-11-07T00:00:00Z"), "available"),
+                credit(Some("2026-11-07T00:00:00Z"), "available"),
+            ],
+        };
+        assert_eq!(eligible_credit(&credits, 1), Err("unknown_credit_id"));
+        credits.credits[1].id = Some("a".into());
+        assert_eq!(eligible_credit(&credits, 1).unwrap().1, "a");
+        credits.credits[1].id = None;
+        assert_eq!(eligible_credit(&credits, 1), Err("unknown_credit_id"));
+        credits.credits[1].id = Some("a".into());
+        credits.credits[1].status = "used".into();
+        credits.available_count = 1;
+        assert!(target_unavailable("a", &credits));
+        credits.credits[1].status = "unknown".into();
+        assert!(!target_unavailable("a", &credits));
+        assert!(!target_unavailable("missing", &credits));
+        credits.credits[1].status = "used".into();
+        credits.available_count = 2;
+        assert!(!target_unavailable("a", &credits));
+        credits.available_count = 1;
+        credits.credits[0].id = Some("a".into());
+        assert!(!target_unavailable("a", &credits));
     }
     #[test]
     fn reset_credit_counts_use_local_calendar_and_exclude_expired_or_unknown() {

@@ -126,6 +126,7 @@ pub(crate) trait Host {
         context: Self::ConsumeContext,
         id: &str,
         expiry: Option<i64>,
+        target: Option<&str>,
     ) -> Result<String, CreditError>;
     fn notify(
         &self,
@@ -148,6 +149,19 @@ fn with_db<T>(
 
 fn timestamp(value: i64) -> Option<String> {
     DateTime::<Utc>::from_timestamp(value, 0).map(|t| t.to_rfc3339())
+}
+
+fn reconcile_target(
+    original: &[crate::types::ResetCreditEntry],
+    target: Option<&str>,
+    expiry: Option<i64>,
+    credits: &ResetCredits,
+    now: i64,
+) -> bool {
+    match target {
+        Some(id) => expiry.is_some_and(|expiry| expiry <= now) || target_unavailable(id, credits),
+        None => original_credits_resolved(original, credits, now),
+    }
 }
 
 /// 同 ID 只能回讀，不能再執行。呼叫端提供的帳號範圍不是登入授權。
@@ -198,6 +212,16 @@ fn dispatch(
     if let Some(result) = prior_result(db, identity, id, expiry)? {
         return Ok(result);
     }
+    let target = if let Some(expiry) = expiry {
+        let (selected_expiry, target) =
+            eligible_credit(credits, host.now().timestamp()).map_err(str::to_string)?;
+        if selected_expiry != expiry {
+            return Err("missed".into());
+        }
+        Some(target)
+    } else {
+        None
+    };
     let context;
     {
         let _gate = SETTINGS_WRITE_GATE.lock().map_err(|_| "storage_error")?;
@@ -221,8 +245,8 @@ fn dispatch(
             }
         }
         if !with_db(db, |c| {
-            journal::reconcile(c, &identity.scope, |original| {
-                original_credits_resolved(original, credits, now)
+            journal::reconcile(c, &identity.scope, |original, target, expiry| {
+                reconcile_target(original, target, expiry, credits, now)
             })
         })? {
             return Err("unknown".into());
@@ -231,13 +255,13 @@ fn dispatch(
             .prepare_consume(&current, identity)
             .map_err(|e| e.code.to_string())?;
         with_db(db, |c| {
-            journal::begin_attempt(c, &identity.scope, id, expiry, credits, now)
+            journal::begin_attempt(c, &identity.scope, id, expiry, target, credits, now)
         })?;
     }
     if expiry.is_some() {
         host.publish(&state.running(&identity.scope)?);
     }
-    let result = host.consume(context, id, expiry);
+    let result = host.consume(context, id, expiry, target);
     let now = host.now().timestamp();
     let (code, unknown) = match &result {
         Ok(code) => (code.as_str(), false),
@@ -282,11 +306,7 @@ pub(crate) fn consume_manual_internal(
     if credits.available_count == 0 {
         return Err("no_credit".into());
     }
-    if credits
-        .credits
-        .iter()
-        .filter(|c| c.status == "active")
-        .count()
+    if credits.credits.iter().filter(|c| is_available(c)).count()
         != credits.available_count as usize
     {
         return Err("inconsistent".into());
@@ -457,13 +477,19 @@ impl Engine {
                                 })?;
                                 if claimed == "claimed" {
                                     let reconciled = with_db(db, |c| {
-                                        journal::reconcile(c, &identity.scope, |original| {
-                                            original_credits_resolved(
-                                                original,
-                                                &credits,
-                                                now.timestamp(),
-                                            )
-                                        })
+                                        journal::reconcile(
+                                            c,
+                                            &identity.scope,
+                                            |original, target, expiry| {
+                                                reconcile_target(
+                                                    original,
+                                                    target,
+                                                    expiry,
+                                                    &credits,
+                                                    now.timestamp(),
+                                                )
+                                            },
+                                        )
                                     })?;
                                     let reason = if !reconciled {
                                         Some("unknown")
@@ -550,8 +576,8 @@ impl Engine {
             }
             if let Some(credits) = &self.credits {
                 if !with_db(db, |c| {
-                    journal::reconcile(c, &identity.scope, |original| {
-                        original_credits_resolved(original, credits, host.now().timestamp())
+                    journal::reconcile(c, &identity.scope, |original, target, expiry| {
+                        reconcile_target(original, target, expiry, credits, host.now().timestamp())
                     })
                 })? {
                     status.reason = Some("unknown".into());
@@ -616,7 +642,17 @@ impl Engine {
             return Ok(());
         }
         if !with_db(db, |c| {
-            journal::claim_auto_query(c, &identity.scope, expiry, candidate.available_count, now)
+            journal::claim_auto_query(
+                c,
+                &identity.scope,
+                expiry,
+                candidate
+                    .credits
+                    .iter()
+                    .filter(|c| is_available(c) && expires_at(c) == Some(expiry))
+                    .count() as u32,
+                now,
+            )
         })? {
             return Ok(());
         }
@@ -633,8 +669,23 @@ impl Engine {
             }
         };
         self.query_error = None;
+        if eligible_credit(&candidate, now).ok()
+            != eligible_credit(&credits, host.now().timestamp()).ok()
+        {
+            self.credits = Some(credits);
+            return Ok(());
+        }
         with_db(db, |c| {
-            journal::limit_batch(c, &identity.scope, expiry, credits.available_count)
+            journal::limit_batch(
+                c,
+                &identity.scope,
+                expiry,
+                credits
+                    .credits
+                    .iter()
+                    .filter(|c| is_available(c) && expires_at(c) == Some(expiry))
+                    .count() as u32,
+            )
         })?;
         let mut attempted = false;
         loop {
@@ -660,7 +711,10 @@ impl Engine {
                 &hex[17..20],
                 &hex[20..32]
             );
-            let previous = credits.available_count;
+            let target = eligible_credit(&credits, now)
+                .map_err(str::to_string)?
+                .1
+                .to_string();
             let result = dispatch(
                 host,
                 db,
@@ -674,14 +728,7 @@ impl Engine {
             attempted |= with_db(db, |c| journal::attempt(c, &id))?.is_some();
             match result.as_deref() {
                 Ok("reset") => match host.query(settings, identity) {
-                    Ok(updated)
-                        if updated
-                            .credits
-                            .iter()
-                            .filter(|c| c.status == "active" && expires_at(c) == Some(expiry))
-                            .count()
-                            < previous as usize =>
-                    {
+                    Ok(updated) if target_unavailable(&target, &updated) => {
                         credits = updated;
                         self.credits = Some(credits.clone());
                         with_db(db, |c| journal::verified_batch(c, &identity.scope, expiry))?;
@@ -846,11 +893,12 @@ impl Host for ProductionHost<'_> {
         creds: CodexCredentials,
         id: &str,
         expiry: Option<i64>,
+        target: Option<&str>,
     ) -> Result<String, CreditError> {
         if expiry.is_some_and(|at| !in_use_window(at, Utc::now().timestamp())) {
             return Err(CreditError::new("missed"));
         }
-        let result = codex::consume_with_credentials(&creds, id);
+        let result = codex::consume_with_credentials(&creds, id, target);
         remember_auth_rejection(&creds.credential_revision(), &result);
         result
     }
@@ -940,6 +988,13 @@ pub(crate) fn notification_body(
         }
     } else {
         match reason {
+            Some("unknown_credit_id") => {
+                if en {
+                    " Auto-use is paused: credit IDs are missing or duplicated."
+                } else {
+                    "自動使用暫停：可用券識別碼缺失或重複。"
+                }
+            }
             Some("selection_unverified") => {
                 if en {
                     " Auto-use is paused: selection order is unverified. Handle manually."

@@ -28,6 +28,8 @@ pub(crate) struct ExtraCredits {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResetCreditEntry {
+    #[serde(default)]
+    pub(crate) id: Option<String>,
     pub(crate) granted_at: Option<String>,
     pub(crate) expires_at: Option<String>,
     pub(crate) status: String,

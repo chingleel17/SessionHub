@@ -2924,6 +2924,13 @@ html.embedded-quota-view .quota-overlay-no-drag {
   font-size: 12px;
 }
 
+.tray-panel-reset-credits {
+  margin-left: auto;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .tray-panel-provider-note--error {
   color: var(--color-error-text);
 }

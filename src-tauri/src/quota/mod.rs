@@ -142,6 +142,7 @@ mod tests {
             "a",
             "id",
             None,
+            None,
             &crate::types::ResetCredits {
                 available_count: 0,
                 credits: vec![],

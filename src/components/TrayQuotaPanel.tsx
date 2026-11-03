@@ -90,7 +90,7 @@ function sortSnapshots(snapshots: QuotaSnapshot[]): QuotaSnapshot[] {
     .sort((left, right) => compareProviders(left.provider, right.provider));
 }
 
-function WindowRow({ provider, window }: { provider: string; window: QuotaWindow }) {
+function WindowRow({ provider, window, resetCreditCount }: { provider: string; window: QuotaWindow; resetCreditCount?: number }) {
   const { t } = useI18n();
   const utilization = Math.max(0, Math.min(100, window.utilization * 100));
   const tone = getBarTone(window.utilization);
@@ -114,6 +114,9 @@ function WindowRow({ provider, window }: { provider: string; window: QuotaWindow
           {localizedWindowLabel(provider, window.windowKey, window.label, t)}
         </span>
         <span className="tray-panel-window-value">{Math.round(utilization)}%</span>
+        {resetCreditCount != null && resetCreditCount > 0 ? (
+          <span className="tray-panel-reset-credits">{t("quota.resetCredits.overlayCount", { count: resetCreditCount })}</span>
+        ) : null}
       </div>
       <div className="tray-panel-bar">
         <div className="tray-panel-bar-fill" style={{ width: `${utilization}%` }} />
@@ -161,8 +164,9 @@ export function TrayQuotaPanel({ snapshots, enabledProviders, onRefresh, onOpenS
 
               {snapshot.status === "ok" || snapshot.status === "rate_limited" ? (
                 <>
-                  {snapshot.windows?.map((window) => (
-                    <WindowRow key={`${snapshot.provider}-${window.windowKey}`} provider={snapshot.provider} window={window} />
+                  {snapshot.windows?.map((window, index) => (
+                    <WindowRow key={`${snapshot.provider}-${window.windowKey}`} provider={snapshot.provider} window={window}
+                      resetCreditCount={snapshot.provider === "codex" && index === 0 ? snapshot.resetCredits?.availableCount : undefined} />
                   ))}
 
                   {snapshot.status === "ok" && hasNoQuotaContent(snapshot) ? (

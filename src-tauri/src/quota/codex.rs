@@ -368,6 +368,10 @@ fn parse_reset_credit_entry(obj: &serde_json::Value) -> Option<ResetCreditEntry>
     }
 
     Some(ResetCreditEntry {
+        id: obj
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         granted_at,
         expires_at,
         status,
@@ -416,10 +420,12 @@ fn parse_consume_outcome(body: &serde_json::Value) -> Result<String, String> {
 pub(crate) fn consume_with_credentials(
     creds: &CodexCredentials,
     request_id: &str,
+    credit_id: Option<&str>,
 ) -> Result<String, CreditError> {
     consume_at(
         creds,
         request_id,
+        credit_id,
         CONSUME_RESET_CREDIT_URL,
         Duration::from_secs(10),
     )
@@ -428,13 +434,17 @@ pub(crate) fn consume_with_credentials(
 fn consume_at(
     creds: &CodexCredentials,
     request_id: &str,
+    credit_id: Option<&str>,
     url: &str,
     timeout: Duration,
 ) -> Result<String, CreditError> {
     if request_id.trim().is_empty() || creds.scope().is_none() {
         return Err(CreditError::new("no_auth"));
     }
-    let payload = serde_json::json!({ "redeem_request_id": request_id });
+    let mut payload = serde_json::json!({ "redeem_request_id": request_id });
+    if let Some(credit_id) = credit_id {
+        payload["credit_id"] = serde_json::json!(credit_id);
+    }
     let mut request = http::post(url, Some(timeout))
         .config()
         .max_redirects(0)
@@ -681,6 +691,19 @@ mod tests {
     }
 
     #[test]
+    fn reset_credit_ids_roundtrip_and_old_snapshots_remain_readable() {
+        let credits = parse_reset_credits_strict(&json!({"available_count":1,"credits":[{"id":"credit-1","status":"available","expires_at":"2026-12-01T00:00:00Z"}]})).unwrap();
+        assert_eq!(credits.credits[0].id.as_deref(), Some("credit-1"));
+        let roundtrip: ResetCredits =
+            serde_json::from_value(serde_json::to_value(&credits).unwrap()).unwrap();
+        assert_eq!(roundtrip, credits);
+        let old: ResetCreditEntry =
+            serde_json::from_value(json!({"status":"active","expiresAt":null,"grantedAt":null}))
+                .unwrap();
+        assert_eq!(old.id, None);
+    }
+
+    #[test]
     fn reset_credit_identity_is_independent_of_platform_preferences() {
         let _env = crate::shared_env_test_lock()
             .lock()
@@ -730,6 +753,65 @@ mod tests {
         assert!(!serialized.contains("test-only"));
         assert!(!serialized.contains("accountRevision"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reset_credit_consume_sends_selected_id() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            loop {
+                let n = stream.read(&mut buffer).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..n]);
+                if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..pos]);
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse().ok())
+                        })
+                        .unwrap();
+                    if request.len() >= pos + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let pos = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&request[pos + 4..]).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{\"code\":\"reset\"}").unwrap();
+            body
+        });
+        let creds = CodexCredentials {
+            access_token: "test-only".into(),
+            account_id: Some("test-account".into()),
+        };
+        assert_eq!(
+            consume_at(
+                &creds,
+                "request",
+                Some("earliest"),
+                &format!("http://{address}/consume"),
+                Duration::from_secs(2)
+            )
+            .unwrap(),
+            "reset"
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            json!({"redeem_request_id":"request", "credit_id":"earliest"})
+        );
     }
 
     #[test]
@@ -794,6 +876,7 @@ mod tests {
             let result = consume_at(
                 &creds,
                 "test-request",
+                Some("test-credit"),
                 &format!("http://{address}/consume"),
                 Duration::from_millis(100),
             );
