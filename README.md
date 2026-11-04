@@ -2,6 +2,8 @@
 
 > Windows 桌面版 AI coding session 工作台：集中管理多個 CLI provider 的 session、quota、Plans & Specs、Agents 與 MCP 設定。
 
+繁體中文 | [English](README.en.md)
+
 <p>
   <a href="https://github.com/chingleel17/SessionHub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/chingleel17/SessionHub/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
   <a href="https://github.com/chingleel17/SessionHub/releases"><img src="https://img.shields.io/github/v/release/chingleel17/SessionHub?style=for-the-badge&color=7c3aed" alt="Latest release"></a>
@@ -153,16 +155,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
-每個 Pull Request 會由 GitHub Actions 執行前端建置、Rust fmt、Clippy、單元測試、依賴漏洞檢查與祕密資料掃描。詳細規則請參考 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-CI 會自動驗證每個 PR；GitHub Copilot review 可在 repository 的設定中啟用，並會讀取 [.github/copilot-instructions.md](.github/copilot-instructions.md) 執行風險導向的程式碼審查。AI 審查只提供建議，最終仍由維護者決定是否合併。
-
 ## 貢獻與回報問題
 
-歡迎技術交流、錯誤回報與功能建議：
+歡迎技術交流、錯誤回報與功能建議。開發與貢獻方式請參考 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 - Bug 或功能建議：使用 GitHub [Issues](../../issues/new/choose)。
-- 程式碼變更：請先閱讀 [CONTRIBUTING.md](CONTRIBUTING.md)，再建立 Pull Request。
 - 安全漏洞：請依 [SECURITY.md](SECURITY.md) 的方式私下回報，不要直接公開在 Issue。
 
 ## 授權
