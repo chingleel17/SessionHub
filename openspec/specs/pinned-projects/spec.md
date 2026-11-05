@@ -1,3 +1,8 @@
+# pinned-projects Specification
+
+## Purpose
+規範以專案路徑為身分的釘選持久化、快速導覽與顯示名稱，維持冷啟動、名稱更新及分支切換時的一致行為，並避免釘選設定另存過期名稱而覆蓋目前專案資訊。
+
 ## Requirements
 
 ### Requirement: 釘選專案持久化
@@ -55,8 +60,17 @@ Sidebar SHALL 在主導覽區顯示釘選專案的快捷連結。
 #### Scenario: Sidebar 釘選區
 
 - **WHEN** sidebar 展開且有釘選專案
-- **THEN** Sidebar 中段顯示釘選專案列表（以路徑最後一段為名稱）
+- **THEN** Sidebar 中段顯示釘選專案列表，名稱取自目前專案群組標題，優先使用非空的 `repoName`，無值時使用 `repoRoot` 或 `cwd` 路徑最後一段
 - **AND** 點擊即切換至對應專案 tab（未開啟則先開啟）
+
+### Requirement: 釘選身分與顯示名稱分離
+
+系統 SHALL 僅以路徑 key 持久化釘選身分，不在 `pinnedProjects` 保存獨立名稱。釘選區與專案列表 SHALL 使用同一份專案群組標題；冷啟動先使用依 `sessions-cached-query` 與 `project-path-remap` 規格處理後的快取，背景掃描完成後再更新。名稱改變 SHALL NOT 被當成路徑 key 改變。
+
+#### Scenario: 同一路徑更新名稱後維持釘選
+- **WHEN** 已釘選專案的路徑 key 不變，但背景掃描更新其 `repoName`
+- **THEN** Sidebar 釘選區同步使用新標題，仍維持原釘選狀態
+- **AND** 不從釘選設定還原舊名稱，也不另行啟動 Git 查詢以顯示釘選項目
 
 ### Requirement: 專案分支標籤
 

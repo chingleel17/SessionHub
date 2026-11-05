@@ -2192,6 +2192,7 @@ pub(crate) fn instant_from_unix_secs(stored: i64) -> Instant {
     now.checked_sub(Duration::from_secs(elapsed)).unwrap_or(now)
 }
 
+#[cfg(test)]
 pub(crate) fn persist_provider_cache(
     connection: &Connection,
     provider: &str,
@@ -2206,6 +2207,15 @@ pub(crate) fn persist_provider_cache(
     let providers = vec![provider.to_string()];
     save_sessions_cache_to_db(connection, &providers, &provider_sessions)?;
 
+    persist_provider_scan_state(connection, provider, cache)
+}
+
+// 掃描途中僅保存進度，不得以原始 provider 資料覆寫已校正的顯示快取。
+pub(crate) fn persist_provider_scan_state(
+    connection: &Connection,
+    provider: &str,
+    cache: &ProviderCache,
+) -> Result<(), String> {
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())

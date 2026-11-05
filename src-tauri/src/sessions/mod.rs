@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::db::{
     apply_session_metadata, cleanup_usage_for_missing_sessions, instant_from_unix_secs,
     list_path_remaps, load_scan_state_from_db, load_session_mtimes_from_db,
-    load_sessions_cache_from_db, persist_provider_cache, remap_path, save_sessions_cache_to_db,
+    load_sessions_cache_from_db, persist_provider_scan_state, remap_path, save_sessions_cache_to_db,
 };
 use crate::settings::{
     resolve_antigravity_root, resolve_claude_root, resolve_codex_root, resolve_copilot_root,
@@ -200,11 +200,6 @@ pub(crate) fn get_sessions_internal(
             all_sessions.extend(cache.sessions.iter().cloned());
         }
 
-        if let Some(cache) = copilot_guard.as_ref() {
-            if let Err(error) = persist_provider_cache(&connection, COPILOT_PROVIDER, cache) {
-                eprintln!("failed to persist copilot cache: {error}");
-            }
-        }
     }
 
     // ── OpenCode provider ─────────────────────────────────────────────────────
@@ -267,11 +262,6 @@ pub(crate) fn get_sessions_internal(
                 all_sessions.extend(cache.sessions.iter().cloned());
             }
 
-            if let Some(cache) = oc_guard.as_ref() {
-                if let Err(error) = persist_provider_cache(&connection, OPENCODE_PROVIDER, cache) {
-                    eprintln!("failed to persist opencode cache: {error}");
-                }
-            }
         }
     }
 
@@ -332,11 +322,6 @@ pub(crate) fn get_sessions_internal(
                 all_sessions.extend(cache.sessions.iter().cloned());
             }
 
-            if let Some(cache) = codex_guard.as_ref() {
-                if let Err(error) = persist_provider_cache(&connection, CODEX_PROVIDER, cache) {
-                    eprintln!("failed to persist codex cache: {error}");
-                }
-            }
         }
     }
 
@@ -397,11 +382,6 @@ pub(crate) fn get_sessions_internal(
                 all_sessions.extend(cache.sessions.iter().cloned());
             }
 
-            if let Some(cache) = claude_guard.as_ref() {
-                if let Err(error) = persist_provider_cache(&connection, CLAUDE_PROVIDER, cache) {
-                    eprintln!("failed to persist claude cache: {error}");
-                }
-            }
         }
     }
 
@@ -469,56 +449,71 @@ pub(crate) fn get_sessions_internal(
                 all_sessions.extend(cache.sessions.iter().cloned());
             }
 
-            if let Some(cache) = antigravity_guard.as_ref() {
-                if let Err(error) = persist_provider_cache(&connection, ANTIGRAVITY_PROVIDER, cache)
-                {
-                    eprintln!("failed to persist antigravity cache: {error}");
-                }
-            }
         }
     }
 
+    refresh_session_project_metadata(connection, &mut all_sessions)?;
+
+    apply_session_metadata(connection, &mut all_sessions)?;
+    all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    // 冷啟動占位資料必須與本次回傳一致，包含路徑轉換及 Git 專案資訊。
+    save_sessions_cache_to_db(connection, &providers, &all_sessions)?;
+    // 顯示快取成功保存後才推進磁碟掃描游標，避免中斷時游標超前而漏掉 session。
+    for (provider, provider_cache) in [
+        (COPILOT_PROVIDER, &scan_cache.copilot),
+        (OPENCODE_PROVIDER, &scan_cache.opencode),
+        (CODEX_PROVIDER, &scan_cache.codex),
+        (CLAUDE_PROVIDER, &scan_cache.claude),
+        (ANTIGRAVITY_PROVIDER, &scan_cache.antigravity),
+    ] {
+        if !providers.iter().any(|enabled| enabled == provider) {
+            continue;
+        }
+        let guard = provider_cache
+            .lock()
+            .map_err(|_| format!("failed to lock {provider} scan cache"))?;
+        if let Some(cache) = guard.as_ref() {
+            persist_provider_scan_state(connection, provider, cache)?;
+        }
+    }
+    cleanup_usage_for_missing_sessions(connection, &providers)?;
+
+    Ok(all_sessions)
+}
+
+pub(crate) fn refresh_session_project_metadata(
+    connection: &Connection,
+    sessions: &mut [SessionInfo],
+) -> Result<(), String> {
+    apply_session_project_path_remaps(connection, sessions)?;
+    // Git 查詢僅在背景掃描執行，冷啟動快取不等待外部程序。
+    enrich_sessions_with_git_metadata(sessions);
+    Ok(())
+}
+
+// 快取讀取只套用資料庫內的路徑對應，不存取專案目錄或呼叫 Git。
+pub(crate) fn apply_session_project_path_remaps(
+    connection: &Connection,
+    sessions: &mut [SessionInfo],
+) -> Result<(), String> {
     let path_remaps = list_path_remaps(connection)?;
     if !path_remaps.is_empty() {
-        for session in &mut all_sessions {
+        for session in sessions.iter_mut() {
+            let old_cwd = session.cwd.clone();
+            let old_repo_root = session.repo_root.clone();
             if let Some(cwd) = session.cwd.as_deref() {
                 session.cwd = Some(remap_path(cwd, &path_remaps));
             }
             if let Some(repo_root) = session.repo_root.as_deref() {
                 session.repo_root = Some(remap_path(repo_root, &path_remaps));
             }
+            if session.cwd != old_cwd || session.repo_root != old_repo_root {
+                // 目標可能不是 Git 儲存庫；解析失敗時也不能留下舊目錄的名稱與分支。
+                session.repo_name = None;
+                session.git_branch = None;
+            }
         }
     }
 
-    // 磁碟快取含 Git 資訊；每次掃描仍需更新分支與專案名稱，避免冷啟動快取永久沿用舊分支。
-    let needs_git: Vec<usize> = all_sessions
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| {
-            s.cwd
-                .as_deref()
-                .map(|c| !c.trim().is_empty())
-                .unwrap_or(false)
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if !needs_git.is_empty() {
-        let subset: Vec<SessionInfo> = needs_git.iter().map(|&i| all_sessions[i].clone()).collect();
-        let mut enriched = subset;
-        enrich_sessions_with_git_metadata(&mut enriched);
-        for (pos, &i) in needs_git.iter().enumerate() {
-            all_sessions[i].repo_root = enriched[pos].repo_root.clone();
-            all_sessions[i].repo_name = enriched[pos].repo_name.clone();
-            all_sessions[i].git_branch = enriched[pos].git_branch.clone();
-        }
-    }
-
-    apply_session_metadata(connection, &mut all_sessions)?;
-    all_sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    // 冷啟動占位資料必須與本次回傳一致，包含路徑轉換及 Git 專案資訊。
-    save_sessions_cache_to_db(connection, &providers, &all_sessions)?;
-    cleanup_usage_for_missing_sessions(connection, &providers)?;
-
-    Ok(all_sessions)
+    Ok(())
 }
