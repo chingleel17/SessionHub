@@ -20,12 +20,10 @@ target
 # SessionHub 本機專案設定
 .sessionhub/
 
-# design-sync（staged 腳本、建置輸出、機器狀態）
+# Design Sync 本機預覽、設定與建置產物
 .ds-sync/
 ds-bundle/
-.design-sync/.cache/
-.design-sync/learnings/
-.design-sync/node_modules
+/.design-sync/
 
 # Python 編譯產物
 __pycache__/
@@ -33,8 +31,7 @@ __pycache__/
 .ruff_cache/
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+/.vscode/
 .idea
 .DS_Store
 *.suo
