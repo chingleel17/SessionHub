@@ -6253,6 +6253,10 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 /* ── Plans & Specs Explorer Layout ──────────────────── */
 .explorer-layout {
+  --explorer-content-inset: 6px;
+  --explorer-source-font-size: 12px;
+  --explorer-section-font-size: 11px;
+  --explorer-heading-font-weight: 600;
   display: flex;
   height: calc(100vh - 215px);
   min-height: 420px;
@@ -6432,8 +6436,9 @@ html.embedded-quota-view .quota-overlay-no-drag {
 
 .explorer-tree {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 8px 0 12px;
+  padding: 8px var(--explorer-content-inset) 12px;
 }
 
 .explorer-resizer {
@@ -8079,7 +8084,30 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   color: var(--color-text-secondary);
   cursor: pointer;
   text-align: left;
-  border-radius: 10px;
+  border-radius: var(--radius-button);
+}
+
+.tree-subgroup-btn--source {
+  padding-top: 8px;
+  padding-bottom: 6px;
+}
+
+.tree-subgroup-btn--section {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.tree-subgroup-btn--entry {
+  color: var(--color-text-primary);
+}
+
+.tree-subgroup-btn--entry > .tree-node-label,
+.explorer-list-row-name,
+.explorer-cols-entry-name {
+  font-family: inherit;
+  font-size: var(--explorer-source-font-size);
+  font-weight: var(--explorer-heading-font-weight);
+  line-height: 1.5;
 }
 
 .tree-subgroup-btn:hover {
@@ -8211,7 +8239,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
 .explorer-list-view {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 6px;
+  padding: 8px var(--explorer-content-inset);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -8261,23 +8289,27 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   padding: 8px 8px 6px;
   border: none;
   background: transparent;
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
   cursor: pointer;
   text-align: left;
   font: inherit;
+  border-radius: var(--radius-button);
 }
 
 .explorer-list-source-header:hover,
 .explorer-cols-source-header:hover {
-  color: var(--color-action-primary);
+  background: var(--color-tree-hover);
+  color: var(--color-text-primary);
 }
 
+.tree-subgroup-btn--source > .tree-node-label,
 .explorer-list-source-label,
 .explorer-cols-source-label {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--explorer-source-font-size);
+  font-weight: var(--explorer-heading-font-weight);
+  line-height: 1.5;
 }
 
 .explorer-list-source-count {
@@ -8313,15 +8345,20 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   text-align: left;
   font: inherit;
   color: var(--color-text-secondary);
+  border-radius: var(--radius-button);
 }
 
 .explorer-list-group-header:hover {
+  background: var(--color-tree-hover);
   color: var(--color-text-primary);
 }
 
-.explorer-list-group-label {
-  font-size: 11px;
-  font-weight: 700;
+.tree-subgroup-btn--section > .tree-node-label,
+.explorer-list-group-label,
+.explorer-cols-group-label {
+  font-size: var(--explorer-section-font-size);
+  font-weight: var(--explorer-heading-font-weight);
+  line-height: 1.5;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   flex: 1;
@@ -8370,10 +8407,6 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   color: var(--color-text-primary);
   cursor: pointer;
   text-align: left;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: var(--font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8585,34 +8618,24 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   flex-direction: column;
 }
 
-.explorer-cols-source-header {
-  padding-top: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
 .explorer-cols-group-header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  padding: 5px 8px;
+  padding: 4px 8px;
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius-button);
   background: transparent;
   cursor: pointer;
   text-align: left;
   font: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--color-text-secondary);
   flex-shrink: 0;
 }
 
 .explorer-cols-group-header:hover {
-  background: var(--color-surface-input);
+  background: var(--color-tree-hover);
   color: var(--color-text-primary);
 }
 
@@ -8633,7 +8656,7 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 6px;
+  padding: 8px var(--explorer-content-inset);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -8678,9 +8701,6 @@ button.agents-status-pill.agents-status-pill--neutral:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
-  font-family: var(--font-mono, monospace);
-  font-weight: 600;
 }
 
 .explorer-cols-progress {
