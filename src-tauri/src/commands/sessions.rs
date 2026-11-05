@@ -10,7 +10,7 @@ use crate::db::{
     upsert_session_meta_internal, DbState,
 };
 use crate::sessions::{
-    archive_session_internal, delete_empty_sessions_internal, delete_session_internal,
+    apply_session_project_path_remaps, archive_session_internal, delete_empty_sessions_internal, delete_session_internal,
     directory_exists, extract_session_texts, find_session_by_cwd_internal, get_sessions_internal,
     open_terminal_internal, unarchive_session_internal,
 };
@@ -34,6 +34,7 @@ pub(crate) fn get_sessions_cached_internal(
             .any(|provider| provider == &session.provider)
             && (include_archived || !session.is_archived)
     });
+    apply_session_project_path_remaps(connection, &mut sessions)?;
     sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     Ok(sessions)
 }
@@ -89,7 +90,121 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{search_session_content_internal, SessionSearchTarget};
+    use super::{get_sessions_cached_internal, search_session_content_internal, SessionSearchTarget};
+    use crate::db::{init_db, save_sessions_cache_to_db, upsert_path_remap};
+    use crate::types::SessionInfo;
+
+    fn seed_old_project_cache(connection: &Connection, cwd: &str) {
+        init_db(connection).expect("initialize database");
+        let session = SessionInfo {
+            id: "renamed-project".to_string(),
+            provider: "copilot".to_string(),
+            cwd: Some(cwd.to_string()),
+            repo_root: Some(cwd.to_string()),
+            repo_name: Some("old-project".to_string()),
+            git_branch: Some("old-branch".to_string()),
+            summary: None,
+            summary_count: None,
+            created_at: None,
+            updated_at: None,
+            session_dir: "missing-session-content".to_string(),
+            parse_error: false,
+            is_archived: false,
+            notes: None,
+            tags: Vec::new(),
+            has_plan: false,
+            has_events: false,
+        };
+        save_sessions_cache_to_db(connection, &["copilot".to_string()], &[session])
+            .expect("save old cache");
+    }
+
+    #[test]
+    fn cached_sessions_apply_saved_remap_before_first_response_without_git() {
+        let connection = Connection::open_in_memory().expect("open database");
+        let root = unique_test_dir("remap-no-git");
+        let old_path = root.join("old-project").to_string_lossy().to_string();
+        let new_path = root.join("knowledge-academy-docs").to_string_lossy().to_string();
+        seed_old_project_cache(&connection, &old_path);
+        upsert_path_remap(&connection, &old_path, &new_path).expect("save remap");
+
+        // 不先執行完整掃描，直接模擬冷啟動讀取舊磁碟快取。
+        let sessions = get_sessions_cached_internal(&connection, None, None).expect("read cache");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].cwd.as_deref(), Some(new_path.as_str()));
+        assert_eq!(sessions[0].repo_root.as_deref(), Some(new_path.as_str()));
+        assert_eq!(sessions[0].repo_name, None);
+        assert_eq!(sessions[0].git_branch, None);
+    }
+
+    #[test]
+    fn cached_sessions_use_persisted_name_without_waiting_for_git_refresh() {
+        let connection = Connection::open_in_memory().expect("open database");
+        let root = unique_test_dir("remap-git");
+        let target = root.join("knowledge-academy-docs");
+        fs::create_dir_all(&target).expect("create repository directory");
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&target)
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        };
+        git(&["init"]);
+        git(&["config", "remote.origin.url", "https://example.com/team/docs.git"]);
+        let old_path = root.join("old-project").to_string_lossy().to_string();
+        let new_path = target.to_string_lossy().to_string();
+        seed_old_project_cache(&connection, &old_path);
+        upsert_path_remap(&connection, &old_path, &new_path).expect("save remap");
+
+        let mut sessions = get_sessions_cached_internal(&connection, None, None).expect("read cache");
+        assert_eq!(sessions[0].cwd.as_deref(), Some(new_path.as_str()));
+        // 首次啟動只套用已存路徑，尚未掃描時以新目錄名稱作為顯示備援。
+        assert_eq!(sessions[0].repo_name, None);
+        crate::sessions::refresh_session_project_metadata(&connection, &mut sessions)
+            .expect("background project refresh");
+        assert_eq!(sessions[0].repo_name.as_deref(), Some("docs"));
+
+        // 下一次啟動直接沿用已解析的名稱，即使 Git 已改名也不得同步呼叫 Git。
+        save_sessions_cache_to_db(&connection, &["copilot".to_string()], &sessions)
+            .expect("persist resolved cache");
+        git(&["config", "remote.origin.url", "https://example.com/team/renamed-docs.git"]);
+        let refreshed = get_sessions_cached_internal(&connection, None, None).expect("read cache again");
+        assert_eq!(refreshed[0].repo_name.as_deref(), Some("docs"));
+        fs::remove_dir_all(root).expect("clean up repository");
+    }
+
+    #[test]
+    fn persisting_scan_progress_does_not_overwrite_presented_project_cache() {
+        use std::collections::HashMap;
+        use std::time::Instant;
+
+        use crate::db::{load_scan_state_from_db, load_session_mtimes_from_db, persist_provider_scan_state};
+        use crate::types::ProviderCache;
+
+        let connection = Connection::open_in_memory().expect("open database");
+        let root = unique_test_dir("persist-project-name");
+        seed_old_project_cache(&connection, &root.to_string_lossy());
+        let raw = get_sessions_cached_internal(&connection, None, None).expect("read raw cache");
+        let mut presented = raw.clone();
+        presented[0].repo_name = Some("docs".to_string());
+        save_sessions_cache_to_db(&connection, &["copilot".to_string()], &presented)
+            .expect("save presented cache");
+
+        let cache = ProviderCache {
+            sessions: raw,
+            session_mtimes: HashMap::from([("renamed-project".to_string(), 42)]),
+            last_full_scan_at: Instant::now(),
+            last_cursor: 123,
+        };
+        persist_provider_scan_state(&connection, "copilot", &cache).expect("save scan progress");
+        let sessions = get_sessions_cached_internal(&connection, None, None).expect("cold start cache");
+        assert_eq!(sessions[0].repo_name.as_deref(), Some("docs"));
+        assert_eq!(load_scan_state_from_db(&connection, "copilot").expect("scan state").1, 123);
+        assert_eq!(load_session_mtimes_from_db(&connection, "copilot").expect("mtimes")["renamed-project"], 42);
+    }
 
     fn unique_test_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -284,16 +399,18 @@ pub async fn get_sessions(
 }
 
 #[tauri::command]
-pub fn get_sessions_cached(
+pub async fn get_sessions_cached(
     show_archived: Option<bool>,
     enabled_providers: Option<Vec<String>>,
-    db: State<'_, DbState>,
+    _db: State<'_, DbState>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|e| format!("db lock poisoned: {e}"))?;
-    get_sessions_cached_internal(&*conn, show_archived, enabled_providers)
+    // 使用獨立連線與背景執行緒載入快取，避免占用介面執行緒及共用 DB 鎖。
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_db_connection()?;
+        get_sessions_cached_internal(&conn, show_archived, enabled_providers)
+    })
+    .await
+    .map_err(|error| format!("failed to join sessions cache task: {error}"))?
 }
 
 #[tauri::command]

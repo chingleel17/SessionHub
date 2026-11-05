@@ -1,3 +1,8 @@
+# project-path-remap Specification
+
+## Purpose
+規範專案搬移或目錄更名後的路徑對應、管理介面與中繼資料失效處理，使冷啟動快取及背景掃描一致使用已儲存的規則。
+
 ## Requirements
 
 ### Requirement: 路徑對應規則的資料模型
@@ -12,7 +17,7 @@
 - **THEN** 系統覆寫既有規則而非新增第二筆
 
 ### Requirement: Session 路徑改寫
-系統 SHALL 在讀取各 provider 的 session 之後、進行 git 中繼資料解析之前，依對應規則改寫 session 的 `cwd` 與 `repoRoot`。比對 SHALL 使用正規化後的路徑前綴，且前綴必須落在路徑分隔邊界上。
+系統 SHALL 在讀取各 provider 的 session 之後、進行 git 中繼資料解析之前，依對應規則改寫 session 的 `cwd` 與 `repoRoot`。冷啟動快取查詢 SHALL 同樣在回傳前套用已儲存的規則，但 SHALL NOT 因此查詢 Git 或檢查目錄。比對 SHALL 使用正規化後的路徑前綴，且前綴必須落在路徑分隔邊界上。
 
 #### Scenario: 完全相符的路徑被改寫
 - **WHEN** 存在 `D:\old\proj` → `D:\new\proj` 的規則，且某 session 的 `cwd` 為 `D:\old\proj`
@@ -27,12 +32,30 @@
 - **THEN** 該 session 的 `cwd` 維持不變
 
 #### Scenario: 改寫後才解析 git 中繼資料
-- **WHEN** 某 session 的原始 `cwd` 已不存在但經規則改寫後指向存在的 git 儲存庫
+- **WHEN** 背景掃描取得的 session 原始 `cwd` 已不存在但經規則改寫後指向存在的 git 儲存庫
 - **THEN** 系統以改寫後的路徑解析 git 分支與 repo 名稱並成功取得結果
 
 #### Scenario: 無相符規則時保持原樣
 - **WHEN** 某 session 的 `cwd` 不符合任何規則
 - **THEN** 該 session 的 `cwd` 與 `repoRoot` 維持原值
+
+### Requirement: 路徑改寫後清除失效的專案中繼資料
+系統 SHALL 在規則實際改變 `cwd` 或 `repoRoot` 時清除原有 `repoName` 與 `gitBranch`，避免新路徑仍顯示舊目錄的名稱或分支。此規則 SHALL 同時適用於快取查詢及背景掃描；路徑未改變時 SHALL 保留既有快取名稱與分支。
+
+#### Scenario: 舊快取在首次回傳前套用已存規則
+- **WHEN** 快取仍包含舊專案路徑與名稱，資料庫已有對應至 `knowledge-academy-docs` 目錄的規則
+- **THEN** 快取首次回傳的 `cwd` 與 `repoRoot` 已套用對應，舊 `repoName` 與 `gitBranch` 已清除
+- **AND** 前端先依新路徑取得目錄名稱顯示，不等待 Git，也不顯示舊目錄名稱
+- **AND** 背景掃描完成後可依 Git 資訊更新為 `docs` 等儲存庫名稱
+
+#### Scenario: 新目錄無法取得 Git 資訊
+- **WHEN** 路徑已改寫，但背景掃描無法從目標目錄取得 Git 資訊
+- **THEN** 不得恢復舊路徑的 `repoName` 或 `gitBranch`
+- **AND** 前端繼續以改寫後的路徑取得目錄名稱作為備援
+
+#### Scenario: 已校正的快取不重複清除名稱
+- **WHEN** 快取已保存目標路徑與名稱 `docs`，套用現有規則未改變路徑
+- **THEN** 快取查詢保留 `docs` 與既有分支，直接回傳且不查詢 Git
 
 ### Requirement: 規則變更後重新載入 session
 系統 SHALL 在新增、編輯或刪除對應規則後，使 session 列表重新取得並重新解析 git 中繼資料，讓改寫結果立即反映於畫面。
