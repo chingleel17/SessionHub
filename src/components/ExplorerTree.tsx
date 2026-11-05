@@ -89,13 +89,17 @@ function TreeGroup({
   loadingMessages?: Record<string, string>;
 }) {
   const [isOpen, setIsOpen] = useState(node.defaultOpen ?? false);
-  const paddingLeft = 4 + depth * 12;
+  const paddingLeft = 8 + depth * 12;
+  const headingClass = node.icon === "folder" && depth === 0 && node.sourceKind
+    ? " tree-subgroup-btn--source"
+    : node.icon === "section" ? " tree-subgroup-btn--section"
+      : node.icon === "change" ? " tree-subgroup-btn--entry" : "";
 
   return (
     <div>
       <button
         type="button"
-        className="tree-subgroup-btn"
+        className={`tree-subgroup-btn${headingClass}`}
         style={{ paddingLeft }}
         onClick={() => setIsOpen((v) => !v)}
       >
