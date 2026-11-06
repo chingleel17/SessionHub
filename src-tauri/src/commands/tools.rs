@@ -280,15 +280,12 @@ pub fn resume_session_in_terminal(
 
 #[tauri::command]
 pub async fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
-    // 在後台執行掃描，避免阻塞 UI 執行緒
-    let result =
-        std::thread::spawn(move || scan_sisyphus_internal(std::path::Path::new(&project_dir)))
-            .join();
-
-    match result {
-        Ok(data) => Ok(data),
-        Err(_) => Err("plan scan thread panicked".to_string()),
-    }
+    // 同步等待執行緒仍會阻塞非同步執行器，改交由 blocking pool。
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_sisyphus_internal(std::path::Path::new(&project_dir))
+    })
+    .await
+    .map_err(|e| format!("Plan scan failed: {e}"))
 }
 
 #[tauri::command]
