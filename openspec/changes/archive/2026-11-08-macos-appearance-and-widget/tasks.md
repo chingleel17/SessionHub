@@ -8,13 +8,13 @@
 
 ## 2. 選單列 template 圖示
 
-- [ ] 2.1 新增單色 alpha mask 底圖（macOS 專用資源），並在 `app_setup::build_tray_icon` 以 `cfg(target_os = "macos")` 設定 `icon_as_template(true)`；驗證：打包後的 `.app` 在淺色／深色選單列皆清晰
+- [x] 2.1 新增單色 alpha mask 底圖（macOS 專用資源），並在 `app_setup::build_tray_icon` 以 `cfg(target_os = "macos")` 設定 `icon_as_template(true)`；驗證：打包後的 `.app` 在淺色／深色選單列皆清晰
 - [x] 2.2 在 `tray_icon.rs` 新增 template 繪製分支：`icon_only` 三段填充、`percentage`／`bar` 單色；驗證：新增單元測試涵蓋三段門檻（<50%、50–80%、>80%）且輸出像素只含黑色與透明
-- [ ] 2.3 確認 Windows 路徑不變：`cargo test` 中既有 tray_icon 測試通過，且 Windows 仍輸出彩色圖示
+- [x] 2.3 確認 Windows 路徑不變：`cargo test` 中既有 tray_icon 測試通過，且 Windows 仍輸出彩色圖示
 
 ## 3. App 圖示多外觀
 
-- [ ] 3.1 依任務 1.2 的結論建立 `.icon` 資源（或單色 `.icns` 退路），驗證：`.app` 中存在 `Assets.car` 並於 macOS 26 切換圖示風格後 Dock 圖示變色
+- [x] 3.1 依任務 1.2 的結論建立 `.icon` 資源（或單色 `.icns` 退路），驗證：`.app` 中存在 `Assets.car` 並於 macOS 26 切換圖示風格後 Dock 圖示變色
 - [x] 3.2 更新打包流程（`tauri.conf.json` 或打包後腳本）與重簽步驟，驗證：全新打包的 `.app` 通過 `codesign --verify`
 - [x] 3.3 在 README 記錄「圖示風格只在打包後的 `.app` 生效，`tauri dev` 不會」
 
@@ -26,14 +26,16 @@
 
 ## 5. 原生 widget（僅在任務 1.1–1.3 皆通過時進行）
 
-- [ ] 5.1 建立 WidgetKit extension：讀取快照檔並顯示紅／黃／灰狀態與各平台用量；驗證：在 Widget 圖庫中可新增且顯示資料
-- [ ] 5.2 實作過期處理：快照超過有效期限時顯示灰燈與「資料過期」；驗證：結束 App 後 widget 於期限後轉為過期狀態
-- [ ] 5.3 將 extension 納入打包與簽章流程；驗證：乾淨環境打包後 widget 仍可載入
+> 2026-11-08 結論：任務 1.3 未通過（無有效簽章身分，無法驗證 App Group），依 design.md D4 以路線 A 結案，本節任務暫不執行，待取得 Apple Developer 簽章後再重啟。
+
+- [x] 5.1（略過，路線 A 結案）建立 WidgetKit extension：讀取快照檔並顯示紅／黃／灰狀態與各平台用量；驗證：在 Widget 圖庫中可新增且顯示資料
+- [x] 5.2（略過，路線 A 結案）實作過期處理：快照超過有效期限時顯示灰燈與「資料過期」；驗證：結束 App 後 widget 於期限後轉為過期狀態
+- [x] 5.3（略過，路線 A 結案）將 extension 納入打包與簽章流程；驗證：乾淨環境打包後 widget 仍可載入
 
 ## 6. 整合驗證
 
-- [ ] 6.1 在打包後的 macOS `.app` 驗證：選單列、Dock 圖示、overlay 狀態燈與（若有）widget 的狀態一致
-- [ ] 6.2 在 Windows 驗證：系統匣圖示與 overlay 行為與變更前相同
+- [x] 6.1 在打包後的 macOS `.app` 驗證：選單列、Dock 圖示、overlay 狀態燈與（若有）widget 的狀態一致
+- [x] 6.2 在 Windows 驗證：系統匣圖示與 overlay 行為與變更前相同
 
 ## Workflow follow-up
 

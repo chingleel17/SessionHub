@@ -6,7 +6,7 @@
 
 ### Requirement: 系統匣圖示動態反映 quota 用量
 
-系統 SHALL 在 quota monitoring 啟用時，依設定模式在系統匣圖示上動態反映主要 provider 的當前用量。
+系統 SHALL 在 quota monitoring 啟用時，依設定模式在系統匣圖示上動態反映主要 provider 的當前用量。在 macOS 上圖示為 template（單色）呈現，用量等級 MUST 不依賴顏色即可辨識。
 
 #### Scenario: 依模式渲染 tray 圖示
 
@@ -20,6 +20,13 @@
 
 - **WHEN** `tray_quota_mode = hidden` 或 `enable_quota_monitoring = false`
 - **THEN** tray 圖示維持原始 SessionHub icon，不疊加任何 quota 資訊
+
+#### Scenario: macOS template 模式下的用量呈現
+
+- **WHEN** 執行於 macOS 且 tray 圖示為 template 呈現
+- **THEN** `icon_only` 模式以圖示上標記的填充程度或形狀變化表示用量三段（<50%、50-80%、>80%），不依賴顏色
+- **AND** `percentage` 與 `bar` 模式以單色繪製，淺色與深色選單列皆清晰可讀
+- **AND** tooltip 的多行用量摘要維持不變
 
 ### Requirement: 常駐桌面 Quota Overlay Widget
 

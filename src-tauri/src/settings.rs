@@ -601,6 +601,7 @@ pub(crate) fn load_settings_file_internal() -> Result<AppSettings, String> {
     let mut settings = parse_settings_content(&content)?;
     settings.terminal_launcher =
         Some(resolve_terminal_launcher(settings.terminal_launcher.as_deref()).to_string());
+    prune_unavailable_providers(&mut settings);
     Ok(settings)
 }
 
