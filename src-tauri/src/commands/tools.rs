@@ -184,13 +184,18 @@ pub(crate) fn open_in_tool_internal(
 }
 
 #[tauri::command]
-pub fn check_tool_availability() -> ToolAvailability {
-    check_tool_availability_internal()
+pub async fn check_tool_availability() -> Result<ToolAvailability, String> {
+    // PATH 查詢及 Herdr 偵測會等待外部程序，不能阻塞其他視窗的 IPC。
+    tauri::async_runtime::spawn_blocking(check_tool_availability_internal)
+        .await
+        .map_err(|e| format!("Tool availability check failed: {e}"))
 }
 
 #[tauri::command]
-pub fn check_jq_available() -> bool {
-    which_exists("jq")
+pub async fn check_jq_available() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(|| which_exists("jq"))
+        .await
+        .map_err(|e| format!("jq availability check failed: {e}"))
 }
 
 #[tauri::command]
