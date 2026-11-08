@@ -16,8 +16,13 @@
   box-sizing: border-box;
 }
 
+html,
 body {
+  height: 100%;
   margin: 0;
+  overflow: hidden;
+  /* 避免 macOS WebKit 橡皮筋效果帶動整個 App 上下彈動 */
+  overscroll-behavior: none;
 }
 
 button {
@@ -1348,13 +1353,13 @@ textarea {
 }
 
 #root {
-  height: 100dvh;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
 .app-shell {
-  height: 100dvh;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -1688,6 +1693,7 @@ textarea {
 
 .workspace-content {
   overflow-y: auto;
+  overscroll-behavior: contain;
   overflow-x: hidden;
   padding: 12px;
   display: grid;
