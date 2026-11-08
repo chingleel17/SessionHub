@@ -54,6 +54,8 @@ macOS 上將底圖換成單色 alpha mask（黑色 + 透明），建立時設定
 - 原生 WidgetKit（路線 B）列為驗證任務：確認 (1) Tauri 打包流程可嵌入 `.appex` 並重簽，(2) App Group entitlement 在目前簽章方式下可用，(3) 開發機可取得 Xcode。三項皆成立才實作 widget；任一不成立則以路線 A 結案，並把結果記錄在本 change。
 - **替代方案**：直接做 WidgetKit。放棄原因：本機沒有 Xcode，且 Tauri 打包與 extension 簽章整合風險高，先驗證可避免投入後才發現無法交付。
 
+- **結論（2026-11-08）**：D4 三項條件中，(2) App Group 在目前簽章方式下無法驗證（0 個有效簽章身分），因此以路線 A 結案：overlay／tray panel 共用 `ActivitySnapshot`，快照檔已就緒；原生 WidgetKit（tasks 5.x）待取得 Apple Developer 簽章後再啟動。
+
 ## Risks / Trade-offs
 
 - [template 模式失去顏色提示] → 以形狀三段與 tooltip 補償，Windows 不受影響。
