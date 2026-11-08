@@ -21,8 +21,6 @@ use crate::types::{
     AppSettings, ANTIGRAVITY_PROVIDER, CLAUDE_PROVIDER, CODEX_PROVIDER, COPILOT_PROVIDER,
     OPENCODE_PROVIDER,
 };
-#[cfg(target_os = "windows")]
-use crate::types::CREATE_NO_WINDOW;
 
 pub(crate) const MAX_CLI_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CLI_TIMEOUT: Duration = Duration::from_secs(8);
