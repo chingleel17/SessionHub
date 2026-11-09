@@ -16,6 +16,8 @@ use ureq::http::Response;
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Body};
 
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// HTTP 回應的分類結果
 ///
 /// 呼叫端以 match 處理，避免將 4xx/5xx 的錯誤內容誤當成正常結果解析
@@ -35,6 +37,7 @@ fn agent() -> &'static Agent {
     static AGENT: OnceLock<Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         let config = Agent::config_builder()
+            .timeout_global(Some(DEFAULT_REQUEST_TIMEOUT))
             .http_status_as_error(false)
             .tls_config(
                 TlsConfig::builder()
@@ -47,7 +50,7 @@ fn agent() -> &'static Agent {
     })
 }
 
-/// 建立 GET request builder，可選設定整體逾時
+/// 建立 GET request builder，未指定時沿用共用的有限逾時。
 pub(crate) fn get(
     url: &str,
     timeout: Option<Duration>,
@@ -59,7 +62,7 @@ pub(crate) fn get(
     }
 }
 
-/// 建立 POST request builder，可選設定整體逾時
+/// 建立 POST request builder，未指定時沿用共用的有限逾時。
 pub(crate) fn post(
     url: &str,
     timeout: Option<Duration>,
@@ -102,6 +105,32 @@ pub(crate) fn classify(response: Response<Body>) -> ApiOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_timeout_is_finite() {
+        assert_eq!(agent().config().timeouts().global, Some(DEFAULT_REQUEST_TIMEOUT));
+    }
+
+    #[test]
+    fn request_timeout_covers_stalled_response_body() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n").unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let mut response = get(&url, Some(Duration::from_millis(100))).call().unwrap();
+        let result = response.body_mut().read_to_string();
+        server.join().unwrap();
+        assert!(matches!(result, Err(ureq::Error::Timeout(_))));
+    }
 
     /// 實際連線驗證 native-tls 與狀態碼分流；需要外部網路，故預設不執行
     ///

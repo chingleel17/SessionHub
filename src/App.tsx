@@ -51,6 +51,7 @@ import { formatDateTime } from "./utils/formatDate";
 import { parseTaskProgress } from "./utils/parseTaskProgress";
 import { rebuildPinnedProjectOrder } from "./utils/reorderPinnedProjects";
 import { resolveErrorMessage } from "./utils/resolveErrorMessage";
+import { withTimeout } from "./utils/withTimeout";
 import { createCodexResetCreditConfirmation } from "./utils/codexResetConfirmation";
 import { newerResetCreditStatus, resetCreditMessage, validResetCreditSettings } from "./utils/resetCreditAutomation";
 import { updateSessionMetadataCache } from "./utils/updateSessionMetadataCache";
@@ -81,6 +82,9 @@ import { TagEditDialog } from "./components/TagEditDialog";
 import { UsageAnalyticsView } from "./components/UsageAnalyticsView";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+const PROJECT_SCAN_TIMEOUT_MS = 30_000;
+const QUOTA_REFRESH_TIMEOUT_MS = 120_000;
 
 function normalizePath(path: string): string {
   // Windows 路徑大小寫不敏感，正規化為小寫用於分組比對
@@ -1164,21 +1168,24 @@ function App() {
   const sisyphusQuery = useQuery({
     queryKey: ["project_plans", activeProject?.pathLabel ?? ""],
     enabled: Boolean(activeProject?.pathLabel),
-    queryFn: () => invoke<SisyphusData>("get_project_plans", { projectDir: activeProject?.pathLabel }),
+    queryFn: () => withTimeout(invoke<SisyphusData>("get_project_plans", { projectDir: activeProject?.pathLabel }), PROJECT_SCAN_TIMEOUT_MS, t("plansSpecs.scanTimeout")),
+    retry: false,
     staleTime: 30_000,
   });
 
   const openspecActiveQuery = useQuery({
     queryKey: ["project_specs", activeProject?.pathLabel ?? "", "active"],
     enabled: Boolean(activeProject?.pathLabel),
-    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "active" }),
+    queryFn: () => withTimeout(invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "active" }), PROJECT_SCAN_TIMEOUT_MS, t("plansSpecs.scanTimeout")),
+    retry: false,
     staleTime: 30_000,
   });
 
   const openspecSpecsQuery = useQuery({
     queryKey: ["project_specs", activeProject?.pathLabel ?? "", "specs"],
     enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching,
-    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "specs" }),
+    queryFn: () => withTimeout(invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "specs" }), PROJECT_SCAN_TIMEOUT_MS, t("plansSpecs.scanTimeout")),
+    retry: false,
     staleTime: 30_000,
   });
 
@@ -1186,7 +1193,8 @@ function App() {
     queryKey: ["project_specs", activeProject?.pathLabel ?? "", "archived"],
     enabled: Boolean(activeProject?.pathLabel) && openspecActiveQuery.isSuccess && !openspecActiveQuery.isFetching
       && openspecSpecsQuery.isSuccess && !openspecSpecsQuery.isFetching,
-    queryFn: () => invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "archived" }),
+    queryFn: () => withTimeout(invoke<OpenSpecData>("get_project_specs", { projectDir: activeProject?.pathLabel, section: "archived" }), PROJECT_SCAN_TIMEOUT_MS, t("plansSpecs.scanTimeout")),
+    retry: false,
     staleTime: 30_000,
   });
 
@@ -2200,16 +2208,23 @@ function App() {
     );
   };
 
+  const quotaRefreshInFlightRef = useRef(false);
   const handleRefreshQuota = useCallback((provider?: string) => {
-    void invoke<QuotaSnapshot[]>("refresh_quota", { provider: provider ?? null })
+    if (quotaRefreshInFlightRef.current) return;
+    quotaRefreshInFlightRef.current = true;
+    // 逾時只停止前端等待；必須等真正的 IPC 結束才允許下一次更新。
+    const request = invoke<QuotaSnapshot[]>("refresh_quota", { provider: provider ?? null })
+      .finally(() => { quotaRefreshInFlightRef.current = false; });
+    void withTimeout(request, QUOTA_REFRESH_TIMEOUT_MS, t("quota.refreshTimeout"))
       .then((snapshots) => {
         const rateLimited = snapshots.find((s) => s.status === "rate_limited");
         if (rateLimited) {
           showToast(rateLimited.errorMessage ?? t("quota.rateLimited"));
         }
+        queryClient.setQueryData(["quota_snapshots"], snapshots);
         return queryClient.invalidateQueries({ queryKey: ["quota_snapshots"] });
       })
-      .catch(() => null);
+      .catch((error: unknown) => showToast(resolveErrorMessage(error, t("quota.refreshFailed"))));
   }, [queryClient, showToast, t]);
 
   const handleConsumeResetCredit = () => {

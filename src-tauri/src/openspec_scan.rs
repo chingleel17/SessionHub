@@ -115,7 +115,7 @@ fn is_markdown_file(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
-/// 遞迴收集 change 目錄內未被既有節點涵蓋的 md 檔，略過 `.` 開頭的檔案與目錄。
+/// 遞迴收集額外 md 檔，略過隱藏項目與目錄連結，避免循環或掃描到專案外。
 fn collect_extra_markdown_files(dir: &Path, relative_dir: &str, result: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -136,11 +136,17 @@ fn collect_extra_markdown_files(dir: &Path, relative_dir: &str, result: &mut Vec
             format!("{relative_dir}/{file_name}")
         };
 
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             collect_extra_markdown_files(&path, &relative_path, result);
             continue;
         }
-        if !path.is_file() || !is_markdown_file(&path) {
+        if !file_type.is_file() || !is_markdown_file(&path) {
             continue;
         }
 
@@ -165,6 +171,40 @@ fn scan_change_extra_files(change_dir: &Path) -> Vec<String> {
     collect_extra_markdown_files(change_dir, "", &mut result);
     result.sort();
     result
+}
+
+#[cfg(all(test, windows))]
+mod traversal_tests {
+    use super::*;
+
+    #[test]
+    fn extra_markdown_scan_skips_directory_junction_cycles() {
+        let root = std::env::temp_dir().join(format!(
+            "sessionhub-openspec-cycle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("notes")).expect("create test directory");
+        fs::write(root.join("notes").join("detail.md"), "# Detail").expect("write extra file");
+        fs::write(root.join("proposal.md"), "# Proposal").expect("write artifact");
+        let link = root.join("notes").join("loop");
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&root)
+            .output()
+            .expect("create junction");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+        let files = scan_change_extra_files(&root);
+        // 先移除 junction，避免清理流程沿著循環目錄走訪。
+        fs::remove_dir(&link).expect("remove junction");
+        fs::remove_dir_all(&root).expect("remove test directory");
+        assert_eq!(files, vec!["notes/detail.md"]);
+    }
 }
 
 fn parse_openspec_yaml_created(change_dir: &Path) -> Option<String> {

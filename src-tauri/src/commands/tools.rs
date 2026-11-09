@@ -184,13 +184,18 @@ pub(crate) fn open_in_tool_internal(
 }
 
 #[tauri::command]
-pub fn check_tool_availability() -> ToolAvailability {
-    check_tool_availability_internal()
+pub async fn check_tool_availability() -> Result<ToolAvailability, String> {
+    // PATH 查詢及 Herdr 偵測會等待外部程序，不能阻塞其他視窗的 IPC。
+    tauri::async_runtime::spawn_blocking(check_tool_availability_internal)
+        .await
+        .map_err(|e| format!("Tool availability check failed: {e}"))
 }
 
 #[tauri::command]
-pub fn check_jq_available() -> bool {
-    which_exists("jq")
+pub async fn check_jq_available() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(|| which_exists("jq"))
+        .await
+        .map_err(|e| format!("jq availability check failed: {e}"))
 }
 
 #[tauri::command]
@@ -280,15 +285,12 @@ pub fn resume_session_in_terminal(
 
 #[tauri::command]
 pub async fn get_project_plans(project_dir: String) -> Result<SisyphusData, String> {
-    // 在後台執行掃描，避免阻塞 UI 執行緒
-    let result =
-        std::thread::spawn(move || scan_sisyphus_internal(std::path::Path::new(&project_dir)))
-            .join();
-
-    match result {
-        Ok(data) => Ok(data),
-        Err(_) => Err("plan scan thread panicked".to_string()),
-    }
+    // 同步等待執行緒仍會阻塞非同步執行器，改交由 blocking pool。
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_sisyphus_internal(std::path::Path::new(&project_dir))
+    })
+    .await
+    .map_err(|e| format!("Plan scan failed: {e}"))
 }
 
 #[tauri::command]

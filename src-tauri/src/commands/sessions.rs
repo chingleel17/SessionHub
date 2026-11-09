@@ -468,40 +468,47 @@ pub fn check_directory_exists(path: String) -> bool {
 }
 
 #[tauri::command]
-pub fn get_session_activity_statuses(
+pub async fn get_session_activity_statuses(
     sessions: Vec<serde_json::Value>,
     opencode_root: Option<String>,
     scan_cache: State<'_, Arc<ScanCache>>,
-) -> Vec<SessionActivityStatus> {
-    get_session_activity_statuses_internal(
-        &sessions,
-        opencode_root.as_deref(),
-        &scan_cache.activity,
-    )
+) -> Result<Vec<SessionActivityStatus>, String> {
+    let scan_cache = Arc::clone(scan_cache.inner());
+    // 活動掃描包含檔案讀取及快取鎖，不能佔住處理其他 IPC 的主執行緒。
+    tauri::async_runtime::spawn_blocking(move || {
+        get_session_activity_statuses_internal(
+            &sessions,
+            opencode_root.as_deref(),
+            &scan_cache.activity,
+        )
+    })
+    .await
+    .map_err(|e| format!("Session activity scan failed: {e}"))
 }
 
 #[tauri::command]
-pub fn get_session_stats(
+pub async fn get_session_stats(
     session_dir: String,
-    db: State<'_, DbState>,
 ) -> Result<SessionStats, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|e| format!("db lock poisoned: {e}"))?;
-    get_session_stats_internal(&*conn, &session_dir)
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_db_connection()?;
+        get_session_stats_internal(&conn, &session_dir)
+    })
+    .await
+    .map_err(|e| format!("Session stats scan failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn get_all_session_stats(
+pub async fn get_all_session_stats(
     session_dirs: Vec<String>,
-    db: State<'_, DbState>,
 ) -> Result<HashMap<String, SessionStats>, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|e| format!("db lock poisoned: {e}"))?;
-    Ok(get_all_session_stats_internal(&*conn, &session_dirs))
+    tauri::async_runtime::spawn_blocking(move || {
+        // 與 session 掃描採相同模式，避免解析所有紀錄時長時間持有共用 DB 鎖。
+        let conn = open_db_connection()?;
+        Ok(get_all_session_stats_internal(&conn, &session_dirs))
+    })
+    .await
+    .map_err(|e| format!("Session stats scan failed: {e}"))?
 }
 
 #[tauri::command]
