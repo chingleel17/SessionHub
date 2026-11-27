@@ -222,10 +222,45 @@ export function QuotaOverlay({
         }
         lastWidth = width;
         lastHeight = height;
+
+        // 實際 viewport 可能小於要求尺寸（跨螢幕 DPI 縮放、系統字級、視窗框 inset 等造成
+        // 邏輯／實體像素換算落差），導致右側／下方內容被裁切。等待尺寸生效後以
+        // window.innerWidth/innerHeight 驗證，不足的部分補償回原生視窗。
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        if (disposed) return;
+        const missingWidth = Math.ceil(wrapper.scrollWidth) - Math.floor(window.innerWidth);
+        const missingHeight = Math.ceil(wrapper.scrollHeight) - Math.floor(window.innerHeight);
+        if (missingWidth > 0 || missingHeight > 0) {
+          const [innerSize, scaleFactor] = await Promise.all([
+            currentWindow.innerSize(),
+            currentWindow.scaleFactor(),
+          ]);
+          await currentWindow.setSize(
+            new LogicalSize(
+              Math.ceil(innerSize.width / scaleFactor) + Math.max(missingWidth, 0),
+              Math.ceil(innerSize.height / scaleFactor) + Math.max(missingHeight, 0),
+            ),
+          );
+        }
       }).catch((error: unknown) => {
         console.error("Failed to synchronize quota overlay size", error);
       });
     };
+
+    // 視窗被移到不同 DPI 的螢幕、或字型載入完成後，強制重新量測並同步
+    const forceResync = () => {
+      lastWidth = 0;
+      lastHeight = 0;
+      syncWindowSize();
+    };
+    let unlistenScale: (() => void) | undefined;
+    void getCurrentWindow()
+      .onScaleChanged(forceResync)
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenScale = unlisten;
+      });
+    void document.fonts?.ready.then(forceResync);
 
     syncWindowSize();
     const observer = new ResizeObserver(syncWindowSize);
@@ -234,6 +269,7 @@ export function QuotaOverlay({
     mutationObserver.observe(wrapper, { childList: true, subtree: true, characterData: true });
     return () => {
       disposed = true;
+      unlistenScale?.();
       observer.disconnect();
       mutationObserver.disconnect();
     };
